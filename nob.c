@@ -11,8 +11,10 @@
 #endif
 
 #define NOC_TESTS "build/noc-tests" NOC_EXE
-#define NOC_DIALECT "build/embed-dialect" NOC_EXE
-#define NOC_EXAMPLE "build/embed-example" NOC_EXE
+#define NOC_EMBED_DIALECT "build/embed-dialect" NOC_EXE
+#define NOC_EMBED_EXAMPLE "build/embed-example" NOC_EXE
+#define NOC_RULES_DIALECT "build/rules-dialect" NOC_EXE
+#define NOC_RULES_EXAMPLE "build/rules-example" NOC_EXE
 
 #if !defined(_MSC_VER) || defined(__clang__)
 static const char *compiler(void)
@@ -88,17 +90,17 @@ static bool build_tests(void)
     return build_binary(NOC_TESTS, "tests/test_noc.c");
 }
 
-static bool build_dialect(void)
+static bool build_embed_dialect(void)
 {
-    return build_binary(NOC_DIALECT, "examples/embed/dialect.c");
+    return build_binary(NOC_EMBED_DIALECT, "examples/embed/dialect.c");
 }
 
-static bool generate_example(void)
+static bool generate_embed_example(void)
 {
     const char *inputs[] = {
         "examples/embed/app.c",
         "examples/embed/message.txt",
-        NOC_DIALECT,
+        NOC_EMBED_DIALECT,
         "nob.c",
     };
     Nob_Cmd command = {0};
@@ -110,25 +112,72 @@ static bool generate_example(void)
         return nob_file_exists("build/generated/embed_app.c") > 0;
     }
     nob_cmd_append(&command,
-                   NOC_DIALECT,
+                   NOC_EMBED_DIALECT,
                    "examples/embed/app.c",
                    "-o",
                    "build/generated/embed_app.c");
     return nob_cmd_run(&command);
 }
 
-static bool build_example(void)
+static bool build_embed_example(void)
 {
     const char *inputs[] = {"build/generated/embed_app.c", "nob.c"};
     Nob_Cmd command = {0};
     int rebuild;
-    if (!build_dialect() || !generate_example()) return false;
-    rebuild = output_rebuild_state(NOC_EXAMPLE, inputs, NOB_ARRAY_LEN(inputs));
+    if (!build_embed_dialect() || !generate_embed_example()) return false;
+    rebuild = output_rebuild_state(NOC_EMBED_EXAMPLE, inputs, NOB_ARRAY_LEN(inputs));
     if (rebuild < 0) return false;
     if (rebuild == 0) {
-        return nob_file_exists(NOC_EXAMPLE) > 0;
+        return nob_file_exists(NOC_EMBED_EXAMPLE) > 0;
     }
-    append_compile_command(&command, NOC_EXAMPLE, "build/generated/embed_app.c");
+    append_compile_command(&command,
+                           NOC_EMBED_EXAMPLE,
+                           "build/generated/embed_app.c");
+    return nob_cmd_run(&command);
+}
+
+static bool build_rules_dialect(void)
+{
+    return build_binary(NOC_RULES_DIALECT, "examples/rules/dialect.c");
+}
+
+static bool generate_rules_example(void)
+{
+    const char *inputs[] = {
+        "examples/rules/app.c",
+        NOC_RULES_DIALECT,
+        "nob.c",
+    };
+    Nob_Cmd command = {0};
+    int rebuild = output_rebuild_state("build/generated/rules_app.c",
+                                       inputs,
+                                       NOB_ARRAY_LEN(inputs));
+    if (rebuild < 0) return false;
+    if (rebuild == 0) {
+        return nob_file_exists("build/generated/rules_app.c") > 0;
+    }
+    nob_cmd_append(&command,
+                   NOC_RULES_DIALECT,
+                   "examples/rules/app.c",
+                   "-o",
+                   "build/generated/rules_app.c");
+    return nob_cmd_run(&command);
+}
+
+static bool build_rules_example(void)
+{
+    const char *inputs[] = {"build/generated/rules_app.c", "nob.c"};
+    Nob_Cmd command = {0};
+    int rebuild;
+    if (!build_rules_dialect() || !generate_rules_example()) return false;
+    rebuild = output_rebuild_state(NOC_RULES_EXAMPLE, inputs, NOB_ARRAY_LEN(inputs));
+    if (rebuild < 0) return false;
+    if (rebuild == 0) {
+        return nob_file_exists(NOC_RULES_EXAMPLE) > 0;
+    }
+    append_compile_command(&command,
+                           NOC_RULES_EXAMPLE,
+                           "build/generated/rules_app.c");
     return nob_cmd_run(&command);
 }
 
@@ -170,22 +219,28 @@ int main(int argc, char **argv)
 
     if (strcmp(target, "test") == 0) {
         Nob_Cmd command = {0};
-        if (!build_tests() || !build_example()) return 1;
+        if (!build_tests() || !build_embed_example() || !build_rules_example()) return 1;
         nob_cmd_append(&command, NOC_TESTS);
         if (!nob_cmd_run(&command)) return 1;
-        nob_cmd_append(&command, NOC_EXAMPLE);
+        nob_cmd_append(&command, NOC_EMBED_EXAMPLE);
+        if (!nob_cmd_run(&command)) return 1;
+        nob_cmd_append(&command, NOC_RULES_EXAMPLE);
         return nob_cmd_run(&command) ? 0 : 1;
     }
     if (strcmp(target, "example") == 0) {
         Nob_Cmd command = {0};
-        if (!build_example()) return 1;
-        nob_cmd_append(&command, NOC_EXAMPLE);
+        if (!build_embed_example() || !build_rules_example()) return 1;
+        nob_cmd_append(&command, NOC_EMBED_EXAMPLE);
+        if (!nob_cmd_run(&command)) return 1;
+        nob_cmd_append(&command, NOC_RULES_EXAMPLE);
         return nob_cmd_run(&command) ? 0 : 1;
     }
     if (strcmp(target, "describe") == 0) {
         Nob_Cmd command = {0};
-        if (!build_dialect()) return 1;
-        nob_cmd_append(&command, NOC_DIALECT, "--describe");
+        if (!build_embed_dialect() || !build_rules_dialect()) return 1;
+        nob_cmd_append(&command, NOC_EMBED_DIALECT, "--describe");
+        if (!nob_cmd_run(&command)) return 1;
+        nob_cmd_append(&command, NOC_RULES_DIALECT, "--describe");
         return nob_cmd_run(&command) ? 0 : 1;
     }
 

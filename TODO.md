@@ -47,7 +47,7 @@ passes, and the milestone has been committed and pushed.
 - [x] Add transformed emission for nested rule composition.
 - [x] Add newline/source-map restoration helpers.
 - [x] Add dependency reporting so rules such as `@embed` expose build inputs.
-- [ ] Add examples for expression, statement, declaration, and attribute rules.
+- [x] Add examples for expression, statement, declaration, and attribute rules.
 
 ## Milestone 5 — IDE artifacts (lower priority)
 

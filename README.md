@@ -45,6 +45,11 @@ $ ./nob describe
 $ ./nob clean
 ```
 
+The test target transforms, compiles, and runs both examples. `examples/embed`
+shows a built-in expression rule with a file dependency; `examples/rules` is a
+single project dialect covering expression, statement, declaration, and
+attribute scopes. Both dialect inputs and applications use ordinary `.c` files.
+
 ## Define a dialect
 
 The embed example is a complete dialect executable:
