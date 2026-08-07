@@ -288,6 +288,31 @@ Applying is transactional and leaves the destination buffer unchanged on
 failure. Edit sets borrow a specific token-stream generation and cannot be used
 after successful retokenization, including a free-and-reuse cycle.
 
+## Conservative preprocessor activity
+
+`noc_preprocessor_map_build` labels every token as active, inactive, or unknown
+across nested conditional directives. It resolves exact `#if 0`, `#if 1`, and
+equivalent `#elif` branches, including `%:` directive markers. Conditions that
+depend on macros, `defined`, or other expressions stay unknown; the API does
+not pretend to run the C preprocessor. Maps are transactional, diagnose
+unbalanced or misplaced conditional directives, borrow a token-stream
+generation, and provide constant-time lookup with
+`noc_preprocessor_activity_at`.
+
+Transforms preserve their historical behavior by default. Projects that want
+known dead branches left untouched can opt in:
+
+```c
+noc.options.skip_inactive_preprocessor_branches = true;
+```
+
+Only rule triggers in definitely inactive branches are skipped. Unknown
+branches are still transformed and unknown `@name` triggers there still produce
+diagnostics, so build-configuration-dependent code is never silently guessed.
+Fragments passed recursively through `noc_rw_emit_transformed` do not run an
+independent activity analysis because a captured slice may cross conditional
+boundaries owned by its enclosing source.
+
 ## Define a custom rule
 
 All extensions use the same registry and callback interface:
@@ -481,11 +506,12 @@ preprocessor directives, identifiers, and multi-character punctuators. Raw
 `Noc_Token.text` remains the exact source slice for lossless trees and rewrites;
 `noc_token_is_identifier` and `noc_token_is_punct` compare the phase-2 logical
 spelling, and `noc_token_logical_text` copies that spelling into a transactional
-NUL-terminated buffer. C trigraphs are rejected explicitly. Because `noc.h`
-does not evaluate preprocessor conditions, a rule in an inactive `#if` branch
-is still visited. Expansion callbacks should preserve physical newline counts
-when exact diagnostics after an expansion matter; the rewriter source-mapping
-helpers make that policy explicit but do not infer it automatically.
+NUL-terminated buffer. C trigraphs are rejected explicitly. Preprocessor
+activity analysis is conservative and does not expand macros; it can skip only
+literal, definitely inactive branches when explicitly enabled. Expansion
+callbacks should preserve physical newline counts when exact diagnostics after
+an expansion matter; the rewriter source-mapping helpers make that policy
+explicit but do not infer it automatically.
 
 The staged implementation plan and current milestone status live in
 [`TODO.md`](TODO.md).

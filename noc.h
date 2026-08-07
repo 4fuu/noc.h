@@ -29,9 +29,9 @@
 #define NOC_H_INCLUDED
 
 #define NOC_VERSION_MAJOR 0
-#define NOC_VERSION_MINOR 17
+#define NOC_VERSION_MINOR 18
 #define NOC_VERSION_PATCH 0
-#define NOC_VERSION "0.17.0"
+#define NOC_VERSION "0.18.0"
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -128,6 +128,19 @@ typedef struct {
     size_t index;
     size_t end;
 } Noc_Token_Cursor;
+
+typedef enum {
+    NOC_PREPROCESSOR_ACTIVITY_UNKNOWN = 0,
+    NOC_PREPROCESSOR_ACTIVITY_ACTIVE,
+    NOC_PREPROCESSOR_ACTIVITY_INACTIVE,
+} Noc_Preprocessor_Activity;
+
+typedef struct {
+    const Noc_Token_Stream *stream;
+    size_t stream_generation;
+    Noc_Preprocessor_Activity *items;
+    size_t count;
+} Noc_Preprocessor_Map;
 
 typedef struct {
     Noc_Token_Range *items;
@@ -261,6 +274,7 @@ struct Noc_Rule {
 typedef struct {
     bool emit_line_directives;
     bool unknown_rule_is_error;
+    bool skip_inactive_preprocessor_branches;
 } Noc_Options;
 
 typedef struct {
@@ -368,6 +382,19 @@ NOCDEF bool noc_tokenize(Noc_Context *context,
 NOCDEF void noc_token_stream_free(Noc_Token_Stream *stream);
 NOCDEF bool noc_token_stream_is_valid(const Noc_Token_Stream *stream);
 NOCDEF Noc_Slice noc_token_stream_source(const Noc_Token_Stream *stream);
+
+/* Conservative conditional-compilation analysis. Exact #if 0/#if 1 and #elif
+   literals are resolved; macro-dependent expressions remain UNKNOWN. The map
+   has one activity per token and borrows the stream. Initialize it to {0}; it
+   is replaced only after a successful structurally balanced build. */
+NOCDEF bool noc_preprocessor_map_build(Noc_Context *context,
+                                       const Noc_Token_Stream *stream,
+                                       Noc_Preprocessor_Map *map);
+NOCDEF void noc_preprocessor_map_free(Noc_Preprocessor_Map *map);
+NOCDEF bool noc_preprocessor_map_is_valid(const Noc_Preprocessor_Map *map);
+NOCDEF Noc_Preprocessor_Activity noc_preprocessor_activity_at(
+    const Noc_Preprocessor_Map *map,
+    size_t token_index);
 
 /* Source ranges and standalone cursors */
 NOCDEF bool noc_token_range_is_valid(const Noc_Token_Stream *stream,
@@ -658,7 +685,8 @@ static bool noc__transform_source(Noc_Context *context,
                                   size_t source_count,
                                   Noc_Transform_Result *result,
                                   size_t expansion_depth,
-                                  bool emit_line_directives);
+                                  bool emit_line_directives,
+                                  bool analyze_preprocessor_activity);
 
 static bool noc__is_identifier_start(unsigned char c)
 {
@@ -2212,6 +2240,7 @@ NOCDEF bool noc_rw_emit_transformed(Noc_Rewriter *rewriter, Noc_Slice source)
                                source.count,
                                &nested,
                                rewriter->expansion_depth + 1,
+                               false,
                                false)) {
         rewriter->failed = true;
         goto done;
@@ -2553,6 +2582,321 @@ NOCDEF Noc_Slice noc_token_stream_source(const Noc_Token_Stream *stream)
     source.data = stream->source;
     source.count = stream->source_count;
     return source;
+}
+
+typedef enum {
+    NOC__PREPROCESSOR_OTHER = 0,
+    NOC__PREPROCESSOR_IF,
+    NOC__PREPROCESSOR_IFDEF,
+    NOC__PREPROCESSOR_IFNDEF,
+    NOC__PREPROCESSOR_ELIF,
+    NOC__PREPROCESSOR_ELSE,
+    NOC__PREPROCESSOR_ENDIF,
+} Noc__Preprocessor_Directive_Kind;
+
+typedef struct {
+    Noc__Preprocessor_Directive_Kind kind;
+    Noc_Preprocessor_Activity condition;
+} Noc__Preprocessor_Directive;
+
+typedef struct {
+    Noc_Preprocessor_Activity parent;
+    Noc_Preprocessor_Activity prior_taken;
+    Noc_Location opening_location;
+    bool saw_else;
+} Noc__Preprocessor_Frame;
+
+static Noc_Token noc__preprocessor_next_significant(Noc_Lexer *lexer)
+{
+    Noc_Token token;
+    do {
+        token = noc_lexer_next(lexer);
+    } while (noc_token_is_trivia(token));
+    return token;
+}
+
+static bool noc__preprocessor_parse_directive(Noc_Token token,
+                                              Noc__Preprocessor_Directive *directive)
+{
+    Noc_Buffer logical = {0};
+    Noc_Lexer lexer;
+    Noc_Token marker;
+    Noc_Token keyword;
+    bool ok = false;
+    directive->kind = NOC__PREPROCESSOR_OTHER;
+    directive->condition = NOC_PREPROCESSOR_ACTIVITY_UNKNOWN;
+    if (token.kind != NOC_TOKEN_PREPROCESSOR) return true;
+    if (!noc_token_logical_text(token, &logical)) return false;
+    noc_lexer_init(&lexer, token.location.path, logical.items, logical.count);
+    lexer.beginning_of_line = false;
+    marker = noc__preprocessor_next_significant(&lexer);
+    if (!noc_token_is_punct(marker, "#") && !noc_token_is_punct(marker, "%:")) {
+        ok = true;
+        goto done;
+    }
+    keyword = noc__preprocessor_next_significant(&lexer);
+    if (noc_token_is_identifier(keyword, "if")) {
+        directive->kind = NOC__PREPROCESSOR_IF;
+    } else if (noc_token_is_identifier(keyword, "ifdef")) {
+        directive->kind = NOC__PREPROCESSOR_IFDEF;
+    } else if (noc_token_is_identifier(keyword, "ifndef")) {
+        directive->kind = NOC__PREPROCESSOR_IFNDEF;
+    } else if (noc_token_is_identifier(keyword, "elif")) {
+        directive->kind = NOC__PREPROCESSOR_ELIF;
+    } else if (noc_token_is_identifier(keyword, "elifdef") ||
+               noc_token_is_identifier(keyword, "elifndef")) {
+        directive->kind = NOC__PREPROCESSOR_ELIF;
+    } else if (noc_token_is_identifier(keyword, "else")) {
+        directive->kind = NOC__PREPROCESSOR_ELSE;
+    } else if (noc_token_is_identifier(keyword, "endif")) {
+        directive->kind = NOC__PREPROCESSOR_ENDIF;
+    }
+    if (directive->kind == NOC__PREPROCESSOR_IF ||
+        directive->kind == NOC__PREPROCESSOR_ELIF) {
+        Noc_Token expression = noc__preprocessor_next_significant(&lexer);
+        Noc_Token trailing = noc__preprocessor_next_significant(&lexer);
+        bool trailing_multiline_comment =
+            trailing.kind == NOC_TOKEN_INVALID &&
+            noc__logical_pair(trailing.text.data,
+                              trailing.text.count,
+                              0,
+                              '/',
+                              '*',
+                              NULL) &&
+            noc__contains_newline(trailing.text.data, trailing.text.count);
+        if (expression.kind == NOC_TOKEN_NUMBER &&
+            (trailing.kind == NOC_TOKEN_EOF || trailing_multiline_comment)) {
+            if (noc_slice_equal_cstr(expression.text, "0")) {
+                directive->condition = NOC_PREPROCESSOR_ACTIVITY_INACTIVE;
+            } else if (noc_slice_equal_cstr(expression.text, "1")) {
+                directive->condition = NOC_PREPROCESSOR_ACTIVITY_ACTIVE;
+            }
+        }
+    }
+    ok = true;
+
+done:
+    noc_buffer_free(&logical);
+    return ok;
+}
+
+static Noc_Preprocessor_Activity noc__preprocessor_and(Noc_Preprocessor_Activity left,
+                                                       Noc_Preprocessor_Activity right)
+{
+    if (left == NOC_PREPROCESSOR_ACTIVITY_INACTIVE ||
+        right == NOC_PREPROCESSOR_ACTIVITY_INACTIVE) {
+        return NOC_PREPROCESSOR_ACTIVITY_INACTIVE;
+    }
+    if (left == NOC_PREPROCESSOR_ACTIVITY_ACTIVE &&
+        right == NOC_PREPROCESSOR_ACTIVITY_ACTIVE) {
+        return NOC_PREPROCESSOR_ACTIVITY_ACTIVE;
+    }
+    return NOC_PREPROCESSOR_ACTIVITY_UNKNOWN;
+}
+
+static Noc_Preprocessor_Activity noc__preprocessor_or(Noc_Preprocessor_Activity left,
+                                                      Noc_Preprocessor_Activity right)
+{
+    if (left == NOC_PREPROCESSOR_ACTIVITY_ACTIVE ||
+        right == NOC_PREPROCESSOR_ACTIVITY_ACTIVE) {
+        return NOC_PREPROCESSOR_ACTIVITY_ACTIVE;
+    }
+    if (left == NOC_PREPROCESSOR_ACTIVITY_INACTIVE &&
+        right == NOC_PREPROCESSOR_ACTIVITY_INACTIVE) {
+        return NOC_PREPROCESSOR_ACTIVITY_INACTIVE;
+    }
+    return NOC_PREPROCESSOR_ACTIVITY_UNKNOWN;
+}
+
+static Noc_Preprocessor_Activity noc__preprocessor_not(Noc_Preprocessor_Activity activity)
+{
+    if (activity == NOC_PREPROCESSOR_ACTIVITY_ACTIVE) {
+        return NOC_PREPROCESSOR_ACTIVITY_INACTIVE;
+    }
+    if (activity == NOC_PREPROCESSOR_ACTIVITY_INACTIVE) {
+        return NOC_PREPROCESSOR_ACTIVITY_ACTIVE;
+    }
+    return NOC_PREPROCESSOR_ACTIVITY_UNKNOWN;
+}
+
+NOCDEF void noc_preprocessor_map_free(Noc_Preprocessor_Map *map)
+{
+    free(map->items);
+    memset(map, 0, sizeof(*map));
+}
+
+NOCDEF bool noc_preprocessor_map_is_valid(const Noc_Preprocessor_Map *map)
+{
+    return map && noc_token_stream_is_valid(map->stream) &&
+           map->stream_generation == map->stream->generation && map->items &&
+           map->count == map->stream->count;
+}
+
+NOCDEF Noc_Preprocessor_Activity noc_preprocessor_activity_at(
+    const Noc_Preprocessor_Map *map,
+    size_t token_index)
+{
+    if (!noc_preprocessor_map_is_valid(map) || token_index >= map->count) {
+        return NOC_PREPROCESSOR_ACTIVITY_UNKNOWN;
+    }
+    return map->items[token_index];
+}
+
+NOCDEF bool noc_preprocessor_map_build(Noc_Context *context,
+                                       const Noc_Token_Stream *stream,
+                                       Noc_Preprocessor_Map *map)
+{
+    Noc_Preprocessor_Map parsed = {0};
+    Noc__Preprocessor_Frame *frames = NULL;
+    Noc_Preprocessor_Activity current = NOC_PREPROCESSOR_ACTIVITY_ACTIVE;
+    Noc_Location no_location = {0};
+    size_t frame_count = 0;
+    size_t frame_capacity = 0;
+    size_t i;
+    if (!map || !noc_token_stream_is_valid(stream)) {
+        noc__report(context,
+                    NOC_DIAGNOSTIC_ERROR,
+                    no_location,
+                    "cannot analyze preprocessor activity from an invalid token stream");
+        return false;
+    }
+    if (stream->count > SIZE_MAX / sizeof(*parsed.items)) {
+        noc__report(context,
+                    NOC_DIAGNOSTIC_ERROR,
+                    no_location,
+                    "token stream is too large for preprocessor activity analysis");
+        return false;
+    }
+    parsed.items = (Noc_Preprocessor_Activity *)malloc(stream->count *
+                                                       sizeof(*parsed.items));
+    if (!parsed.items) {
+        noc__report(context,
+                    NOC_DIAGNOSTIC_ERROR,
+                    no_location,
+                    "out of memory while starting preprocessor activity analysis");
+        goto failed;
+    }
+    parsed.stream = stream;
+    parsed.stream_generation = stream->generation;
+    parsed.count = stream->count;
+    for (i = 0; i < stream->count; ++i) {
+        Noc_Token token = stream->items[i];
+        Noc__Preprocessor_Directive directive;
+        parsed.items[i] = current;
+        if (token.kind != NOC_TOKEN_PREPROCESSOR) continue;
+        if (!noc__preprocessor_parse_directive(token, &directive)) {
+            noc__report(context,
+                        NOC_DIAGNOSTIC_ERROR,
+                        token.location,
+                        "out of memory while parsing preprocessor directive");
+            goto failed;
+        }
+        if (directive.kind == NOC__PREPROCESSOR_IF ||
+            directive.kind == NOC__PREPROCESSOR_IFDEF ||
+            directive.kind == NOC__PREPROCESSOR_IFNDEF) {
+            Noc__Preprocessor_Frame *frame;
+            if (frame_count == frame_capacity) {
+                Noc__Preprocessor_Frame *grown;
+                size_t capacity = frame_capacity ? frame_capacity * 2 : 8;
+                if (capacity < frame_capacity || capacity > SIZE_MAX / sizeof(*frames)) {
+                    noc__report(context,
+                                NOC_DIAGNOSTIC_ERROR,
+                                token.location,
+                                "preprocessor conditional nesting is too deep");
+                    goto failed;
+                }
+                grown = (Noc__Preprocessor_Frame *)realloc(frames,
+                                                           capacity * sizeof(*frames));
+                if (!grown) {
+                    noc__report(context,
+                                NOC_DIAGNOSTIC_ERROR,
+                                token.location,
+                                "out of memory while nesting preprocessor conditionals");
+                    goto failed;
+                }
+                frames = grown;
+                frame_capacity = capacity;
+            }
+            frame = &frames[frame_count++];
+            frame->parent = current;
+            frame->prior_taken = directive.condition;
+            frame->opening_location = token.location;
+            frame->saw_else = false;
+            current = noc__preprocessor_and(frame->parent, directive.condition);
+        } else if (directive.kind == NOC__PREPROCESSOR_ELIF) {
+            Noc__Preprocessor_Frame *frame;
+            Noc_Preprocessor_Activity available;
+            if (frame_count == 0) {
+                noc__report(context,
+                            NOC_DIAGNOSTIC_ERROR,
+                            token.location,
+                            "#elif has no matching conditional directive");
+                goto failed;
+            }
+            frame = &frames[frame_count - 1];
+            if (frame->saw_else) {
+                noc__report(context,
+                            NOC_DIAGNOSTIC_ERROR,
+                            token.location,
+                            "#elif cannot follow #else in the same conditional group");
+                goto failed;
+            }
+            available = noc__preprocessor_not(frame->prior_taken);
+            current = noc__preprocessor_and(
+                frame->parent,
+                noc__preprocessor_and(available, directive.condition));
+            frame->prior_taken = noc__preprocessor_or(frame->prior_taken,
+                                                      directive.condition);
+        } else if (directive.kind == NOC__PREPROCESSOR_ELSE) {
+            Noc__Preprocessor_Frame *frame;
+            if (frame_count == 0) {
+                noc__report(context,
+                            NOC_DIAGNOSTIC_ERROR,
+                            token.location,
+                            "#else has no matching conditional directive");
+                goto failed;
+            }
+            frame = &frames[frame_count - 1];
+            if (frame->saw_else) {
+                noc__report(context,
+                            NOC_DIAGNOSTIC_ERROR,
+                            token.location,
+                            "conditional group contains more than one #else");
+                goto failed;
+            }
+            current = noc__preprocessor_and(
+                frame->parent,
+                noc__preprocessor_not(frame->prior_taken));
+            frame->prior_taken = NOC_PREPROCESSOR_ACTIVITY_ACTIVE;
+            frame->saw_else = true;
+        } else if (directive.kind == NOC__PREPROCESSOR_ENDIF) {
+            if (frame_count == 0) {
+                noc__report(context,
+                            NOC_DIAGNOSTIC_ERROR,
+                            token.location,
+                            "#endif has no matching conditional directive");
+                goto failed;
+            }
+            current = frames[frame_count - 1].parent;
+            frame_count -= 1;
+        }
+    }
+    if (frame_count != 0) {
+        noc__report(context,
+                    NOC_DIAGNOSTIC_ERROR,
+                    frames[frame_count - 1].opening_location,
+                    "conditional directive has no matching #endif");
+        goto failed;
+    }
+    free(frames);
+    noc_preprocessor_map_free(map);
+    *map = parsed;
+    return true;
+
+failed:
+    free(frames);
+    noc_preprocessor_map_free(&parsed);
+    return false;
 }
 
 NOCDEF bool noc_token_range_is_valid(const Noc_Token_Stream *stream,
@@ -4385,10 +4729,12 @@ static bool noc__transform_source(Noc_Context *context,
                                   size_t source_count,
                                   Noc_Transform_Result *result,
                                   size_t expansion_depth,
-                                  bool emit_line_directives)
+                                  bool emit_line_directives,
+                                  bool analyze_preprocessor_activity)
 {
     Noc_Lexer lexer;
     Noc__Tokens tokens = {0};
+    Noc_Preprocessor_Map preprocessor = {0};
     Noc_Buffer output = {0};
     Noc__String_List dependencies = {0};
     Noc_Token token;
@@ -4431,6 +4777,12 @@ static bool noc__transform_source(Noc_Context *context,
     tokens.path = (char *)(path ? path : "<memory>");
     tokens.generation = 1;
 
+    if (analyze_preprocessor_activity &&
+        !noc_preprocessor_map_build(context, &tokens, &preprocessor)) {
+        ok = false;
+        goto done;
+    }
+
     if (emit_line_directives && !noc__emit_line_directive_at(&output, path, 1)) {
         noc__report(context,
                     NOC_DIAGNOSTIC_ERROR,
@@ -4443,7 +4795,10 @@ static bool noc__transform_source(Noc_Context *context,
 
     while (index < tokens.count && tokens.items[index].kind != NOC_TOKEN_EOF) {
         token = tokens.items[index];
-        if (noc_token_is_punct(token, "@")) {
+        if (noc_token_is_punct(token, "@") &&
+            (!analyze_preprocessor_activity ||
+             noc_preprocessor_activity_at(&preprocessor, index) !=
+                 NOC_PREPROCESSOR_ACTIVITY_INACTIVE)) {
             size_t name_index = index + 1;
             const Noc_Rule *rule;
             while (name_index < tokens.count && noc_token_is_trivia(tokens.items[name_index])) {
@@ -4540,6 +4895,7 @@ static bool noc__transform_source(Noc_Context *context,
 
 done:
     result->error_count = context->error_count - errors_before;
+    noc_preprocessor_map_free(&preprocessor);
     free(tokens.items);
     noc_buffer_free(&output);
     noc__string_list_free(&dependencies);
@@ -4558,7 +4914,8 @@ NOCDEF bool noc_transform_source(Noc_Context *context,
                                  source_count,
                                  result,
                                  0,
-                                 context->options.emit_line_directives);
+                                 context->options.emit_line_directives,
+                                 context->options.skip_inactive_preprocessor_branches);
 }
 
 NOCDEF void noc_transform_result_free(Noc_Transform_Result *result)

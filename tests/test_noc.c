@@ -153,6 +153,132 @@ static void test_phase2_splices(void)
     noc_buffer_free(&logical);
 }
 
+static Noc_Preprocessor_Activity activity_for_identifier(
+    const Noc_Token_Stream *stream,
+    const Noc_Preprocessor_Map *map,
+    const char *identifier)
+{
+    size_t i;
+    for (i = 0; i < stream->count; ++i) {
+        if (noc_token_is_identifier(stream->items[i], identifier)) {
+            return noc_preprocessor_activity_at(map, i);
+        }
+    }
+    return NOC_PREPROCESSOR_ACTIVITY_UNKNOWN;
+}
+
+static void test_preprocessor_activity_map(void)
+{
+    static const char source[] =
+        "top\n"
+        "#if 0\n"
+        "dead_zero\n"
+        "#if FLAG\n"
+        "nested_dead\n"
+        "#endif\n"
+        "#elif 1\n"
+        "live_elif\n"
+        "#else\n"
+        "dead_else\n"
+        "#endif\n"
+        "%:if FLAG\n"
+        "maybe_if\n"
+        "%:else\n"
+        "maybe_else\n"
+        "%:endif\n"
+        "#if 1\n"
+        "live_one\n"
+        "#elif 1\n"
+        "dead_elif\n"
+        "#else\n"
+        "dead_final\n"
+        "#endif\n"
+        "#if 0\n"
+        "dead_before_elifdef\n"
+        "#elifdef FLAG\n"
+        "maybe_elifdef\n"
+        "#endif\n"
+        "#if 0 /*\r\n"
+        "comment */\r\n"
+        "dead_commented\r\n"
+        "#elif 1 /*\r"
+        "comment */\r"
+        "live_commented\r"
+        "#endif\r"
+        "bottom\n";
+    static const char malformed[] = "#else\nvalue\n";
+    Noc_Context context;
+    Noc_Token_Stream stream = {0};
+    Noc_Token_Stream bad_stream = {0};
+    Noc_Preprocessor_Map map = {0};
+    Diagnostic_State diagnostics = {0};
+    Noc_Preprocessor_Activity *preserved_items;
+
+    noc_context_init(&context);
+    noc_context_set_diagnostic(&context, count_diagnostics, &diagnostics);
+    CHECK(noc_tokenize(&context, "activity.c", source, sizeof(source) - 1, &stream));
+    CHECK(noc_preprocessor_map_build(&context, &stream, &map));
+    CHECK(noc_preprocessor_map_is_valid(&map));
+    CHECK(map.count == stream.count);
+    CHECK(activity_for_identifier(&stream, &map, "top") ==
+          NOC_PREPROCESSOR_ACTIVITY_ACTIVE);
+    CHECK(activity_for_identifier(&stream, &map, "dead_zero") ==
+          NOC_PREPROCESSOR_ACTIVITY_INACTIVE);
+    CHECK(activity_for_identifier(&stream, &map, "nested_dead") ==
+          NOC_PREPROCESSOR_ACTIVITY_INACTIVE);
+    CHECK(activity_for_identifier(&stream, &map, "live_elif") ==
+          NOC_PREPROCESSOR_ACTIVITY_ACTIVE);
+    CHECK(activity_for_identifier(&stream, &map, "dead_else") ==
+          NOC_PREPROCESSOR_ACTIVITY_INACTIVE);
+    CHECK(activity_for_identifier(&stream, &map, "maybe_if") ==
+          NOC_PREPROCESSOR_ACTIVITY_UNKNOWN);
+    CHECK(activity_for_identifier(&stream, &map, "maybe_else") ==
+          NOC_PREPROCESSOR_ACTIVITY_UNKNOWN);
+    CHECK(activity_for_identifier(&stream, &map, "live_one") ==
+          NOC_PREPROCESSOR_ACTIVITY_ACTIVE);
+    CHECK(activity_for_identifier(&stream, &map, "dead_elif") ==
+          NOC_PREPROCESSOR_ACTIVITY_INACTIVE);
+    CHECK(activity_for_identifier(&stream, &map, "dead_final") ==
+          NOC_PREPROCESSOR_ACTIVITY_INACTIVE);
+    CHECK(activity_for_identifier(&stream, &map, "dead_before_elifdef") ==
+          NOC_PREPROCESSOR_ACTIVITY_INACTIVE);
+    CHECK(activity_for_identifier(&stream, &map, "maybe_elifdef") ==
+          NOC_PREPROCESSOR_ACTIVITY_UNKNOWN);
+    CHECK(activity_for_identifier(&stream, &map, "dead_commented") ==
+          NOC_PREPROCESSOR_ACTIVITY_INACTIVE);
+    CHECK(activity_for_identifier(&stream, &map, "live_commented") ==
+          NOC_PREPROCESSOR_ACTIVITY_ACTIVE);
+    CHECK(activity_for_identifier(&stream, &map, "bottom") ==
+          NOC_PREPROCESSOR_ACTIVITY_ACTIVE);
+    CHECK(noc_preprocessor_activity_at(&map, stream.count) ==
+          NOC_PREPROCESSOR_ACTIVITY_UNKNOWN);
+
+    preserved_items = map.items;
+    CHECK(!noc_tokenize(&context, "failed-replacement.c", "/*", 2, &stream));
+    CHECK(diagnostics.errors == 1);
+    CHECK(map.items == preserved_items);
+    CHECK(noc_preprocessor_map_is_valid(&map));
+    CHECK(noc_tokenize(&context,
+                       "malformed-activity.c",
+                       malformed,
+                       sizeof(malformed) - 1,
+                       &bad_stream));
+    CHECK(!noc_preprocessor_map_build(&context, &bad_stream, &map));
+    CHECK(diagnostics.errors == 2);
+    CHECK(map.items == preserved_items);
+    CHECK(noc_preprocessor_map_is_valid(&map));
+    CHECK(noc_tokenize(&context, "replacement.c", "replacement", 11, &stream));
+    CHECK(!noc_preprocessor_map_is_valid(&map));
+    CHECK(noc_preprocessor_activity_at(&map, 0) ==
+          NOC_PREPROCESSOR_ACTIVITY_UNKNOWN);
+
+    noc_preprocessor_map_free(&map);
+    CHECK(!noc_preprocessor_map_is_valid(&map));
+    noc_token_stream_free(&bad_stream);
+    noc_token_stream_free(&stream);
+    noc_context_deinit(&context);
+}
+
 static void test_token_stream_and_cursor(void)
 {
     char source[] = "  call(alpha, nested(1, 2), (Pair){3, 4})  ";
@@ -2170,6 +2296,122 @@ static void test_transactional_match(void)
     noc_context_deinit(&context);
 }
 
+static void test_inactive_preprocessor_transformation(void)
+{
+    static const char source[] =
+        "#if 0\n"
+        "@missing(1)\n"
+        "#elif 1\n"
+        "@optional value;\n"
+        "#else\n"
+        "@missing(2)\n"
+        "#endif\n";
+    static const char expected[] =
+        "#if 0\n"
+        "@missing(1)\n"
+        "#elif 1\n"
+        "long value;\n"
+        "#else\n"
+        "@missing(2)\n"
+        "#endif\n";
+    static const char unknown[] = "#if FLAG\n@missing\n#endif\n";
+    static const char malformed[] = "#endif\n@optional value;\n";
+    static const char malformed_default_expected[] = "#endif\nlong value;\n";
+    static const char nested_fragment[] =
+        "int value =\n"
+        "#if FLAG\n"
+        "@group(\n"
+        "#endif\n"
+        "42\n"
+        "#if FLAG\n"
+        ")\n"
+        "#endif\n"
+        ";\n";
+    static const char nested_expected[] =
+        "int value =\n"
+        "#if FLAG\n"
+        "(\n"
+        "#endif\n"
+        "42\n"
+        "#if FLAG\n"
+        ")\n"
+        "#endif\n"
+        ";\n";
+    Noc_Context context;
+    Noc_Transform_Result result = {0};
+    Diagnostic_State diagnostics = {0};
+    Noc_Rule rule = {
+        "optional",
+        NOC_RULE_TOKEN,
+        "@optional",
+        "Test inactive conditional branches.",
+        expand_optional,
+        NULL,
+    };
+    Noc_Rule group_rule = {
+        "group",
+        NOC_RULE_EXPRESSION,
+        "@group(expression)",
+        "Transform a fragment crossing enclosing conditional boundaries.",
+        expand_nested_group,
+        NULL,
+    };
+
+    noc_context_init(&context);
+    context.options.emit_line_directives = false;
+    noc_context_set_diagnostic(&context, count_diagnostics, &diagnostics);
+    CHECK(noc_register_rule(&context, rule));
+    CHECK(noc_register_rule(&context, group_rule));
+    CHECK(!noc_transform_source(&context,
+                                "inactive-default.c",
+                                source,
+                                sizeof(source) - 1,
+                                &result));
+    CHECK(diagnostics.errors == 1);
+    noc_transform_result_free(&result);
+    CHECK(noc_transform_source(&context,
+                               "malformed-default.c",
+                               malformed,
+                               sizeof(malformed) - 1,
+                               &result));
+    CHECK(result.output != NULL &&
+          strcmp(result.output, malformed_default_expected) == 0);
+    noc_transform_result_free(&result);
+
+    context.options.skip_inactive_preprocessor_branches = true;
+    CHECK(noc_transform_source(&context,
+                               "inactive.c",
+                               source,
+                               sizeof(source) - 1,
+                               &result));
+    CHECK(result.output != NULL && strcmp(result.output, expected) == 0);
+    noc_transform_result_free(&result);
+    CHECK(noc_transform_source(&context,
+                               "nested-conditional-fragment.c",
+                               nested_fragment,
+                               sizeof(nested_fragment) - 1,
+                               &result));
+    CHECK(result.output != NULL && strcmp(result.output, nested_expected) == 0);
+    noc_transform_result_free(&result);
+    CHECK(!noc_transform_source(&context,
+                                "unknown-activity.c",
+                                unknown,
+                                sizeof(unknown) - 1,
+                                &result));
+    CHECK(diagnostics.errors == 2);
+    noc_transform_result_free(&result);
+    CHECK(!noc_transform_source(&context,
+                                "malformed-conditional.c",
+                                malformed,
+                                sizeof(malformed) - 1,
+                                &result));
+    CHECK(diagnostics.errors == 3);
+    CHECK(strstr(diagnostics.last_message, "#endif") != NULL);
+    CHECK(result.output == NULL && result.dependencies == NULL);
+    noc_transform_result_free(&result);
+    noc_context_deinit(&context);
+}
+
 static void test_unknown_rule(void)
 {
     static const char source[] = "int value = @missing(1);\n";
@@ -2401,6 +2643,7 @@ int main(void)
 {
     test_lexer();
     test_phase2_splices();
+    test_preprocessor_activity_map();
     test_token_stream_and_cursor();
     test_argument_and_balance_edges();
     test_tokenize_error();
@@ -2422,6 +2665,7 @@ int main(void)
     test_nested_transformation();
     test_custom_rule();
     test_transactional_match();
+    test_inactive_preprocessor_transformation();
     test_unknown_rule();
     test_silent_callback_failure();
     test_comment_and_preprocessor_opacity();
