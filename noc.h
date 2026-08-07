@@ -1956,7 +1956,7 @@ NOCDEF bool noc_rw_expect_identifier(Noc_Rewriter *rewriter,
     noc_rw_skip_trivia(rewriter);
     next = noc_rw_peek_raw(rewriter, 0);
     if (next && next->kind == NOC_TOKEN_IDENTIFIER &&
-        (!identifier || noc_slice_equal_cstr(next->text, identifier))) {
+        (!identifier || noc_token_is_identifier(*next, identifier))) {
         if (token) *token = *next;
         rewriter->cursor += 1;
         return true;

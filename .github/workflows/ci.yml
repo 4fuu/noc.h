@@ -69,3 +69,20 @@ jobs:
              -fsanitize=address,undefined -fno-omit-frame-pointer \
              -I. -o noc-tests-sanitize tests/test_noc.c
           ASAN_OPTIONS=detect_leaks=1 ./noc-tests-sanitize
+          cc -std=c11 -Wall -Wextra -Wpedantic \
+             -fsanitize=address,undefined -fno-omit-frame-pointer \
+             -I. -o noc-fuzz-sanitize tests/fuzz_noc.c
+          ASAN_OPTIONS=detect_leaks=1 ./noc-fuzz-sanitize
+
+  fuzz:
+    name: Linux Clang libFuzzer
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and run bounded fuzz campaign
+        run: |
+          clang -std=c11 -Wall -Wextra -Wpedantic \
+                -DNOC_LIBFUZZER -fsanitize=fuzzer,address,undefined \
+                -fno-omit-frame-pointer -I. \
+                -o noc-fuzz tests/fuzz_noc.c
+          ASAN_OPTIONS=detect_leaks=1 ./noc-fuzz -runs=20000 -max_len=2048

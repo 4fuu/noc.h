@@ -69,5 +69,6 @@ passes, and the milestone has been committed and pushed.
       guessing macro-dependent conditions.
 - [x] Normalize phase-2 splices inside identifiers and punctuators while
       preserving exact source slices for lossless syntax APIs.
-- [ ] Fuzz lexer, syntax tree, and rewrite cursor APIs.
+- [x] Fuzz lexer, token cursor, syntax tree/query, preprocessor activity, and
+      rewrite callback APIs with deterministic smoke and Clang libFuzzer modes.
 - [ ] Versioning, changelog, release packaging, and vendored `nob.h` update policy.

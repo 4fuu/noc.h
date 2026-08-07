@@ -11,6 +11,7 @@
 #endif
 
 #define NOC_TESTS "build/noc-tests" NOC_EXE
+#define NOC_FUZZ "build/noc-fuzz" NOC_EXE
 #define NOC_EMBED_DIALECT "build/embed-dialect" NOC_EXE
 #define NOC_EMBED_EXAMPLE "build/embed-example" NOC_EXE
 #define NOC_RULES_DIALECT "build/rules-dialect" NOC_EXE
@@ -111,6 +112,11 @@ static bool build_binary(const char *output, const char *source)
 static bool build_tests(void)
 {
     return build_binary(NOC_TESTS, "tests/test_noc.c");
+}
+
+static bool build_fuzz(void)
+{
+    return build_binary(NOC_FUZZ, "tests/fuzz_noc.c");
 }
 
 static bool build_embed_dialect(void)
@@ -326,7 +332,7 @@ static bool clean(void)
 static void usage(const char *program)
 {
     fprintf(stderr,
-            "Usage: %s [test|example|describe|clean]\n",
+            "Usage: %s [test|fuzz|example|describe|clean]\n",
             program);
 }
 
@@ -340,17 +346,25 @@ int main(int argc, char **argv)
 
     if (strcmp(target, "test") == 0) {
         Nob_Cmd command = {0};
-        if (!build_tests() || !build_embed_example() || !build_rules_example() ||
-            !build_ide_example()) {
+        if (!build_tests() || !build_fuzz() || !build_embed_example() ||
+            !build_rules_example() || !build_ide_example()) {
             return 1;
         }
         nob_cmd_append(&command, NOC_TESTS);
+        if (!nob_cmd_run(&command)) return 1;
+        nob_cmd_append(&command, NOC_FUZZ);
         if (!nob_cmd_run(&command)) return 1;
         nob_cmd_append(&command, NOC_EMBED_EXAMPLE);
         if (!nob_cmd_run(&command)) return 1;
         nob_cmd_append(&command, NOC_RULES_EXAMPLE);
         if (!nob_cmd_run(&command)) return 1;
         nob_cmd_append(&command, NOC_IDE_EXAMPLE);
+        return nob_cmd_run(&command) ? 0 : 1;
+    }
+    if (strcmp(target, "fuzz") == 0) {
+        Nob_Cmd command = {0};
+        if (!build_fuzz()) return 1;
+        nob_cmd_append(&command, NOC_FUZZ);
         return nob_cmd_run(&command) ? 0 : 1;
     }
     if (strcmp(target, "example") == 0) {

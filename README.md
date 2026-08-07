@@ -42,6 +42,7 @@ Other targets:
 ```console
 $ ./nob example
 $ ./nob describe
+$ ./nob fuzz
 $ ./nob clean
 ```
 
@@ -49,6 +50,26 @@ The test target transforms, compiles, and runs both examples. `examples/embed`
 shows a built-in expression rule with a file dependency; `examples/rules` is a
 single project dialect covering expression, statement, declaration, and
 attribute scopes. Both dialect inputs and applications use ordinary `.c` files.
+
+## Fuzzing
+
+`tests/fuzz_noc.c` is both a deterministic cross-platform smoke runner and a
+Clang libFuzzer target. The smoke campaign is part of `./nob test` and exercises
+lexer byte coverage, token streams/cursors, lossless syntax trees and lookup
+invariants, C analysis, preprocessor activity maps, and rewrite callbacks.
+Run it independently with `./nob fuzz`.
+
+For a bounded sanitizer-backed libFuzzer campaign:
+
+```console
+$ clang -std=c11 -DNOC_LIBFUZZER \
+    -fsanitize=fuzzer,address,undefined -fno-omit-frame-pointer -I. \
+    -o noc-fuzz tests/fuzz_noc.c
+$ ASAN_OPTIONS=detect_leaks=1 ./noc-fuzz -runs=20000 -max_len=2048
+```
+
+CI runs the deterministic harness on Linux, macOS, and Windows, then runs the
+bounded libFuzzer campaign in a dedicated Linux Clang job.
 
 ## Define a dialect
 

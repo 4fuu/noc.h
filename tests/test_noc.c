@@ -46,6 +46,18 @@ static void count_diagnostics(void *user_data, const Noc_Diagnostic *diagnostic)
     }
 }
 
+static bool expand_expected_identifier(Noc_Rewriter *rewriter,
+                                       const Noc_Rule *rule,
+                                       void *user_data)
+{
+    Noc_Token token;
+    (void)rule;
+    (void)user_data;
+    return noc_rw_expect_identifier(rewriter, "value", &token) &&
+           noc_token_is_identifier(token, "value") &&
+           noc_rw_emit_cstr(rewriter, "value");
+}
+
 static bool slice_equals(Noc_Slice slice, const char *expected)
 {
     size_t expected_count = strlen(expected);
@@ -90,6 +102,16 @@ static void test_phase2_splices(void)
     Noc_Buffer logical = {0};
     Noc_Buffer preserved = {0};
     Noc_Token invalid = {0};
+    Noc_Context context;
+    Noc_Transform_Result result = {0};
+    Noc_Rule rule = {
+        "expect",
+        NOC_RULE_TOKEN,
+        "@expect identifier",
+        "Expect an identifier with a phase-2 splice.",
+        expand_expected_identifier,
+        NULL,
+    };
 
     noc_lexer_init(&lexer, "splices.c", source, sizeof(source) - 1);
     token = noc_lexer_next(&lexer);
@@ -151,6 +173,18 @@ static void test_phase2_splices(void)
     CHECK(preserved.count == 0 && preserved.items[0] == '\0');
     noc_buffer_free(&preserved);
     noc_buffer_free(&logical);
+
+    noc_context_init(&context);
+    context.options.emit_line_directives = false;
+    CHECK(noc_register_rule(&context, rule));
+    CHECK(noc_transform_source(&context,
+                               "spliced-operand.c",
+                               "@expect va\\\nlue",
+                               sizeof("@expect va\\\nlue") - 1,
+                               &result));
+    CHECK(result.output != NULL && strcmp(result.output, "value") == 0);
+    noc_transform_result_free(&result);
+    noc_context_deinit(&context);
 }
 
 static Noc_Preprocessor_Activity activity_for_identifier(
