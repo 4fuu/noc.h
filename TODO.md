@@ -15,11 +15,11 @@ passes, and the milestone has been committed and pushed.
 
 ## Milestone 1 — public token stream and cursor APIs
 
-- [ ] Add an owning public token stream with tokenize/free operations.
-- [ ] Add reusable raw/significant token cursors independent of rewrite callbacks.
-- [ ] Add token range and source-span helpers.
-- [ ] Add balanced range and comma-separated argument parsing.
-- [ ] Cover every public operation with focused unit tests.
+- [x] Add an owning public token stream with tokenize/free operations.
+- [x] Add reusable raw/significant token cursors independent of rewrite callbacks.
+- [x] Add token range and source-span helpers.
+- [x] Add balanced range and comma-separated argument parsing.
+- [x] Cover every public operation with focused unit tests.
 
 ## Milestone 2 — lossless syntax tree
 

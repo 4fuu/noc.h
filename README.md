@@ -73,6 +73,37 @@ static const char message[] = @embed("message.txt");
 Run `dialect --describe` to inspect every enabled rule and its declared scope,
 syntax, and description.
 
+## Token streams and cursors
+
+`noc_tokenize` creates an owning, lossless token stream. The copied source,
+path, token text, and token locations remain valid until the stream is freed:
+
+```c
+Noc_Token_Stream stream = {0};
+if (!noc_tokenize(&noc, "input.c", source, source_count, &stream)) return 1;
+
+Noc_Token_Cursor cursor;
+Noc_Token_Range call;
+Noc_Token_Range arguments_range;
+Noc_Argument_List arguments = {0};
+
+noc_token_cursor_init(&cursor, &stream);
+noc_token_cursor_match_identifier(&cursor, "call", NULL);
+noc_token_cursor_take_balanced(&cursor, "(", ")", &call, &arguments_range);
+noc_parse_arguments(&stream, arguments_range, &arguments);
+
+noc_argument_list_free(&arguments);
+noc_token_stream_free(&stream);
+```
+
+Token ranges use half-open `[begin, end)` indices and can be trimmed or mapped
+back to exact source slices and locations. Cursor matching is transactional: a
+failed optional match does not consume trivia or tokens. Balanced capture and
+argument splitting honor nested `()`, `[]`, and `{}` groups and reject mixed
+mismatches such as `([)]`. General ranges may include the terminal EOF token;
+argument ranges never do. Retokenization replaces a stream only on success, so
+a failed update preserves all existing tokens and pointers.
+
 ## Define a custom rule
 
 All extensions use the same registry and callback interface:

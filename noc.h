@@ -29,13 +29,15 @@
 #define NOC_H_INCLUDED
 
 #define NOC_VERSION_MAJOR 0
-#define NOC_VERSION_MINOR 1
+#define NOC_VERSION_MINOR 2
 #define NOC_VERSION_PATCH 0
-#define NOC_VERSION "0.1.0"
+#define NOC_VERSION "0.2.0"
 
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdio.h>
+
+#define NOC_TOKEN_INDEX_NONE ((size_t)-1)
 
 #ifndef NOCDEF
 #define NOCDEF extern
@@ -101,6 +103,35 @@ typedef struct {
     size_t count;
     size_t capacity;
 } Noc_Buffer;
+
+typedef struct {
+    Noc_Token *items;
+    size_t count;
+    size_t capacity;
+    char *source;
+    size_t source_count;
+    char *path;
+} Noc_Token_Stream;
+
+/* Token ranges are half-open: [begin, end). A general range may include the
+   terminal EOF token. Parsers that accept ranges exclude EOF from results. */
+typedef struct {
+    size_t begin;
+    size_t end;
+} Noc_Token_Range;
+
+typedef struct {
+    const Noc_Token_Stream *stream;
+    size_t begin;
+    size_t index;
+    size_t end;
+} Noc_Token_Cursor;
+
+typedef struct {
+    Noc_Token_Range *items;
+    size_t count;
+    size_t capacity;
+} Noc_Argument_List;
 
 typedef enum {
     NOC_DIAGNOSTIC_NOTE = 0,
@@ -200,6 +231,66 @@ NOCDEF const Noc_Rule *noc_find_rule(const Noc_Context *context, Noc_Slice name)
 NOCDEF void noc_describe(const Noc_Context *context, FILE *stream);
 NOCDEF const char *noc_rule_scope_name(Noc_Rule_Scope scope);
 
+/* Owning token streams. Initialize the output to {0}. Tokens and their
+   text/location pointers remain valid until successful retokenization or
+   noc_token_stream_free(). Failed retokenization preserves the old stream. */
+NOCDEF bool noc_tokenize(Noc_Context *context,
+                         const char *path,
+                         const char *source,
+                         size_t source_count,
+                         Noc_Token_Stream *stream);
+NOCDEF void noc_token_stream_free(Noc_Token_Stream *stream);
+NOCDEF bool noc_token_stream_is_valid(const Noc_Token_Stream *stream);
+NOCDEF Noc_Slice noc_token_stream_source(const Noc_Token_Stream *stream);
+
+/* Source ranges and standalone cursors */
+NOCDEF bool noc_token_range_is_valid(const Noc_Token_Stream *stream,
+                                     Noc_Token_Range range);
+/* Invalid input returns {NOC_TOKEN_INDEX_NONE, NOC_TOKEN_INDEX_NONE}. */
+NOCDEF Noc_Token_Range noc_token_range_trim_trivia(const Noc_Token_Stream *stream,
+                                                    Noc_Token_Range range);
+NOCDEF Noc_Slice noc_token_range_source(const Noc_Token_Stream *stream,
+                                        Noc_Token_Range range);
+NOCDEF Noc_Location noc_token_range_location(const Noc_Token_Stream *stream,
+                                             Noc_Token_Range range);
+
+NOCDEF void noc_token_cursor_init(Noc_Token_Cursor *cursor,
+                                  const Noc_Token_Stream *stream);
+NOCDEF bool noc_token_cursor_init_range(Noc_Token_Cursor *cursor,
+                                        const Noc_Token_Stream *stream,
+                                        Noc_Token_Range range);
+NOCDEF size_t noc_token_cursor_mark(const Noc_Token_Cursor *cursor);
+NOCDEF bool noc_token_cursor_rewind(Noc_Token_Cursor *cursor, size_t mark);
+NOCDEF bool noc_token_cursor_at_end(const Noc_Token_Cursor *cursor);
+NOCDEF const Noc_Token *noc_token_cursor_peek_raw(const Noc_Token_Cursor *cursor,
+                                                  size_t lookahead);
+NOCDEF const Noc_Token *noc_token_cursor_peek(const Noc_Token_Cursor *cursor,
+                                              size_t lookahead);
+NOCDEF bool noc_token_cursor_take_raw(Noc_Token_Cursor *cursor, Noc_Token *token);
+NOCDEF bool noc_token_cursor_take(Noc_Token_Cursor *cursor, Noc_Token *token);
+NOCDEF void noc_token_cursor_skip_trivia(Noc_Token_Cursor *cursor);
+NOCDEF bool noc_token_cursor_match_kind(Noc_Token_Cursor *cursor,
+                                        Noc_Token_Kind kind,
+                                        Noc_Token *token);
+NOCDEF bool noc_token_cursor_match_punct(Noc_Token_Cursor *cursor,
+                                         const char *punctuator,
+                                         Noc_Token *token);
+NOCDEF bool noc_token_cursor_match_identifier(Noc_Token_Cursor *cursor,
+                                              const char *identifier,
+                                              Noc_Token *token);
+NOCDEF bool noc_token_cursor_take_balanced(Noc_Token_Cursor *cursor,
+                                           const char *open,
+                                           const char *close,
+                                           Noc_Token_Range *whole,
+                                           Noc_Token_Range *inside);
+
+/* Initialize arguments to {0}. Success transactionally replaces its contents;
+   failure preserves them. */
+NOCDEF bool noc_parse_arguments(const Noc_Token_Stream *stream,
+                                Noc_Token_Range range,
+                                Noc_Argument_List *arguments);
+NOCDEF void noc_argument_list_free(Noc_Argument_List *arguments);
+
 /* Rewriter API available to expansion callbacks. The callback starts just after
    the @name trigger. Raw operations include trivia; significant operations skip
    whitespace and comments. */
@@ -281,11 +372,7 @@ NOCDEF bool noc_register_embed_rule(Noc_Context *context, const char *name);
 #include <sys/stat.h>
 #endif
 
-typedef struct {
-    Noc_Token *items;
-    size_t count;
-    size_t capacity;
-} Noc__Tokens;
+typedef Noc_Token_Stream Noc__Tokens;
 
 struct Noc_Rewriter {
     Noc_Context *context;
@@ -1159,12 +1246,13 @@ NOCDEF bool noc_rw_expect_punct(Noc_Rewriter *rewriter, const char *punctuator)
     if (token) {
         noc_rw_error_at(rewriter,
                         token->location,
-                        "expected '%s' after @%s, got %s '%.*s'",
+                        "expected '%s' after @%s, got %s '%.*s%s'",
                         punctuator,
                         rewriter->rule->name,
                         noc_token_kind_name(token->kind),
-                        (int)token->text.count,
-                        token->text.data);
+                        (int)(token->text.count < 80 ? token->text.count : 80),
+                        token->text.data,
+                        token->text.count > 80 ? "..." : "");
     } else {
         noc_rw_error(rewriter, "expected '%s' after @%s", punctuator, rewriter->rule->name);
     }
@@ -1187,12 +1275,13 @@ NOCDEF bool noc_rw_expect_identifier(Noc_Rewriter *rewriter,
     if (next) {
         noc_rw_error_at(rewriter,
                         next->location,
-                        "expected %sidentifier after @%s, got %s '%.*s'",
+                        "expected %sidentifier after @%s, got %s '%.*s%s'",
                         identifier ? identifier : "",
                         rewriter->rule->name,
                         noc_token_kind_name(next->kind),
-                        (int)next->text.count,
-                        next->text.data);
+                        (int)(next->text.count < 80 ? next->text.count : 80),
+                        next->text.data,
+                        next->text.count > 80 ? "..." : "");
     } else {
         noc_rw_error(rewriter, "expected identifier after @%s", rewriter->rule->name);
     }
@@ -1407,8 +1496,18 @@ static bool noc__tokens_append(Noc__Tokens *tokens, Noc_Token token)
 {
     Noc_Token *items;
     size_t capacity;
+    size_t maximum = SIZE_MAX / sizeof(*items);
+    if (tokens->count > tokens->capacity) return false;
     if (tokens->count == tokens->capacity) {
-        capacity = tokens->capacity ? tokens->capacity * 2 : 256;
+        if (tokens->capacity >= maximum) return false;
+        if (tokens->capacity == 0) {
+            capacity = maximum < 256 ? maximum : 256;
+        } else if (tokens->capacity > maximum / 2) {
+            capacity = maximum;
+        } else {
+            capacity = tokens->capacity * 2;
+        }
+        if (capacity <= tokens->capacity) return false;
         items = (Noc_Token *)realloc(tokens->items, capacity * sizeof(*items));
         if (!items) return false;
         tokens->items = items;
@@ -1478,6 +1577,456 @@ static bool noc__reject_trigraphs(Noc_Context *context,
     return true;
 }
 
+NOCDEF void noc_token_stream_free(Noc_Token_Stream *stream)
+{
+    free(stream->items);
+    free(stream->source);
+    free(stream->path);
+    memset(stream, 0, sizeof(*stream));
+}
+
+NOCDEF bool noc_token_stream_is_valid(const Noc_Token_Stream *stream)
+{
+    return stream && stream->items && stream->source && stream->path &&
+           stream->count > 0 && stream->count <= stream->capacity &&
+           stream->items[stream->count - 1].kind == NOC_TOKEN_EOF;
+}
+
+NOCDEF bool noc_tokenize(Noc_Context *context,
+                         const char *path,
+                         const char *source,
+                         size_t source_count,
+                         Noc_Token_Stream *stream)
+{
+    const char *display_path = path ? path : "<memory>";
+    size_t path_count;
+    Noc_Location no_location = {0};
+    Noc_Token_Stream parsed = {0};
+    Noc_Lexer lexer;
+    Noc_Token token;
+    bool ok = true;
+
+    if (source_count == SIZE_MAX) {
+        noc__report(context,
+                    NOC_DIAGNOSTIC_ERROR,
+                    no_location,
+                    "source is too large to tokenize");
+        return false;
+    }
+    if (!noc__reject_trigraphs(context, display_path, source, source_count)) return false;
+    path_count = strlen(display_path);
+    parsed.source = (char *)malloc(source_count + 1);
+    parsed.path = (char *)malloc(path_count + 1);
+    if (!parsed.source || !parsed.path) {
+        noc__report(context,
+                    NOC_DIAGNOSTIC_ERROR,
+                    no_location,
+                    "out of memory while copying source for '%s'",
+                    display_path);
+        noc_token_stream_free(&parsed);
+        return false;
+    }
+    if (source_count > 0) memcpy(parsed.source, source, source_count);
+    parsed.source[source_count] = '\0';
+    parsed.source_count = source_count;
+    memcpy(parsed.path, display_path, path_count + 1);
+
+    noc_lexer_init(&lexer, parsed.path, parsed.source, parsed.source_count);
+    do {
+        token = noc_lexer_next(&lexer);
+        if (!noc__tokens_append(&parsed, token)) {
+            noc__report(context,
+                        NOC_DIAGNOSTIC_ERROR,
+                        no_location,
+                        "out of memory while tokenizing '%s'",
+                        display_path);
+            ok = false;
+            break;
+        }
+        if (token.kind == NOC_TOKEN_INVALID) {
+            noc__report(context,
+                        NOC_DIAGNOSTIC_ERROR,
+                        token.location,
+                        "unterminated or invalid token '%.*s%s'",
+                        (int)(token.text.count < 80 ? token.text.count : 80),
+                        token.text.data,
+                        token.text.count > 80 ? "..." : "");
+            ok = false;
+        }
+    } while (token.kind != NOC_TOKEN_EOF);
+    if (!ok) {
+        noc_token_stream_free(&parsed);
+        return false;
+    }
+    noc_token_stream_free(stream);
+    *stream = parsed;
+    return true;
+}
+
+NOCDEF Noc_Slice noc_token_stream_source(const Noc_Token_Stream *stream)
+{
+    Noc_Slice source = {0};
+    if (!noc_token_stream_is_valid(stream)) return source;
+    source.data = stream->source;
+    source.count = stream->source_count;
+    return source;
+}
+
+NOCDEF bool noc_token_range_is_valid(const Noc_Token_Stream *stream,
+                                     Noc_Token_Range range)
+{
+    return noc_token_stream_is_valid(stream) &&
+           range.begin <= range.end && range.end <= stream->count;
+}
+
+NOCDEF Noc_Token_Range noc_token_range_trim_trivia(const Noc_Token_Stream *stream,
+                                                    Noc_Token_Range range)
+{
+    Noc_Token_Range invalid = {NOC_TOKEN_INDEX_NONE, NOC_TOKEN_INDEX_NONE};
+    if (!noc_token_range_is_valid(stream, range)) return invalid;
+    while (range.begin < range.end && noc_token_is_trivia(stream->items[range.begin])) {
+        range.begin += 1;
+    }
+    while (range.end > range.begin && noc_token_is_trivia(stream->items[range.end - 1])) {
+        range.end -= 1;
+    }
+    return range;
+}
+
+NOCDEF Noc_Slice noc_token_range_source(const Noc_Token_Stream *stream,
+                                        Noc_Token_Range range)
+{
+    Noc_Slice result = {0};
+    size_t begin_offset;
+    size_t end_offset;
+    const Noc_Token *last;
+    if (!noc_token_range_is_valid(stream, range)) return result;
+    begin_offset = range.begin < stream->count
+                       ? stream->items[range.begin].location.offset
+                       : stream->source_count;
+    if (range.begin == range.end) {
+        result.data = stream->source + begin_offset;
+        return result;
+    }
+    last = &stream->items[range.end - 1];
+    end_offset = last->location.offset + last->text.count;
+    if (begin_offset > end_offset || end_offset > stream->source_count) return result;
+    result.data = stream->source + begin_offset;
+    result.count = end_offset - begin_offset;
+    return result;
+}
+
+NOCDEF Noc_Location noc_token_range_location(const Noc_Token_Stream *stream,
+                                             Noc_Token_Range range)
+{
+    Noc_Location location = {0};
+    if (!noc_token_range_is_valid(stream, range)) return location;
+    if (range.begin < stream->count) return stream->items[range.begin].location;
+    if (stream->count > 0) return stream->items[stream->count - 1].location;
+    location.path = stream->path;
+    location.offset = stream->source_count;
+    return location;
+}
+
+NOCDEF void noc_token_cursor_init(Noc_Token_Cursor *cursor,
+                                  const Noc_Token_Stream *stream)
+{
+    if (!noc_token_stream_is_valid(stream)) {
+        memset(cursor, 0, sizeof(*cursor));
+        return;
+    }
+    cursor->stream = stream;
+    cursor->begin = 0;
+    cursor->index = 0;
+    cursor->end = stream ? stream->count : 0;
+}
+
+NOCDEF bool noc_token_cursor_init_range(Noc_Token_Cursor *cursor,
+                                        const Noc_Token_Stream *stream,
+                                        Noc_Token_Range range)
+{
+    if (!noc_token_range_is_valid(stream, range)) {
+        memset(cursor, 0, sizeof(*cursor));
+        return false;
+    }
+    cursor->stream = stream;
+    cursor->begin = range.begin;
+    cursor->index = range.begin;
+    cursor->end = range.end;
+    return true;
+}
+
+NOCDEF size_t noc_token_cursor_mark(const Noc_Token_Cursor *cursor)
+{
+    return cursor->index;
+}
+
+NOCDEF bool noc_token_cursor_rewind(Noc_Token_Cursor *cursor, size_t mark)
+{
+    if (!cursor->stream || mark < cursor->begin || mark > cursor->end) return false;
+    cursor->index = mark;
+    return true;
+}
+
+NOCDEF const Noc_Token *noc_token_cursor_peek_raw(const Noc_Token_Cursor *cursor,
+                                                  size_t lookahead)
+{
+    if (!cursor->stream || cursor->index > cursor->end ||
+        lookahead >= cursor->end - cursor->index) {
+        return NULL;
+    }
+    return &cursor->stream->items[cursor->index + lookahead];
+}
+
+NOCDEF const Noc_Token *noc_token_cursor_peek(const Noc_Token_Cursor *cursor,
+                                              size_t lookahead)
+{
+    size_t index;
+    size_t found = 0;
+    if (!cursor->stream) return NULL;
+    index = cursor->index;
+    while (index < cursor->end) {
+        if (!noc_token_is_trivia(cursor->stream->items[index])) {
+            if (found == lookahead) return &cursor->stream->items[index];
+            found += 1;
+        }
+        index += 1;
+    }
+    return NULL;
+}
+
+NOCDEF bool noc_token_cursor_at_end(const Noc_Token_Cursor *cursor)
+{
+    const Noc_Token *token = noc_token_cursor_peek(cursor, 0);
+    return !token || token->kind == NOC_TOKEN_EOF;
+}
+
+NOCDEF bool noc_token_cursor_take_raw(Noc_Token_Cursor *cursor, Noc_Token *token)
+{
+    const Noc_Token *next = noc_token_cursor_peek_raw(cursor, 0);
+    if (!next) return false;
+    if (token) *token = *next;
+    cursor->index += 1;
+    return true;
+}
+
+NOCDEF void noc_token_cursor_skip_trivia(Noc_Token_Cursor *cursor)
+{
+    if (!cursor->stream) return;
+    while (cursor->index < cursor->end &&
+           noc_token_is_trivia(cursor->stream->items[cursor->index])) {
+        cursor->index += 1;
+    }
+}
+
+NOCDEF bool noc_token_cursor_take(Noc_Token_Cursor *cursor, Noc_Token *token)
+{
+    noc_token_cursor_skip_trivia(cursor);
+    return noc_token_cursor_take_raw(cursor, token);
+}
+
+NOCDEF bool noc_token_cursor_match_kind(Noc_Token_Cursor *cursor,
+                                        Noc_Token_Kind kind,
+                                        Noc_Token *token)
+{
+    Noc_Token_Cursor candidate = *cursor;
+    Noc_Token matched;
+    if (!noc_token_cursor_take(&candidate, &matched) || matched.kind != kind) return false;
+    *cursor = candidate;
+    if (token) *token = matched;
+    return true;
+}
+
+NOCDEF bool noc_token_cursor_match_punct(Noc_Token_Cursor *cursor,
+                                         const char *punctuator,
+                                         Noc_Token *token)
+{
+    Noc_Token_Cursor candidate = *cursor;
+    Noc_Token matched;
+    if (!noc_token_cursor_take(&candidate, &matched) ||
+        !noc_token_is_punct(matched, punctuator)) {
+        return false;
+    }
+    *cursor = candidate;
+    if (token) *token = matched;
+    return true;
+}
+
+NOCDEF bool noc_token_cursor_match_identifier(Noc_Token_Cursor *cursor,
+                                              const char *identifier,
+                                              Noc_Token *token)
+{
+    Noc_Token_Cursor candidate = *cursor;
+    Noc_Token matched;
+    if (!noc_token_cursor_take(&candidate, &matched) ||
+        matched.kind != NOC_TOKEN_IDENTIFIER ||
+        (identifier && !noc_slice_equal_cstr(matched.text, identifier))) {
+        return false;
+    }
+    *cursor = candidate;
+    if (token) *token = matched;
+    return true;
+}
+
+NOCDEF bool noc_token_cursor_take_balanced(Noc_Token_Cursor *cursor,
+                                           const char *open,
+                                           const char *close,
+                                           Noc_Token_Range *whole,
+                                           Noc_Token_Range *inside)
+{
+    Noc_Token_Cursor candidate = *cursor;
+    Noc_Buffer delimiter_stack = {0};
+    size_t open_index;
+    Noc_Token token;
+    char initial_close;
+    bool ok = false;
+    if (strcmp(open, "(") == 0 && strcmp(close, ")") == 0) initial_close = ')';
+    else if (strcmp(open, "[") == 0 && strcmp(close, "]") == 0) initial_close = ']';
+    else if (strcmp(open, "{") == 0 && strcmp(close, "}") == 0) initial_close = '}';
+    else return false;
+    noc_token_cursor_skip_trivia(&candidate);
+    open_index = candidate.index;
+    if (!noc_token_cursor_match_punct(&candidate, open, NULL)) return false;
+    if (!noc_buffer_append(&delimiter_stack, &initial_close, 1)) return false;
+    while (noc_token_cursor_take_raw(&candidate, &token)) {
+        size_t token_index = candidate.index - 1;
+        char expected = 0;
+        bool closing = false;
+        if (noc_token_is_punct(token, "(")) expected = ')';
+        else if (noc_token_is_punct(token, "[")) expected = ']';
+        else if (noc_token_is_punct(token, "{")) expected = '}';
+        else if (noc_token_is_punct(token, ")") || noc_token_is_punct(token, "]") ||
+                 noc_token_is_punct(token, "}")) {
+            closing = true;
+        }
+        if (expected != 0) {
+            if (!noc_buffer_append(&delimiter_stack, &expected, 1)) goto done;
+        } else if (closing) {
+            if (delimiter_stack.count == 0 ||
+                delimiter_stack.items[delimiter_stack.count - 1] != token.text.data[0]) {
+                goto done;
+            }
+            delimiter_stack.count -= 1;
+            if (delimiter_stack.count == 0) {
+                if (whole) {
+                    whole->begin = open_index;
+                    whole->end = candidate.index;
+                }
+                if (inside) {
+                    inside->begin = open_index + 1;
+                    inside->end = token_index;
+                }
+                *cursor = candidate;
+                ok = true;
+                goto done;
+            }
+        }
+    }
+
+done:
+    noc_buffer_free(&delimiter_stack);
+    return ok;
+}
+
+static bool noc__argument_list_append(Noc_Argument_List *arguments, Noc_Token_Range range)
+{
+    Noc_Token_Range *items;
+    size_t capacity;
+    size_t maximum = SIZE_MAX / sizeof(*items);
+    if (arguments->count > arguments->capacity) return false;
+    if (arguments->count == arguments->capacity) {
+        if (arguments->capacity >= maximum) return false;
+        if (arguments->capacity == 0) {
+            capacity = maximum < 4 ? maximum : 4;
+        } else if (arguments->capacity > maximum / 2) {
+            capacity = maximum;
+        } else {
+            capacity = arguments->capacity * 2;
+        }
+        if (capacity <= arguments->capacity) return false;
+        items = (Noc_Token_Range *)realloc(arguments->items, capacity * sizeof(*items));
+        if (!items) return false;
+        arguments->items = items;
+        arguments->capacity = capacity;
+    }
+    arguments->items[arguments->count++] = range;
+    return true;
+}
+
+NOCDEF void noc_argument_list_free(Noc_Argument_List *arguments)
+{
+    free(arguments->items);
+    memset(arguments, 0, sizeof(*arguments));
+}
+
+NOCDEF bool noc_parse_arguments(const Noc_Token_Stream *stream,
+                                Noc_Token_Range range,
+                                Noc_Argument_List *arguments)
+{
+    Noc_Argument_List parsed = {0};
+    Noc_Buffer delimiter_stack = {0};
+    Noc_Token_Range trimmed;
+    size_t argument_begin;
+    size_t i;
+    bool saw_comma = false;
+    bool ok = false;
+    if (!noc_token_range_is_valid(stream, range)) return false;
+    if (range.end > range.begin && stream->items[range.end - 1].kind == NOC_TOKEN_EOF) {
+        range.end -= 1;
+    }
+    trimmed = noc_token_range_trim_trivia(stream, range);
+    if (trimmed.begin == trimmed.end) {
+        noc_argument_list_free(arguments);
+        return true;
+    }
+    argument_begin = range.begin;
+    for (i = range.begin; i < range.end; ++i) {
+        Noc_Token token = stream->items[i];
+        char expected = 0;
+        if (token.kind != NOC_TOKEN_PUNCTUATOR) continue;
+        if (noc_token_is_punct(token, "(")) expected = ')';
+        else if (noc_token_is_punct(token, "[")) expected = ']';
+        else if (noc_token_is_punct(token, "{")) expected = '}';
+        if (expected != 0) {
+            if (!noc_buffer_append(&delimiter_stack, &expected, 1)) goto done;
+            continue;
+        }
+        if (noc_token_is_punct(token, ")") || noc_token_is_punct(token, "]") ||
+            noc_token_is_punct(token, "}")) {
+            if (delimiter_stack.count == 0 ||
+                delimiter_stack.items[delimiter_stack.count - 1] != token.text.data[0]) {
+                goto done;
+            }
+            delimiter_stack.count -= 1;
+            continue;
+        }
+        if (noc_token_is_punct(token, ",") && delimiter_stack.count == 0) {
+            Noc_Token_Range argument = {argument_begin, i};
+            argument = noc_token_range_trim_trivia(stream, argument);
+            if (!noc__argument_list_append(&parsed, argument)) goto done;
+            argument_begin = i + 1;
+            saw_comma = true;
+        }
+    }
+    if (delimiter_stack.count != 0) goto done;
+    {
+        Noc_Token_Range argument = {argument_begin, range.end};
+        argument = noc_token_range_trim_trivia(stream, argument);
+        if (argument.begin != argument.end || saw_comma) {
+            if (!noc__argument_list_append(&parsed, argument)) goto done;
+        }
+    }
+    noc_argument_list_free(arguments);
+    *arguments = parsed;
+    memset(&parsed, 0, sizeof(parsed));
+    ok = true;
+
+done:
+    noc_buffer_free(&delimiter_stack);
+    noc_argument_list_free(&parsed);
+    return ok;
+}
+
 NOCDEF bool noc_transform_source(Noc_Context *context,
                                  const char *path,
                                  const char *source,
@@ -1514,9 +2063,10 @@ NOCDEF bool noc_transform_source(Noc_Context *context,
             noc__report(context,
                         NOC_DIAGNOSTIC_ERROR,
                         token.location,
-                        "unterminated or invalid token '%.*s'",
-                        (int)token.text.count,
-                        token.text.data);
+                        "unterminated or invalid token '%.*s%s'",
+                        (int)(token.text.count < 80 ? token.text.count : 80),
+                        token.text.data,
+                        token.text.count > 80 ? "..." : "");
             ok = false;
         }
     } while (token.kind != NOC_TOKEN_EOF);
@@ -1576,9 +2126,12 @@ NOCDEF bool noc_transform_source(Noc_Context *context,
                     noc__report(context,
                                 NOC_DIAGNOSTIC_ERROR,
                                 token.location,
-                                "unknown dialect rule '@%.*s'",
-                                (int)tokens.items[name_index].text.count,
-                                tokens.items[name_index].text.data);
+                                "unknown dialect rule '@%.*s%s'",
+                                (int)(tokens.items[name_index].text.count < 80
+                                          ? tokens.items[name_index].text.count
+                                          : 80),
+                                tokens.items[name_index].text.data,
+                                tokens.items[name_index].text.count > 80 ? "..." : "");
                     ok = false;
                     goto done;
                 }
