@@ -2,6 +2,7 @@
 #include "../noc.h"
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 static int failures = 0;
@@ -20,6 +21,7 @@ typedef struct {
     size_t last_message_count;
     Noc_Location last_location;
     char last_path[64];
+    char last_message[160];
 } Diagnostic_State;
 
 static void count_diagnostics(void *user_data, const Noc_Diagnostic *diagnostic)
@@ -29,6 +31,10 @@ static void count_diagnostics(void *user_data, const Noc_Diagnostic *diagnostic)
         state->errors += 1;
         state->last_message_count = strlen(diagnostic->message);
         state->last_location = diagnostic->location;
+        (void)snprintf(state->last_message,
+                       sizeof(state->last_message),
+                       "%s",
+                       diagnostic->message);
         if (diagnostic->location.path) {
             (void)snprintf(state->last_path,
                            sizeof(state->last_path),
@@ -270,6 +276,256 @@ static void test_tokenize_error(void)
     CHECK(strcmp(diagnostics.last_path, "invalid.c") == 0);
     CHECK(stream.items == NULL);
     CHECK(stream.source == NULL);
+    noc_context_deinit(&context);
+}
+
+static size_t find_descendant_kind(const Noc_Syntax_Tree *tree,
+                                   size_t root,
+                                   Noc_Syntax_Kind kind)
+{
+    size_t node = noc_syntax_next_preorder(tree, root);
+    while (node != NOC_SYNTAX_NONE) {
+        const Noc_Syntax_Node *syntax = noc_syntax_node(tree, node);
+        if (syntax && syntax->kind == kind) return node;
+        node = noc_syntax_next_preorder(tree, node);
+    }
+    return NOC_SYNTAX_NONE;
+}
+
+static void test_lossless_syntax_tree(void)
+{
+    static const char source[] =
+        "int main(void) {\n"
+        "    int values[2] = {1, 2};\n"
+        "    return values[(1)];\n"
+        "}\n";
+    Noc_Context context;
+    Noc_Token_Stream stream = {0};
+    Noc_Syntax_Tree tree = {0};
+    size_t root;
+    size_t first;
+    size_t second;
+    size_t parameters;
+    size_t body;
+    size_t bracket;
+    size_t node;
+    size_t visited = 0;
+    Noc_Token_Range inner;
+    const Noc_Token *token;
+
+    noc_context_init(&context);
+    CHECK(noc_tokenize(&context, "tree.c", source, sizeof(source) - 1, &stream));
+    CHECK(noc_syntax_tree_build(&context, &stream, &tree));
+    CHECK(noc_syntax_tree_is_valid(&tree));
+    root = noc_syntax_root(&tree);
+    CHECK(root == 0);
+    CHECK(strcmp(noc_syntax_kind_name(NOC_SYNTAX_ROOT), "root") == 0);
+    CHECK(strcmp(noc_syntax_kind_name(NOC_SYNTAX_BRACE_GROUP), "brace group") == 0);
+    CHECK(slice_equals(noc_syntax_source(&tree, root), source));
+    CHECK(noc_syntax_parent(&tree, root) == NOC_SYNTAX_NONE);
+    CHECK(noc_syntax_child_count(&tree, root) > 4);
+
+    first = noc_syntax_first_child(&tree, root);
+    CHECK(first != NOC_SYNTAX_NONE);
+    token = noc_syntax_token(&tree, first);
+    CHECK(token != NULL && noc_token_is_identifier(*token, "int"));
+    second = noc_syntax_next_sibling(&tree, first);
+    CHECK(second != NOC_SYNTAX_NONE);
+    CHECK(noc_syntax_parent(&tree, second) == root);
+
+    parameters = noc_syntax_first_child_of_kind(&tree, root, NOC_SYNTAX_PAREN_GROUP);
+    body = noc_syntax_first_child_of_kind(&tree, root, NOC_SYNTAX_BRACE_GROUP);
+    CHECK(parameters != NOC_SYNTAX_NONE);
+    CHECK(body != NOC_SYNTAX_NONE);
+    CHECK(slice_equals(noc_syntax_source(&tree, parameters), "(void)"));
+    inner = noc_syntax_inner_range(&tree, parameters);
+    CHECK(slice_equals(noc_token_range_source(&stream, inner), "void"));
+    CHECK(noc_syntax_location(&tree, body).line == 1);
+    CHECK(noc_syntax_token(&tree, body) == NULL);
+    bracket = find_descendant_kind(&tree, body, NOC_SYNTAX_BRACKET_GROUP);
+    CHECK(bracket != NOC_SYNTAX_NONE);
+    CHECK(slice_equals(noc_syntax_source(&tree, bracket), "[2]"));
+
+    node = root;
+    while (node != NOC_SYNTAX_NONE && visited <= tree.count) {
+        visited += 1;
+        node = noc_syntax_next_preorder(&tree, node);
+    }
+    CHECK(visited == tree.count);
+    CHECK(node == NOC_SYNTAX_NONE);
+    CHECK(noc_syntax_node(&tree, tree.count) == NULL);
+    CHECK(noc_syntax_first_child(&tree, tree.count) == NOC_SYNTAX_NONE);
+    CHECK(noc_syntax_inner_range(&tree, first).begin == NOC_TOKEN_INDEX_NONE);
+
+    noc_syntax_tree_free(&tree);
+    CHECK(!noc_syntax_tree_is_valid(&tree));
+    noc_token_stream_free(&stream);
+    noc_context_deinit(&context);
+}
+
+static void validate_syntax_tree_ownership(const Noc_Syntax_Tree *tree)
+{
+    size_t *ownership = (size_t *)calloc(tree->stream->count, sizeof(*ownership));
+    size_t i;
+    size_t node;
+    size_t visited = 0;
+    CHECK(ownership != NULL);
+    if (!ownership) return;
+
+    for (i = 0; i < tree->count; ++i) {
+        const Noc_Syntax_Node *syntax = &tree->items[i];
+        size_t child;
+        size_t last = NOC_SYNTAX_NONE;
+        size_t children = 0;
+        CHECK(noc_token_range_is_valid(tree->stream, syntax->range));
+        CHECK(syntax->parent == NOC_SYNTAX_NONE || syntax->parent < tree->count);
+        CHECK(syntax->first_child == NOC_SYNTAX_NONE || syntax->first_child < tree->count);
+        CHECK(syntax->last_child == NOC_SYNTAX_NONE || syntax->last_child < tree->count);
+        CHECK(syntax->next_sibling == NOC_SYNTAX_NONE || syntax->next_sibling < tree->count);
+        if (syntax->kind == NOC_SYNTAX_TOKEN) {
+            CHECK(syntax->range.end == syntax->range.begin + 1);
+            ownership[syntax->range.begin] += 1;
+        } else if (syntax->kind != NOC_SYNTAX_ROOT) {
+            CHECK(syntax->range.end >= syntax->range.begin + 2);
+            ownership[syntax->range.begin] += 1;
+            ownership[syntax->range.end - 1] += 1;
+        }
+        child = syntax->first_child;
+        while (child != NOC_SYNTAX_NONE && children <= tree->count) {
+            CHECK(tree->items[child].parent == i);
+            last = child;
+            child = tree->items[child].next_sibling;
+            children += 1;
+        }
+        CHECK(child == NOC_SYNTAX_NONE);
+        CHECK(last == syntax->last_child);
+        CHECK((syntax->first_child == NOC_SYNTAX_NONE) ==
+              (syntax->last_child == NOC_SYNTAX_NONE));
+    }
+    for (i = 0; i + 1 < tree->stream->count; ++i) CHECK(ownership[i] == 1);
+    CHECK(ownership[tree->stream->count - 1] == 0);
+
+    node = noc_syntax_root(tree);
+    while (node != NOC_SYNTAX_NONE && visited <= tree->count) {
+        visited += 1;
+        node = noc_syntax_next_preorder(tree, node);
+    }
+    CHECK(node == NOC_SYNTAX_NONE);
+    CHECK(visited == tree->count);
+    free(ownership);
+}
+
+static void test_large_syntax_tree(void)
+{
+    Noc_Context context;
+    Noc_Buffer source = {0};
+    Noc_Token_Stream stream = {0};
+    Noc_Syntax_Tree tree = {0};
+    size_t i;
+    for (i = 0; i < 20; ++i) CHECK(noc_buffer_append_cstr(&source, "("));
+    for (i = 0; i < 300; ++i) CHECK(noc_buffer_append_cstr(&source, "value "));
+    for (i = 0; i < 20; ++i) CHECK(noc_buffer_append_cstr(&source, ")"));
+    CHECK(noc_buffer_append_cstr(&source, ";"));
+    CHECK(noc_buffer_terminate(&source));
+
+    noc_context_init(&context);
+    CHECK(noc_tokenize(&context, "large.c", source.items, source.count, &stream));
+    CHECK(noc_syntax_tree_build(&context, &stream, &tree));
+    CHECK(tree.count > 256);
+    CHECK(slice_equals(noc_syntax_source(&tree, noc_syntax_root(&tree)), source.items));
+    validate_syntax_tree_ownership(&tree);
+
+    noc_syntax_tree_free(&tree);
+    noc_token_stream_free(&stream);
+    noc_context_deinit(&context);
+    noc_buffer_free(&source);
+}
+
+static void test_syntax_tree_errors_and_lifetime(void)
+{
+    static const char good_source[] = "call({value[0]});\n";
+    static const char mismatched[] = "([)]";
+    static const char unclosed[] = "function({value";
+    static const char unexpected[] = "value];";
+    Noc_Context context;
+    Noc_Token_Stream good = {0};
+    Noc_Token_Stream bad = {0};
+    Noc_Syntax_Tree tree = {0};
+    Noc_Syntax_Node *preserved_nodes;
+    Diagnostic_State diagnostics = {0};
+    char *preserved_source;
+    size_t preserved_generation;
+
+    noc_context_init(&context);
+    noc_context_set_diagnostic(&context, count_diagnostics, &diagnostics);
+    CHECK(noc_tokenize(&context,
+                       "good.c",
+                       good_source,
+                       sizeof(good_source) - 1,
+                       &good));
+    CHECK(noc_syntax_tree_build(&context, &good, &tree));
+    preserved_nodes = tree.items;
+    preserved_source = good.source;
+    preserved_generation = good.generation;
+
+    CHECK(!noc_tokenize(&context, "bad-comment.c", "/*", 2, &good));
+    CHECK(good.source == preserved_source);
+    CHECK(good.generation == preserved_generation);
+    CHECK(noc_syntax_tree_is_valid(&tree));
+    CHECK(slice_equals(noc_syntax_source(&tree, noc_syntax_root(&tree)), good_source));
+    CHECK(diagnostics.errors == 1);
+    CHECK(strstr(diagnostics.last_message, "unterminated or invalid token") != NULL);
+    memset(&diagnostics, 0, sizeof(diagnostics));
+
+    CHECK(noc_tokenize(&context, "mismatch.c", mismatched, sizeof(mismatched) - 1, &bad));
+    CHECK(!noc_syntax_tree_build(&context, &bad, &tree));
+    CHECK(tree.items == preserved_nodes);
+    CHECK(strstr(diagnostics.last_message, "expected closing delimiter") != NULL);
+    CHECK(tree.stream == &good);
+    CHECK(noc_syntax_tree_is_valid(&tree));
+    CHECK(slice_equals(noc_syntax_source(&tree, noc_syntax_root(&tree)), good_source));
+    noc_token_stream_free(&bad);
+
+    CHECK(noc_tokenize(&context, "unclosed.c", unclosed, sizeof(unclosed) - 1, &bad));
+    CHECK(!noc_syntax_tree_build(&context, &bad, &tree));
+    CHECK(tree.items == preserved_nodes);
+    CHECK(strstr(diagnostics.last_message, "unclosed") != NULL);
+    CHECK(strstr(diagnostics.last_message, "'}'") != NULL);
+    CHECK(diagnostics.last_location.line == 1);
+    CHECK(diagnostics.last_location.column == 10);
+    CHECK(strcmp(diagnostics.last_path, "unclosed.c") == 0);
+    noc_token_stream_free(&bad);
+
+    CHECK(noc_tokenize(&context,
+                       "unexpected.c",
+                       unexpected,
+                       sizeof(unexpected) - 1,
+                       &bad));
+    CHECK(!noc_syntax_tree_build(&context, &bad, &tree));
+    CHECK(tree.items == preserved_nodes);
+    noc_token_stream_free(&bad);
+    CHECK(diagnostics.errors == 3);
+
+    good.generation = SIZE_MAX;
+    tree.stream_generation = SIZE_MAX;
+    CHECK(noc_syntax_tree_is_valid(&tree));
+    CHECK(!noc_tokenize(&context, "exhausted.c", "new", 3, &good));
+    CHECK(good.generation == SIZE_MAX);
+    CHECK(tree.stream_generation == SIZE_MAX);
+    CHECK(noc_syntax_tree_is_valid(&tree));
+    CHECK(diagnostics.errors == 4);
+    good.generation = 1;
+    tree.stream_generation = 1;
+    CHECK(noc_tokenize(&context, "empty.c", "", 0, &good));
+    CHECK(!noc_syntax_tree_is_valid(&tree));
+    CHECK(noc_syntax_root(&tree) == NOC_SYNTAX_NONE);
+    noc_syntax_tree_free(&tree);
+    CHECK(noc_syntax_tree_build(&context, &good, &tree));
+    CHECK(noc_syntax_child_count(&tree, noc_syntax_root(&tree)) == 0);
+    CHECK(noc_syntax_source(&tree, noc_syntax_root(&tree)).count == 0);
+
+    noc_syntax_tree_free(&tree);
+    noc_token_stream_free(&good);
     noc_context_deinit(&context);
 }
 
@@ -566,6 +822,9 @@ int main(void)
     test_token_stream_and_cursor();
     test_argument_and_balance_edges();
     test_tokenize_error();
+    test_lossless_syntax_tree();
+    test_large_syntax_tree();
+    test_syntax_tree_errors_and_lifetime();
     test_custom_rule();
     test_transactional_match();
     test_unknown_rule();

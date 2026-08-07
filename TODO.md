@@ -23,12 +23,12 @@ passes, and the milestone has been committed and pushed.
 
 ## Milestone 2 — lossless syntax tree
 
-- [ ] Add a generic lossless syntax tree for translation units, tokens, and
+- [x] Add a generic lossless syntax tree for translation units, tokens, and
       `()`, `[]`, and `{}` groups.
-- [ ] Preserve trivia and exact source ranges in every node.
-- [ ] Add traversal, parent/child lookup, source extraction, and destruction APIs.
-- [ ] Diagnose unmatched and mismatched delimiters with source locations.
-- [ ] Add tree construction, traversal, malformed-input, and round-trip tests.
+- [x] Preserve trivia and exact source ranges in every node.
+- [x] Add traversal, parent/child lookup, source extraction, and destruction APIs.
+- [x] Diagnose unmatched and mismatched delimiters with source locations.
+- [x] Add tree construction, traversal, malformed-input, and round-trip tests.
 
 ## Milestone 3 — reusable C structure analysis
 

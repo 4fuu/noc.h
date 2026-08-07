@@ -29,15 +29,16 @@
 #define NOC_H_INCLUDED
 
 #define NOC_VERSION_MAJOR 0
-#define NOC_VERSION_MINOR 2
+#define NOC_VERSION_MINOR 3
 #define NOC_VERSION_PATCH 0
-#define NOC_VERSION "0.2.0"
+#define NOC_VERSION "0.3.0"
 
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdio.h>
 
 #define NOC_TOKEN_INDEX_NONE ((size_t)-1)
+#define NOC_SYNTAX_NONE NOC_TOKEN_INDEX_NONE
 
 #ifndef NOCDEF
 #define NOCDEF extern
@@ -111,6 +112,7 @@ typedef struct {
     char *source;
     size_t source_count;
     char *path;
+    size_t generation;
 } Noc_Token_Stream;
 
 /* Token ranges are half-open: [begin, end). A general range may include the
@@ -132,6 +134,31 @@ typedef struct {
     size_t count;
     size_t capacity;
 } Noc_Argument_List;
+
+typedef enum {
+    NOC_SYNTAX_ROOT = 0,
+    NOC_SYNTAX_TOKEN,
+    NOC_SYNTAX_PAREN_GROUP,
+    NOC_SYNTAX_BRACKET_GROUP,
+    NOC_SYNTAX_BRACE_GROUP,
+} Noc_Syntax_Kind;
+
+typedef struct {
+    Noc_Syntax_Kind kind;
+    Noc_Token_Range range;
+    size_t parent;
+    size_t first_child;
+    size_t last_child;
+    size_t next_sibling;
+} Noc_Syntax_Node;
+
+typedef struct {
+    const Noc_Token_Stream *stream;
+    size_t stream_generation;
+    Noc_Syntax_Node *items;
+    size_t count;
+    size_t capacity;
+} Noc_Syntax_Tree;
 
 typedef enum {
     NOC_DIAGNOSTIC_NOTE = 0,
@@ -290,6 +317,32 @@ NOCDEF bool noc_parse_arguments(const Noc_Token_Stream *stream,
                                 Noc_Token_Range range,
                                 Noc_Argument_List *arguments);
 NOCDEF void noc_argument_list_free(Noc_Argument_List *arguments);
+
+/* Lossless delimiter syntax tree. Initialize the tree to {0}. It borrows the
+   token stream, which must not be freed or successfully retokenized while the
+   tree is in use. Failed builds preserve the old tree. */
+NOCDEF bool noc_syntax_tree_build(Noc_Context *context,
+                                  const Noc_Token_Stream *stream,
+                                  Noc_Syntax_Tree *tree);
+NOCDEF void noc_syntax_tree_free(Noc_Syntax_Tree *tree);
+NOCDEF bool noc_syntax_tree_is_valid(const Noc_Syntax_Tree *tree);
+NOCDEF const char *noc_syntax_kind_name(Noc_Syntax_Kind kind);
+NOCDEF size_t noc_syntax_root(const Noc_Syntax_Tree *tree);
+NOCDEF const Noc_Syntax_Node *noc_syntax_node(const Noc_Syntax_Tree *tree,
+                                              size_t node);
+NOCDEF size_t noc_syntax_parent(const Noc_Syntax_Tree *tree, size_t node);
+NOCDEF size_t noc_syntax_first_child(const Noc_Syntax_Tree *tree, size_t node);
+NOCDEF size_t noc_syntax_next_sibling(const Noc_Syntax_Tree *tree, size_t node);
+NOCDEF size_t noc_syntax_child_count(const Noc_Syntax_Tree *tree, size_t node);
+NOCDEF size_t noc_syntax_first_child_of_kind(const Noc_Syntax_Tree *tree,
+                                             size_t node,
+                                             Noc_Syntax_Kind kind);
+NOCDEF size_t noc_syntax_next_preorder(const Noc_Syntax_Tree *tree, size_t node);
+NOCDEF Noc_Token_Range noc_syntax_inner_range(const Noc_Syntax_Tree *tree,
+                                              size_t node);
+NOCDEF Noc_Slice noc_syntax_source(const Noc_Syntax_Tree *tree, size_t node);
+NOCDEF Noc_Location noc_syntax_location(const Noc_Syntax_Tree *tree, size_t node);
+NOCDEF const Noc_Token *noc_syntax_token(const Noc_Syntax_Tree *tree, size_t node);
 
 /* Rewriter API available to expansion callbacks. The callback starts just after
    the @name trigger. Raw operations include trivia; significant operations skip
@@ -1588,6 +1641,7 @@ NOCDEF void noc_token_stream_free(Noc_Token_Stream *stream)
 NOCDEF bool noc_token_stream_is_valid(const Noc_Token_Stream *stream)
 {
     return stream && stream->items && stream->source && stream->path &&
+           stream->generation != 0 &&
            stream->count > 0 && stream->count <= stream->capacity &&
            stream->items[stream->count - 1].kind == NOC_TOKEN_EOF;
 }
@@ -1606,6 +1660,13 @@ NOCDEF bool noc_tokenize(Noc_Context *context,
     Noc_Token token;
     bool ok = true;
 
+    if (stream->generation == SIZE_MAX) {
+        noc__report(context,
+                    NOC_DIAGNOSTIC_ERROR,
+                    no_location,
+                    "token stream generation is exhausted");
+        return false;
+    }
     if (source_count == SIZE_MAX) {
         noc__report(context,
                     NOC_DIAGNOSTIC_ERROR,
@@ -1658,6 +1719,7 @@ NOCDEF bool noc_tokenize(Noc_Context *context,
         noc_token_stream_free(&parsed);
         return false;
     }
+    parsed.generation = stream->generation + 1;
     noc_token_stream_free(stream);
     *stream = parsed;
     return true;
@@ -2025,6 +2087,387 @@ done:
     noc_buffer_free(&delimiter_stack);
     noc_argument_list_free(&parsed);
     return ok;
+}
+
+typedef struct {
+    size_t *items;
+    size_t count;
+    size_t capacity;
+} Noc__Index_Stack;
+
+static bool noc__index_stack_append(Noc__Index_Stack *stack, size_t item)
+{
+    size_t *items;
+    size_t capacity;
+    size_t maximum = SIZE_MAX / sizeof(*items);
+    if (stack->count > stack->capacity) return false;
+    if (stack->count == stack->capacity) {
+        if (stack->capacity >= maximum) return false;
+        if (stack->capacity == 0) {
+            capacity = maximum < 16 ? maximum : 16;
+        } else if (stack->capacity > maximum / 2) {
+            capacity = maximum;
+        } else {
+            capacity = stack->capacity * 2;
+        }
+        if (capacity <= stack->capacity) return false;
+        items = (size_t *)realloc(stack->items, capacity * sizeof(*items));
+        if (!items) return false;
+        stack->items = items;
+        stack->capacity = capacity;
+    }
+    stack->items[stack->count++] = item;
+    return true;
+}
+
+static bool noc__syntax_append_node(Noc_Syntax_Tree *tree,
+                                    Noc_Syntax_Node node,
+                                    size_t *node_index)
+{
+    Noc_Syntax_Node *items;
+    size_t capacity;
+    size_t maximum = SIZE_MAX / sizeof(*items);
+    if (tree->count > tree->capacity) return false;
+    if (tree->count == tree->capacity) {
+        if (tree->capacity >= maximum) return false;
+        if (tree->capacity == 0) {
+            capacity = maximum < 256 ? maximum : 256;
+        } else if (tree->capacity > maximum / 2) {
+            capacity = maximum;
+        } else {
+            capacity = tree->capacity * 2;
+        }
+        if (capacity <= tree->capacity) return false;
+        items = (Noc_Syntax_Node *)realloc(tree->items, capacity * sizeof(*items));
+        if (!items) return false;
+        tree->items = items;
+        tree->capacity = capacity;
+    }
+    if (node_index) *node_index = tree->count;
+    tree->items[tree->count++] = node;
+    return true;
+}
+
+static bool noc__syntax_add_child(Noc_Syntax_Tree *tree,
+                                  size_t parent,
+                                  Noc_Syntax_Node node,
+                                  size_t *node_index)
+{
+    size_t child;
+    size_t previous;
+    node.parent = parent;
+    if (!noc__syntax_append_node(tree, node, &child)) return false;
+    previous = tree->items[parent].last_child;
+    if (previous == NOC_SYNTAX_NONE) {
+        tree->items[parent].first_child = child;
+    } else {
+        tree->items[previous].next_sibling = child;
+    }
+    tree->items[parent].last_child = child;
+    if (node_index) *node_index = child;
+    return true;
+}
+
+static Noc_Syntax_Kind noc__syntax_open_kind(Noc_Token token, char *expected_close)
+{
+    if (noc_token_is_punct(token, "(")) {
+        *expected_close = ')';
+        return NOC_SYNTAX_PAREN_GROUP;
+    }
+    if (noc_token_is_punct(token, "[")) {
+        *expected_close = ']';
+        return NOC_SYNTAX_BRACKET_GROUP;
+    }
+    if (noc_token_is_punct(token, "{")) {
+        *expected_close = '}';
+        return NOC_SYNTAX_BRACE_GROUP;
+    }
+    *expected_close = 0;
+    return NOC_SYNTAX_TOKEN;
+}
+
+static char noc__syntax_expected_close(Noc_Syntax_Kind kind)
+{
+    switch (kind) {
+    case NOC_SYNTAX_PAREN_GROUP: return ')';
+    case NOC_SYNTAX_BRACKET_GROUP: return ']';
+    case NOC_SYNTAX_BRACE_GROUP: return '}';
+    default: return 0;
+    }
+}
+
+static bool noc__syntax_is_close(Noc_Token token)
+{
+    return noc_token_is_punct(token, ")") || noc_token_is_punct(token, "]") ||
+           noc_token_is_punct(token, "}");
+}
+
+NOCDEF void noc_syntax_tree_free(Noc_Syntax_Tree *tree)
+{
+    free(tree->items);
+    memset(tree, 0, sizeof(*tree));
+}
+
+NOCDEF bool noc_syntax_tree_is_valid(const Noc_Syntax_Tree *tree)
+{
+    const Noc_Syntax_Node *root;
+    if (!tree || !noc_token_stream_is_valid(tree->stream) ||
+        tree->stream_generation != tree->stream->generation || !tree->items ||
+        tree->count == 0 || tree->count > tree->capacity) {
+        return false;
+    }
+    root = &tree->items[0];
+    return root->kind == NOC_SYNTAX_ROOT && root->parent == NOC_SYNTAX_NONE &&
+           noc_token_range_is_valid(tree->stream, root->range);
+}
+
+NOCDEF bool noc_syntax_tree_build(Noc_Context *context,
+                                  const Noc_Token_Stream *stream,
+                                  Noc_Syntax_Tree *tree)
+{
+    Noc_Syntax_Tree parsed = {0};
+    Noc__Index_Stack parents = {0};
+    Noc_Location no_location = {0};
+    Noc_Syntax_Node root;
+    size_t eof_index;
+    size_t i;
+    bool ok = false;
+    if (!noc_token_stream_is_valid(stream)) {
+        noc__report(context,
+                    NOC_DIAGNOSTIC_ERROR,
+                    no_location,
+                    "cannot build a syntax tree from an invalid token stream");
+        return false;
+    }
+    parsed.stream = stream;
+    parsed.stream_generation = stream->generation;
+    eof_index = stream->count - 1;
+    memset(&root, 0, sizeof(root));
+    root.kind = NOC_SYNTAX_ROOT;
+    root.range.begin = 0;
+    root.range.end = eof_index;
+    root.parent = NOC_SYNTAX_NONE;
+    root.first_child = NOC_SYNTAX_NONE;
+    root.last_child = NOC_SYNTAX_NONE;
+    root.next_sibling = NOC_SYNTAX_NONE;
+    if (!noc__syntax_append_node(&parsed, root, NULL) ||
+        !noc__index_stack_append(&parents, 0)) {
+        noc__report(context,
+                    NOC_DIAGNOSTIC_ERROR,
+                    no_location,
+                    "out of memory while starting syntax tree");
+        goto done;
+    }
+
+    for (i = 0; i < eof_index; ++i) {
+        Noc_Token token = stream->items[i];
+        Noc_Syntax_Node node;
+        Noc_Syntax_Kind open_kind;
+        size_t parent = parents.items[parents.count - 1];
+        size_t node_index;
+        char expected_close;
+        memset(&node, 0, sizeof(node));
+        open_kind = noc__syntax_open_kind(token, &expected_close);
+        if (expected_close != 0) {
+            node.kind = open_kind;
+            node.range.begin = i;
+            node.range.end = NOC_TOKEN_INDEX_NONE;
+            node.first_child = NOC_SYNTAX_NONE;
+            node.last_child = NOC_SYNTAX_NONE;
+            node.next_sibling = NOC_SYNTAX_NONE;
+            if (!noc__syntax_add_child(&parsed, parent, node, &node_index) ||
+                !noc__index_stack_append(&parents, node_index)) {
+                noc__report(context,
+                            NOC_DIAGNOSTIC_ERROR,
+                            token.location,
+                            "out of memory while building syntax tree");
+                goto done;
+            }
+            continue;
+        }
+        if (noc__syntax_is_close(token)) {
+            Noc_Syntax_Node *group;
+            char expected;
+            if (parents.count == 1) {
+                noc__report(context,
+                            NOC_DIAGNOSTIC_ERROR,
+                            token.location,
+                            "unexpected closing delimiter '%.*s'",
+                            (int)token.text.count,
+                            token.text.data);
+                goto done;
+            }
+            group = &parsed.items[parents.items[parents.count - 1]];
+            expected = noc__syntax_expected_close(group->kind);
+            if (token.text.count != 1 || token.text.data[0] != expected) {
+                noc__report(context,
+                            NOC_DIAGNOSTIC_ERROR,
+                            token.location,
+                            "expected closing delimiter '%c', got '%.*s'",
+                            expected,
+                            (int)token.text.count,
+                            token.text.data);
+                goto done;
+            }
+            group->range.end = i + 1;
+            parents.count -= 1;
+            continue;
+        }
+        node.kind = NOC_SYNTAX_TOKEN;
+        node.range.begin = i;
+        node.range.end = i + 1;
+        node.first_child = NOC_SYNTAX_NONE;
+        node.last_child = NOC_SYNTAX_NONE;
+        node.next_sibling = NOC_SYNTAX_NONE;
+        if (!noc__syntax_add_child(&parsed, parent, node, NULL)) {
+            noc__report(context,
+                        NOC_DIAGNOSTIC_ERROR,
+                        token.location,
+                        "out of memory while building syntax tree");
+            goto done;
+        }
+    }
+    if (parents.count != 1) {
+        const Noc_Syntax_Node *group = &parsed.items[parents.items[parents.count - 1]];
+        Noc_Location location = stream->items[group->range.begin].location;
+        noc__report(context,
+                    NOC_DIAGNOSTIC_ERROR,
+                    location,
+                    "unclosed '%.*s'; expected '%c'",
+                    (int)stream->items[group->range.begin].text.count,
+                    stream->items[group->range.begin].text.data,
+                    noc__syntax_expected_close(group->kind));
+        goto done;
+    }
+    noc_syntax_tree_free(tree);
+    *tree = parsed;
+    memset(&parsed, 0, sizeof(parsed));
+    ok = true;
+
+done:
+    free(parents.items);
+    noc_syntax_tree_free(&parsed);
+    return ok;
+}
+
+NOCDEF const char *noc_syntax_kind_name(Noc_Syntax_Kind kind)
+{
+    switch (kind) {
+    case NOC_SYNTAX_ROOT: return "root";
+    case NOC_SYNTAX_TOKEN: return "token";
+    case NOC_SYNTAX_PAREN_GROUP: return "parenthesis group";
+    case NOC_SYNTAX_BRACKET_GROUP: return "bracket group";
+    case NOC_SYNTAX_BRACE_GROUP: return "brace group";
+    }
+    return "unknown syntax";
+}
+
+NOCDEF size_t noc_syntax_root(const Noc_Syntax_Tree *tree)
+{
+    return noc_syntax_tree_is_valid(tree) ? 0 : NOC_SYNTAX_NONE;
+}
+
+NOCDEF const Noc_Syntax_Node *noc_syntax_node(const Noc_Syntax_Tree *tree,
+                                              size_t node)
+{
+    if (!noc_syntax_tree_is_valid(tree) || node >= tree->count) return NULL;
+    return &tree->items[node];
+}
+
+NOCDEF size_t noc_syntax_parent(const Noc_Syntax_Tree *tree, size_t node)
+{
+    const Noc_Syntax_Node *syntax = noc_syntax_node(tree, node);
+    return syntax ? syntax->parent : NOC_SYNTAX_NONE;
+}
+
+NOCDEF size_t noc_syntax_first_child(const Noc_Syntax_Tree *tree, size_t node)
+{
+    const Noc_Syntax_Node *syntax = noc_syntax_node(tree, node);
+    return syntax ? syntax->first_child : NOC_SYNTAX_NONE;
+}
+
+NOCDEF size_t noc_syntax_next_sibling(const Noc_Syntax_Tree *tree, size_t node)
+{
+    const Noc_Syntax_Node *syntax = noc_syntax_node(tree, node);
+    return syntax ? syntax->next_sibling : NOC_SYNTAX_NONE;
+}
+
+NOCDEF size_t noc_syntax_child_count(const Noc_Syntax_Tree *tree, size_t node)
+{
+    size_t count = 0;
+    size_t child = noc_syntax_first_child(tree, node);
+    while (child != NOC_SYNTAX_NONE) {
+        count += 1;
+        child = noc_syntax_next_sibling(tree, child);
+    }
+    return count;
+}
+
+NOCDEF size_t noc_syntax_first_child_of_kind(const Noc_Syntax_Tree *tree,
+                                             size_t node,
+                                             Noc_Syntax_Kind kind)
+{
+    size_t child = noc_syntax_first_child(tree, node);
+    while (child != NOC_SYNTAX_NONE) {
+        const Noc_Syntax_Node *syntax = noc_syntax_node(tree, child);
+        if (syntax && syntax->kind == kind) return child;
+        child = noc_syntax_next_sibling(tree, child);
+    }
+    return NOC_SYNTAX_NONE;
+}
+
+NOCDEF size_t noc_syntax_next_preorder(const Noc_Syntax_Tree *tree, size_t node)
+{
+    const Noc_Syntax_Node *syntax = noc_syntax_node(tree, node);
+    if (!syntax) return NOC_SYNTAX_NONE;
+    if (syntax->first_child != NOC_SYNTAX_NONE) return syntax->first_child;
+    while (node != NOC_SYNTAX_NONE) {
+        syntax = noc_syntax_node(tree, node);
+        if (!syntax) return NOC_SYNTAX_NONE;
+        if (syntax->next_sibling != NOC_SYNTAX_NONE) return syntax->next_sibling;
+        node = syntax->parent;
+    }
+    return NOC_SYNTAX_NONE;
+}
+
+NOCDEF Noc_Token_Range noc_syntax_inner_range(const Noc_Syntax_Tree *tree,
+                                              size_t node)
+{
+    Noc_Token_Range invalid = {NOC_TOKEN_INDEX_NONE, NOC_TOKEN_INDEX_NONE};
+    const Noc_Syntax_Node *syntax = noc_syntax_node(tree, node);
+    if (!syntax || (syntax->kind != NOC_SYNTAX_PAREN_GROUP &&
+                    syntax->kind != NOC_SYNTAX_BRACKET_GROUP &&
+                    syntax->kind != NOC_SYNTAX_BRACE_GROUP) ||
+        syntax->range.end < syntax->range.begin + 2) {
+        return invalid;
+    }
+    invalid.begin = syntax->range.begin + 1;
+    invalid.end = syntax->range.end - 1;
+    return invalid;
+}
+
+NOCDEF Noc_Slice noc_syntax_source(const Noc_Syntax_Tree *tree, size_t node)
+{
+    Noc_Slice empty = {0};
+    const Noc_Syntax_Node *syntax = noc_syntax_node(tree, node);
+    return syntax ? noc_token_range_source(tree->stream, syntax->range) : empty;
+}
+
+NOCDEF Noc_Location noc_syntax_location(const Noc_Syntax_Tree *tree, size_t node)
+{
+    Noc_Location empty = {0};
+    const Noc_Syntax_Node *syntax = noc_syntax_node(tree, node);
+    return syntax ? noc_token_range_location(tree->stream, syntax->range) : empty;
+}
+
+NOCDEF const Noc_Token *noc_syntax_token(const Noc_Syntax_Tree *tree, size_t node)
+{
+    const Noc_Syntax_Node *syntax = noc_syntax_node(tree, node);
+    if (!syntax || syntax->kind != NOC_SYNTAX_TOKEN ||
+        syntax->range.end != syntax->range.begin + 1) {
+        return NULL;
+    }
+    return &tree->stream->items[syntax->range.begin];
 }
 
 NOCDEF bool noc_transform_source(Noc_Context *context,

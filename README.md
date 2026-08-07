@@ -104,6 +104,38 @@ mismatches such as `([)]`. General ranges may include the terminal EOF token;
 argument ranges never do. Retokenization replaces a stream only on success, so
 a failed update preserves all existing tokens and pointers.
 
+## Lossless syntax trees
+
+`noc_syntax_tree_build` turns a token stream into a lightweight, lossless tree
+without pretending to perform C semantic analysis. The root covers the complete
+source except EOF, token nodes retain whitespace and comments, and group nodes
+cover their opening and closing `()`, `[]`, or `{}` tokens:
+
+```c
+Noc_Syntax_Tree tree = {0};
+if (!noc_syntax_tree_build(&noc, &stream, &tree)) return 1;
+
+for (size_t node = noc_syntax_root(&tree);
+     node != NOC_SYNTAX_NONE;
+     node = noc_syntax_next_preorder(&tree, node)) {
+    const Noc_Syntax_Node *syntax = noc_syntax_node(&tree, node);
+    Noc_Slice exact_source = noc_syntax_source(&tree, node);
+    printf("%s: ", noc_syntax_kind_name(syntax->kind));
+    fwrite(exact_source.data, 1, exact_source.count, stdout);
+    fputc('\n', stdout);
+}
+
+noc_syntax_tree_free(&tree);
+```
+
+Nodes are referred to by stable indices and expose parent, child, sibling,
+preorder, inner-range, source, location, and token lookup helpers. A group range
+includes its delimiters; `noc_syntax_inner_range` excludes them. Tree builds are
+transactional: malformed delimiters diagnose their exact source location and
+leave any prior tree intact. Trees borrow their token stream and become invalid
+after that stream is freed or successfully retokenized; failed retokenization
+preserves both the stream and its trees.
+
 ## Define a custom rule
 
 All extensions use the same registry and callback interface:
@@ -143,11 +175,11 @@ rejected.
 
 ## Current boundary
 
-This initial version deliberately handles explicit token-level transformations.
-It does not expand C macros, build a full AST, resolve typedefs, or change the C
-type system. Rules inside preprocessor directives are left untouched. More
-structured statement and declaration helpers can be added without changing the
-registration model.
+This version deliberately handles explicit token-level transformations and a
+lossless delimiter tree. It does not expand C macros, build a semantic C AST,
+resolve typedefs, or change the C type system. Rules inside preprocessor
+directives are left untouched. More structured statement and declaration
+helpers can be added without changing the registration model.
 
 The lexer accounts for backslash-newline splicing when recognizing comments and
 preprocessor directives. Splices inside identifiers or multi-character
