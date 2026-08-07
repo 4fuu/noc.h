@@ -946,6 +946,183 @@ static void test_c_parameter_name_boundaries(void)
     noc_context_deinit(&context);
 }
 
+static size_t find_syntax_node_for_token(const Noc_Syntax_Tree *tree,
+                                         size_t token_index)
+{
+    size_t node = noc_syntax_root(tree);
+    while (node != NOC_SYNTAX_NONE) {
+        const Noc_Syntax_Node *syntax = noc_syntax_node(tree, node);
+        if (syntax && syntax->kind == NOC_SYNTAX_TOKEN &&
+            syntax->range.begin == token_index) {
+            return node;
+        }
+        node = noc_syntax_next_preorder(tree, node);
+    }
+    return NOC_SYNTAX_NONE;
+}
+
+static void test_syntax_edit_set(void)
+{
+    static const char source[] =
+        "int add(int left, int right) { return left + right; }\n";
+    static const char expected[] =
+        "long sum(int left, int right) { return left - right; } /* boundary */\n"
+        "/* generated */\n";
+    static const char replacement_source[] = "int replacement;\n";
+    static const char reused_source[] = "long reused;\n";
+    Noc_Context context;
+    Noc_Token_Stream stream = {0};
+    Noc_Syntax_Tree tree = {0};
+    Noc_C_Translation_Unit unit = {0};
+    Noc_Edit_Set edits = {0};
+    Noc_Edit_Set empty = {0};
+    Noc_Edit_Set adjacent = {0};
+    Noc_Edit_Set deletion = {0};
+    Noc_Buffer output = {0};
+    const Noc_C_External_Item *function;
+    Noc_Token_Range name_range;
+    Noc_Token_Range eof_insertion;
+    size_t type_node;
+    size_t old_count;
+    char replacement_type[] = "long";
+    char *preserved_output;
+
+    noc_context_init(&context);
+    CHECK(noc_tokenize(&context, "edits.c", source, sizeof(source) - 1, &stream));
+    CHECK(noc_syntax_tree_build(&context, &stream, &tree));
+    CHECK(noc_c_translation_unit_build(&context, &tree, &unit));
+    function = noc_c_external_item(&unit, 0);
+    CHECK(function != NULL && function->kind == NOC_C_EXTERNAL_FUNCTION_DEFINITION);
+    name_range.begin = function->name_token;
+    name_range.end = function->name_token + 1;
+    eof_insertion.begin = stream.count - 1;
+    eof_insertion.end = stream.count - 1;
+    type_node = find_syntax_node_for_token(&tree, 0);
+
+    CHECK(noc_edit_set_add_cstr(&edits, &stream, name_range, "sum"));
+    CHECK(noc_edit_set_add(&edits,
+                           &stream,
+                           eof_insertion,
+                           (Noc_Slice){"/* generated */\n",
+                                       sizeof("/* generated */\n") - 1}));
+    CHECK(noc_edit_set_add_syntax(&edits,
+                                  &tree,
+                                  type_node,
+                                  (Noc_Slice){replacement_type,
+                                              sizeof(replacement_type) - 1}));
+    replacement_type[0] = 'X';
+    CHECK(noc_edit_set_add_cstr(&edits,
+                                &stream,
+                                function->body,
+                                "{ return left - right; }"));
+    CHECK(noc_edit_set_add_cstr(&edits,
+                                &stream,
+                                (Noc_Token_Range){function->body.end,
+                                                  function->body.end},
+                                " /* boundary */"));
+    CHECK(noc_edit_set_is_valid(&edits, &stream));
+    CHECK(edits.count == 5);
+    CHECK(edits.items[0].range.begin == 0);
+    old_count = edits.count;
+    CHECK(!noc_edit_set_add_cstr(&edits, &stream, function->signature, "overlap"));
+    CHECK(!noc_edit_set_add_cstr(&edits,
+                                 &stream,
+                                 (Noc_Token_Range){function->body.end,
+                                                   function->body.end},
+                                 "duplicate boundary"));
+    CHECK(!noc_edit_set_add_cstr(&edits,
+                                 &stream,
+                                 (Noc_Token_Range){function->body.begin + 1,
+                                                   function->body.begin + 1},
+                                 "interior"));
+    CHECK(!noc_edit_set_add_cstr(&edits,
+                                 &stream,
+                                 (Noc_Token_Range){stream.count - 1, stream.count},
+                                 "eof"));
+    CHECK(!noc_edit_set_add_syntax(&edits,
+                                   &tree,
+                                   tree.count,
+                                   (Noc_Slice){"invalid", 7}));
+    CHECK(edits.count == old_count);
+
+    CHECK(noc_buffer_append_cstr(&output, "old output"));
+    CHECK(noc_edit_set_apply(&edits, &stream, &output));
+    CHECK(slice_equals((Noc_Slice){output.items, output.count}, expected));
+    preserved_output = output.items;
+
+    CHECK(noc_tokenize(&context,
+                       "replacement.c",
+                       replacement_source,
+                       sizeof(replacement_source) - 1,
+                       &stream));
+    CHECK(!noc_edit_set_is_valid(&edits, &stream));
+    CHECK(!noc_edit_set_apply(&edits, &stream, &output));
+    CHECK(output.items == preserved_output);
+    CHECK(slice_equals((Noc_Slice){output.items, output.count}, expected));
+    CHECK(!noc_edit_set_add_syntax(&edits,
+                                   &tree,
+                                   type_node,
+                                   (Noc_Slice){"short", 5}));
+
+    noc_buffer_free(&output);
+    CHECK(noc_edit_set_add_cstr(&adjacent,
+                                &stream,
+                                (Noc_Token_Range){1, 2},
+                                " "));
+    CHECK(noc_edit_set_add_cstr(&adjacent,
+                                &stream,
+                                (Noc_Token_Range){0, 1},
+                                "long"));
+    CHECK(noc_edit_set_add_cstr(&adjacent,
+                                &stream,
+                                (Noc_Token_Range){1, 1},
+                                "/* adjacent */"));
+    CHECK(!noc_edit_set_add_cstr(&adjacent,
+                                 &stream,
+                                 (Noc_Token_Range){1, 1},
+                                 "duplicate"));
+    CHECK(noc_edit_set_is_valid(&adjacent, &stream));
+    CHECK(noc_edit_set_apply(&adjacent, &stream, &output));
+    CHECK(slice_equals((Noc_Slice){output.items, output.count},
+                       "long/* adjacent */ replacement;\n"));
+    noc_buffer_free(&output);
+
+    CHECK(noc_edit_set_add(&deletion,
+                           &stream,
+                           (Noc_Token_Range){2, 3},
+                           (Noc_Slice){NULL, 0}));
+    CHECK(noc_edit_set_apply(&deletion, &stream, &output));
+    CHECK(slice_equals((Noc_Slice){output.items, output.count}, "int ;\n"));
+    noc_buffer_free(&output);
+
+    {
+        size_t generation = stream.generation;
+        noc_token_stream_free(&stream);
+        CHECK(stream.generation == generation);
+        CHECK(noc_tokenize(&context,
+                           "reused.c",
+                           reused_source,
+                           sizeof(reused_source) - 1,
+                           &stream));
+        CHECK(stream.generation == generation + 1);
+        CHECK(!noc_edit_set_is_valid(&edits, &stream));
+    }
+    CHECK(noc_edit_set_is_valid(&empty, &stream));
+    CHECK(noc_edit_set_apply(&empty, &stream, &output));
+    CHECK(slice_equals((Noc_Slice){output.items, output.count}, reused_source));
+    noc_edit_set_free(&empty);
+    noc_edit_set_free(&deletion);
+    noc_edit_set_free(&adjacent);
+    noc_edit_set_free(&edits);
+    CHECK(edits.items == NULL && edits.count == 0);
+
+    noc_buffer_free(&output);
+    noc_c_translation_unit_free(&unit);
+    noc_syntax_tree_free(&tree);
+    noc_token_stream_free(&stream);
+    noc_context_deinit(&context);
+}
+
 static bool expand_twice(Noc_Rewriter *rewriter,
                          const Noc_Rule *rule,
                          void *user_data)
@@ -1246,6 +1423,7 @@ int main(void)
     test_c_analysis_rebuild_and_preprocessor();
     test_c_declarator_boundaries();
     test_c_parameter_name_boundaries();
+    test_syntax_edit_set();
     test_custom_rule();
     test_transactional_match();
     test_unknown_rule();

@@ -180,6 +180,37 @@ and unrecognized attribute macros may be left unset. K&R function definitions
 are not analyzed as functions; unknown top-level brace ranges are isolated so
 they do not consume the following declaration.
 
+## Transactional syntax edits
+
+`Noc_Edit_Set` applies non-overlapping edits from C analysis or lossless syntax
+nodes while preserving every untouched source byte. Replacement text is copied
+when an edit is added, and edits may be supplied in any order:
+
+```c
+Noc_Edit_Set edits = {0};
+Noc_Buffer rewritten = {0};
+
+Noc_Token_Range name = {item->name_token, item->name_token + 1};
+noc_edit_set_add_cstr(&edits, unit.stream, name, "new_name");
+noc_edit_set_add_cstr(&edits, unit.stream, item->body,
+                      "{ return new_value; }");
+
+if (!noc_edit_set_apply(&edits, unit.stream, &rewritten)) return 1;
+fwrite(rewritten.items, 1, rewritten.count, stdout);
+
+noc_buffer_free(&rewritten);
+noc_edit_set_free(&edits);
+```
+
+Adding an invalid or overlapping edit leaves the set unchanged. Adjacent
+replacements are allowed; insertions at a replacement endpoint are emitted
+before the replacement at that boundary, while duplicate insertions and
+insertions inside replaced text are rejected. Empty replacement slices delete
+their range. `noc_edit_set_add_syntax` accepts a syntax-node index directly.
+Applying is transactional and leaves the destination buffer unchanged on
+failure. Edit sets borrow a specific token-stream generation and cannot be used
+after successful retokenization, including a free-and-reuse cycle.
+
 ## Define a custom rule
 
 All extensions use the same registry and callback interface:

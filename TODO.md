@@ -42,6 +42,7 @@ passes, and the milestone has been committed and pushed.
 
 ## Milestone 4 — AST-assisted rewriting and composition
 
+- [x] Add transactional non-overlapping edits for token ranges and syntax nodes.
 - [ ] Let rules consume syntax nodes and token ranges safely.
 - [ ] Add transformed emission for nested rule composition.
 - [ ] Add newline/source-map restoration helpers.

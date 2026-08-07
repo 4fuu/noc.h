@@ -29,9 +29,9 @@
 #define NOC_H_INCLUDED
 
 #define NOC_VERSION_MAJOR 0
-#define NOC_VERSION_MINOR 4
+#define NOC_VERSION_MINOR 5
 #define NOC_VERSION_PATCH 0
-#define NOC_VERSION "0.4.0"
+#define NOC_VERSION "0.5.0"
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -203,6 +203,20 @@ typedef struct {
     size_t count;
     size_t capacity;
 } Noc_C_Parameter_List;
+
+typedef struct {
+    Noc_Token_Range range;
+    char *replacement;
+    size_t replacement_count;
+} Noc_Edit;
+
+typedef struct {
+    const Noc_Token_Stream *stream;
+    size_t stream_generation;
+    Noc_Edit *items;
+    size_t count;
+    size_t capacity;
+} Noc_Edit_Set;
 
 typedef enum {
     NOC_DIAGNOSTIC_NOTE = 0,
@@ -411,6 +425,29 @@ NOCDEF bool noc_c_compound_statement_is_valid(const Noc_Token_Stream *stream,
                                               Noc_Token_Range compound);
 NOCDEF Noc_Token_Range noc_c_compound_statement_inner(const Noc_Token_Stream *stream,
                                                       Noc_Token_Range compound);
+
+/* Transactional, non-overlapping source edits. The set owns replacement text
+   and borrows its first edit's token stream. Empty ranges are insertions and
+   conflict with another edit at the same boundary. Initialize sets/buffers to
+   {0}; failed additions and applications preserve their destinations. */
+NOCDEF bool noc_edit_set_is_valid(const Noc_Edit_Set *edits,
+                                  const Noc_Token_Stream *stream);
+NOCDEF bool noc_edit_set_add(Noc_Edit_Set *edits,
+                             const Noc_Token_Stream *stream,
+                             Noc_Token_Range range,
+                             Noc_Slice replacement);
+NOCDEF bool noc_edit_set_add_cstr(Noc_Edit_Set *edits,
+                                  const Noc_Token_Stream *stream,
+                                  Noc_Token_Range range,
+                                  const char *replacement);
+NOCDEF bool noc_edit_set_add_syntax(Noc_Edit_Set *edits,
+                                    const Noc_Syntax_Tree *tree,
+                                    size_t node,
+                                    Noc_Slice replacement);
+NOCDEF bool noc_edit_set_apply(const Noc_Edit_Set *edits,
+                               const Noc_Token_Stream *stream,
+                               Noc_Buffer *output);
+NOCDEF void noc_edit_set_free(Noc_Edit_Set *edits);
 
 /* Rewriter API available to expansion callbacks. The callback starts just after
    the @name trigger. Raw operations include trivia; significant operations skip
@@ -1700,10 +1737,12 @@ static bool noc__reject_trigraphs(Noc_Context *context,
 
 NOCDEF void noc_token_stream_free(Noc_Token_Stream *stream)
 {
+    size_t generation = stream->generation;
     free(stream->items);
     free(stream->source);
     free(stream->path);
     memset(stream, 0, sizeof(*stream));
+    stream->generation = generation;
 }
 
 NOCDEF bool noc_token_stream_is_valid(const Noc_Token_Stream *stream)
@@ -3352,6 +3391,191 @@ NOCDEF Noc_Token_Range noc_c_compound_statement_inner(const Noc_Token_Stream *st
     compound.begin += 1;
     compound.end -= 1;
     return compound;
+}
+
+static bool noc__edit_range_is_valid(const Noc_Token_Stream *stream,
+                                     Noc_Token_Range range)
+{
+    return noc_token_range_is_valid(stream, range) && stream->count > 0 &&
+           range.end <= stream->count - 1;
+}
+
+static bool noc__edit_ranges_conflict(Noc_Token_Range left,
+                                      Noc_Token_Range right)
+{
+    bool left_empty = left.begin == left.end;
+    bool right_empty = right.begin == right.end;
+    if (left_empty && right_empty) return left.begin == right.begin;
+    if (left_empty) return left.begin > right.begin && left.begin < right.end;
+    if (right_empty) return right.begin > left.begin && right.begin < left.end;
+    return left.begin < right.end && right.begin < left.end;
+}
+
+NOCDEF bool noc_edit_set_is_valid(const Noc_Edit_Set *edits,
+                                  const Noc_Token_Stream *stream)
+{
+    size_t i;
+    if (!edits || !noc_token_stream_is_valid(stream) || edits->count > edits->capacity ||
+        (edits->count > 0 && !edits->items)) {
+        return false;
+    }
+    if (edits->count == 0) return true;
+    if (edits->stream != stream || edits->stream_generation != stream->generation) {
+        return false;
+    }
+    for (i = 0; i < edits->count; ++i) {
+        const Noc_Edit *edit = &edits->items[i];
+        if (!noc__edit_range_is_valid(stream, edit->range) ||
+            (edit->replacement_count > 0 && !edit->replacement)) {
+            return false;
+        }
+        if (i > 0) {
+            const Noc_Edit *previous = &edits->items[i - 1];
+            if (previous->range.begin > edit->range.begin ||
+                (previous->range.begin == edit->range.begin &&
+                 previous->range.begin != previous->range.end &&
+                 edit->range.begin == edit->range.end) ||
+                noc__edit_ranges_conflict(previous->range, edit->range)) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+NOCDEF bool noc_edit_set_add(Noc_Edit_Set *edits,
+                             const Noc_Token_Stream *stream,
+                             Noc_Token_Range range,
+                             Noc_Slice replacement)
+{
+    Noc_Edit *items;
+    char *replacement_copy = NULL;
+    size_t position = 0;
+    size_t capacity;
+    size_t maximum = SIZE_MAX / sizeof(*items);
+    size_t i;
+    if (!edits || !noc__edit_range_is_valid(stream, range) ||
+        (replacement.count > 0 && !replacement.data) || edits->count > edits->capacity ||
+        (edits->count > 0 && !noc_edit_set_is_valid(edits, stream))) {
+        return false;
+    }
+    for (i = 0; i < edits->count; ++i) {
+        if (noc__edit_ranges_conflict(edits->items[i].range, range)) return false;
+        if (edits->items[i].range.begin < range.begin ||
+            (edits->items[i].range.begin == range.begin &&
+             edits->items[i].range.begin == edits->items[i].range.end &&
+             range.begin != range.end)) {
+            position = i + 1;
+        }
+    }
+    if (replacement.count > 0) {
+        replacement_copy = (char *)malloc(replacement.count);
+        if (!replacement_copy) return false;
+        memcpy(replacement_copy, replacement.data, replacement.count);
+    }
+    if (edits->count == edits->capacity) {
+        if (edits->capacity >= maximum) goto failed;
+        if (edits->capacity == 0) {
+            capacity = maximum < 8 ? maximum : 8;
+        } else if (edits->capacity > maximum / 2) {
+            capacity = maximum;
+        } else {
+            capacity = edits->capacity * 2;
+        }
+        if (capacity <= edits->capacity) goto failed;
+        items = (Noc_Edit *)realloc(edits->items, capacity * sizeof(*items));
+        if (!items) goto failed;
+        edits->items = items;
+        edits->capacity = capacity;
+    }
+    if (position < edits->count) {
+        memmove(&edits->items[position + 1],
+                &edits->items[position],
+                (edits->count - position) * sizeof(*edits->items));
+    }
+    edits->items[position].range = range;
+    edits->items[position].replacement = replacement_copy;
+    edits->items[position].replacement_count = replacement.count;
+    edits->count += 1;
+    edits->stream = stream;
+    edits->stream_generation = stream->generation;
+    return true;
+
+failed:
+    free(replacement_copy);
+    return false;
+}
+
+NOCDEF bool noc_edit_set_add_cstr(Noc_Edit_Set *edits,
+                                  const Noc_Token_Stream *stream,
+                                  Noc_Token_Range range,
+                                  const char *replacement)
+{
+    Noc_Slice slice;
+    if (!replacement) return false;
+    slice.data = replacement;
+    slice.count = strlen(replacement);
+    return noc_edit_set_add(edits, stream, range, slice);
+}
+
+NOCDEF bool noc_edit_set_add_syntax(Noc_Edit_Set *edits,
+                                    const Noc_Syntax_Tree *tree,
+                                    size_t node,
+                                    Noc_Slice replacement)
+{
+    const Noc_Syntax_Node *syntax = noc_syntax_node(tree, node);
+    return syntax && noc_edit_set_add(edits, tree->stream, syntax->range, replacement);
+}
+
+NOCDEF bool noc_edit_set_apply(const Noc_Edit_Set *edits,
+                               const Noc_Token_Stream *stream,
+                               Noc_Buffer *output)
+{
+    Noc_Buffer parsed = {0};
+    size_t source_offset = 0;
+    size_t i;
+    if (!output || !noc_edit_set_is_valid(edits, stream)) return false;
+    for (i = 0; i < edits->count; ++i) {
+        const Noc_Edit *edit = &edits->items[i];
+        Noc_Slice source = noc_token_range_source(stream, edit->range);
+        size_t begin_offset;
+        size_t end_offset;
+        if (!source.data) goto failed;
+        begin_offset = (size_t)(source.data - stream->source);
+        end_offset = begin_offset + source.count;
+        if (begin_offset < source_offset || end_offset < begin_offset ||
+            end_offset > stream->source_count ||
+            !noc_buffer_append(&parsed,
+                               stream->source + source_offset,
+                               begin_offset - source_offset) ||
+            !noc_buffer_append(&parsed,
+                               edit->replacement,
+                               edit->replacement_count)) {
+            goto failed;
+        }
+        source_offset = end_offset;
+    }
+    if (!noc_buffer_append(&parsed,
+                           stream->source + source_offset,
+                           stream->source_count - source_offset) ||
+        !noc_buffer_terminate(&parsed)) {
+        goto failed;
+    }
+    noc_buffer_free(output);
+    *output = parsed;
+    return true;
+
+failed:
+    noc_buffer_free(&parsed);
+    return false;
+}
+
+NOCDEF void noc_edit_set_free(Noc_Edit_Set *edits)
+{
+    size_t i;
+    for (i = 0; i < edits->count; ++i) free(edits->items[i].replacement);
+    free(edits->items);
+    memset(edits, 0, sizeof(*edits));
 }
 
 NOCDEF bool noc_transform_source(Noc_Context *context,
