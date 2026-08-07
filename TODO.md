@@ -44,7 +44,7 @@ passes, and the milestone has been committed and pushed.
 
 - [x] Add transactional non-overlapping edits for token ranges and syntax nodes.
 - [ ] Let rules consume syntax nodes and token ranges safely.
-- [ ] Add transformed emission for nested rule composition.
+- [x] Add transformed emission for nested rule composition.
 - [ ] Add newline/source-map restoration helpers.
 - [x] Add dependency reporting so rules such as `@embed` expose build inputs.
 - [ ] Add examples for expression, statement, declaration, and attribute rules.

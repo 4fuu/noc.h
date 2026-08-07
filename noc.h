@@ -29,9 +29,9 @@
 #define NOC_H_INCLUDED
 
 #define NOC_VERSION_MAJOR 0
-#define NOC_VERSION_MINOR 6
+#define NOC_VERSION_MINOR 7
 #define NOC_VERSION_PATCH 0
-#define NOC_VERSION "0.6.0"
+#define NOC_VERSION "0.7.0"
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -477,6 +477,9 @@ NOCDEF bool noc_rw_add_dependency(Noc_Rewriter *rewriter, const char *path);
 NOCDEF bool noc_rw_emit(Noc_Rewriter *rewriter, const void *data, size_t count);
 NOCDEF bool noc_rw_emit_slice(Noc_Rewriter *rewriter, Noc_Slice slice);
 NOCDEF bool noc_rw_emit_cstr(Noc_Rewriter *rewriter, const char *text);
+/* Transform dialect syntax inside a captured slice with the same registry,
+   merge its dependencies, and emit the resulting standard C. */
+NOCDEF bool noc_rw_emit_transformed(Noc_Rewriter *rewriter, Noc_Slice source);
 NOCDEF bool noc_rw_emitf(Noc_Rewriter *rewriter, const char *format, ...)
     NOC_PRINTF_FORMAT(2, 3);
 NOCDEF bool noc_rw_emit_c_string(Noc_Rewriter *rewriter,
@@ -555,8 +558,17 @@ struct Noc_Rewriter {
     Noc_Location trigger_location;
     Noc_Buffer *output;
     Noc__String_List *dependencies;
+    size_t expansion_depth;
     bool failed;
 };
+
+static bool noc__transform_source(Noc_Context *context,
+                                  const char *path,
+                                  const char *source,
+                                  size_t source_count,
+                                  Noc_Transform_Result *result,
+                                  size_t expansion_depth,
+                                  bool emit_line_directives);
 
 static bool noc__is_identifier_start(unsigned char c)
 {
@@ -1580,6 +1592,46 @@ NOCDEF bool noc_rw_emit_slice(Noc_Rewriter *rewriter, Noc_Slice slice)
 NOCDEF bool noc_rw_emit_cstr(Noc_Rewriter *rewriter, const char *text)
 {
     return noc_rw_emit(rewriter, text, strlen(text));
+}
+
+NOCDEF bool noc_rw_emit_transformed(Noc_Rewriter *rewriter, Noc_Slice source)
+{
+    Noc_Transform_Result nested = {0};
+    size_t i;
+    bool ok = false;
+    if ((source.count > 0 && !source.data) || rewriter->expansion_depth >= 64) {
+        noc_rw_error(rewriter,
+                     rewriter->expansion_depth >= 64
+                         ? "nested expansion limit reached while expanding @%s"
+                         : "invalid nested source while expanding @%s",
+                     rewriter->rule->name);
+        return false;
+    }
+    if (!noc__transform_source(rewriter->context,
+                               rewriter->path,
+                               source.data ? source.data : "",
+                               source.count,
+                               &nested,
+                               rewriter->expansion_depth + 1,
+                               false)) {
+        rewriter->failed = true;
+        goto done;
+    }
+    for (i = 0; i < nested.dependency_count; ++i) {
+        if (!noc__string_list_append_unique(rewriter->dependencies,
+                                            nested.dependencies[i])) {
+            noc_rw_error(rewriter,
+                         "could not merge nested dependencies while expanding @%s",
+                         rewriter->rule->name);
+            goto done;
+        }
+    }
+    if (!noc_rw_emit(rewriter, nested.output, nested.output_count)) goto done;
+    ok = true;
+
+done:
+    noc_transform_result_free(&nested);
+    return ok;
 }
 
 NOCDEF bool noc_rw_emitf(Noc_Rewriter *rewriter, const char *format, ...)
@@ -3651,11 +3703,13 @@ NOCDEF void noc_edit_set_free(Noc_Edit_Set *edits)
     memset(edits, 0, sizeof(*edits));
 }
 
-NOCDEF bool noc_transform_source(Noc_Context *context,
-                                 const char *path,
-                                 const char *source,
-                                 size_t source_count,
-                                 Noc_Transform_Result *result)
+static bool noc__transform_source(Noc_Context *context,
+                                  const char *path,
+                                  const char *source,
+                                  size_t source_count,
+                                  Noc_Transform_Result *result,
+                                  size_t expansion_depth,
+                                  bool emit_line_directives)
 {
     Noc_Lexer lexer;
     Noc__Tokens tokens = {0};
@@ -3697,7 +3751,7 @@ NOCDEF bool noc_transform_source(Noc_Context *context,
     } while (token.kind != NOC_TOKEN_EOF);
     if (!ok) goto done;
 
-    if (context->options.emit_line_directives && !noc__emit_line_directive(&output, path)) {
+    if (emit_line_directives && !noc__emit_line_directive(&output, path)) {
         noc__report(context,
                     NOC_DIAGNOSTIC_ERROR,
                     no_location,
@@ -3734,6 +3788,7 @@ NOCDEF bool noc_transform_source(Noc_Context *context,
                     rewriter.trigger_location = token.location;
                     rewriter.output = &output;
                     rewriter.dependencies = &dependencies;
+                    rewriter.expansion_depth = expansion_depth;
                     expanded = rule->expand(&rewriter, rule, rule->user_data);
                     if (!expanded && context->error_count == expansion_errors) {
                         noc_rw_error(&rewriter,
@@ -3807,6 +3862,21 @@ done:
     noc_buffer_free(&output);
     noc__string_list_free(&dependencies);
     return ok && result->error_count == 0;
+}
+
+NOCDEF bool noc_transform_source(Noc_Context *context,
+                                 const char *path,
+                                 const char *source,
+                                 size_t source_count,
+                                 Noc_Transform_Result *result)
+{
+    return noc__transform_source(context,
+                                 path,
+                                 source,
+                                 source_count,
+                                 result,
+                                 0,
+                                 context->options.emit_line_directives);
 }
 
 NOCDEF void noc_transform_result_free(Noc_Transform_Result *result)

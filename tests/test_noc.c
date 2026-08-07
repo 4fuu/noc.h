@@ -1277,6 +1277,139 @@ static void test_transform_dependencies(void)
     noc_context_deinit(&context);
 }
 
+static bool expand_nested_value(Noc_Rewriter *rewriter,
+                                const Noc_Rule *rule,
+                                void *user_data)
+{
+    (void)rule;
+    (void)user_data;
+    return noc_rw_expect_punct(rewriter, "(") &&
+           noc_rw_expect_punct(rewriter, ")") &&
+           noc_rw_add_dependency(rewriter, "nested/value.def") &&
+           noc_rw_emit_cstr(rewriter, "42");
+}
+
+static bool expand_nested_group(Noc_Rewriter *rewriter,
+                                const Noc_Rule *rule,
+                                void *user_data)
+{
+    Noc_Slice inside;
+    (void)rule;
+    (void)user_data;
+    return noc_rw_capture_balanced(rewriter, "(", ")", &inside) &&
+           noc_rw_add_dependency(rewriter, "nested/value.def") &&
+           noc_rw_emit_cstr(rewriter, "(") &&
+           noc_rw_emit_transformed(rewriter, inside) &&
+           noc_rw_emit_cstr(rewriter, ")");
+}
+
+static bool expand_nested_failure(Noc_Rewriter *rewriter,
+                                  const Noc_Rule *rule,
+                                  void *user_data)
+{
+    (void)rule;
+    (void)user_data;
+    if (!noc_rw_add_dependency(rewriter, "nested/failure.def") ||
+        !noc_rw_emit_cstr(rewriter, "nested partial")) {
+        return false;
+    }
+    noc_rw_error(rewriter, "nested failure");
+    return false;
+}
+
+static bool expand_outer_failure(Noc_Rewriter *rewriter,
+                                 const Noc_Rule *rule,
+                                 void *user_data)
+{
+    static const char nested[] = "@nested_failure";
+    (void)rule;
+    (void)user_data;
+    return noc_rw_emit_cstr(rewriter, "outer partial") &&
+           noc_rw_add_dependency(rewriter, "outer/failure.def") &&
+           noc_rw_emit_transformed(rewriter,
+                                   (Noc_Slice){nested, sizeof(nested) - 1});
+}
+
+static bool expand_recursive(Noc_Rewriter *rewriter,
+                             const Noc_Rule *rule,
+                             void *user_data)
+{
+    static const char recursive[] = "@recursive";
+    (void)rule;
+    (void)user_data;
+    return noc_rw_emit_transformed(rewriter,
+                                   (Noc_Slice){recursive, sizeof(recursive) - 1});
+}
+
+static void test_nested_transformation(void)
+{
+    static const char source[] = "int value = @group(@group(@value()));\n";
+    Noc_Context context;
+    Noc_Transform_Result result;
+    Diagnostic_State diagnostics = {0};
+    Noc_Rule value_rule = {
+        "value", NOC_RULE_EXPRESSION, "@value()", "Emit a nested value.",
+        expand_nested_value, NULL,
+    };
+    Noc_Rule group_rule = {
+        "group", NOC_RULE_EXPRESSION, "@group(expression)", "Transform and group.",
+        expand_nested_group, NULL,
+    };
+    Noc_Rule recursive_rule = {
+        "recursive", NOC_RULE_TOKEN, "@recursive", "Exercise recursion limits.",
+        expand_recursive, NULL,
+    };
+    Noc_Rule nested_failure_rule = {
+        "nested_failure", NOC_RULE_TOKEN, "@nested_failure", "Fail after partial output.",
+        expand_nested_failure, NULL,
+    };
+    Noc_Rule outer_failure_rule = {
+        "outer_failure", NOC_RULE_TOKEN, "@outer_failure", "Nest a failing expansion.",
+        expand_outer_failure, NULL,
+    };
+
+    noc_context_init(&context);
+    CHECK(noc_register_rule(&context, value_rule));
+    CHECK(noc_register_rule(&context, group_rule));
+    CHECK(noc_register_rule(&context, recursive_rule));
+    CHECK(noc_register_rule(&context, nested_failure_rule));
+    CHECK(noc_register_rule(&context, outer_failure_rule));
+    CHECK(noc_transform_source(&context,
+                               "nested.c",
+                               source,
+                               sizeof(source) - 1,
+                               &result));
+    CHECK(strcmp(result.output, "#line 1 \"nested.c\"\nint value = ((42));\n") == 0);
+    CHECK(strstr(result.output + 1, "#line") == NULL);
+    CHECK(result.dependency_count == 1);
+    CHECK(strcmp(result.dependencies[0], "nested/value.def") == 0);
+    noc_transform_result_free(&result);
+
+    noc_context_set_diagnostic(&context, count_diagnostics, &diagnostics);
+    CHECK(!noc_transform_source(&context,
+                                "nested-failure.c",
+                                "int prefix; @outer_failure",
+                                sizeof("int prefix; @outer_failure") - 1,
+                                &result));
+    CHECK(diagnostics.errors == 1);
+    CHECK(result.error_count == 1);
+    CHECK(result.output == NULL && result.dependencies == NULL);
+    CHECK(result.dependency_count == 0);
+    noc_transform_result_free(&result);
+
+    memset(&diagnostics, 0, sizeof(diagnostics));
+    CHECK(!noc_transform_source(&context,
+                                "recursive.c",
+                                "@recursive",
+                                sizeof("@recursive") - 1,
+                                &result));
+    CHECK(diagnostics.errors == 1);
+    CHECK(strstr(diagnostics.last_message, "nested expansion limit") != NULL);
+    CHECK(result.output == NULL && result.dependencies == NULL);
+    noc_transform_result_free(&result);
+    noc_context_deinit(&context);
+}
+
 static void test_custom_rule(void)
 {
     static const char source[] = "int answer = @twice(20 + 1);\n";
@@ -1532,6 +1665,7 @@ int main(void)
     test_c_parameter_name_boundaries();
     test_syntax_edit_set();
     test_transform_dependencies();
+    test_nested_transformation();
     test_custom_rule();
     test_transactional_match();
     test_unknown_rule();

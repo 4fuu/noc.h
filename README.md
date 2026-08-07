@@ -255,6 +255,13 @@ the generated output and dependency list. Failed transforms publish neither
 partial output nor partial dependencies. The built-in `@embed` rule reports its
 resolved source-relative file path automatically.
 
+Callbacks can pass a captured slice to `noc_rw_emit_transformed` when nested
+dialect expressions should be expanded before emission. Nested transforms use
+the same registry and source path, merge dependencies into the outer result,
+and omit duplicate `#line` prologues. A bounded recursion depth rejects runaway
+self-expansion, and any nested error transactionally discards all outer partial
+output and dependencies.
+
 ## Current boundary
 
 This version deliberately handles explicit token-level transformations, a

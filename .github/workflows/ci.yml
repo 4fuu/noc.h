@@ -35,7 +35,7 @@ jobs:
         if: runner.os == 'Windows'
         shell: cmd
         run: |
-          cl.exe /std:c11 /W4 /WX /wd4709 /nologo /D_CRT_SECURE_NO_WARNINGS /Fe:nob.exe nob.c
+          cl.exe /std:c11 /W4 /WX /wd4702 /wd4709 /nologo /D_CRT_SECURE_NO_WARNINGS /Fe:nob.exe nob.c
           .\nob.exe test
           .\nob.exe describe
 
