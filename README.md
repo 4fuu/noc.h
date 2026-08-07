@@ -202,12 +202,16 @@ noc_syntax_tree_free(&tree);
 ```
 
 Nodes are referred to by stable indices and expose parent, child, sibling,
-preorder, inner-range, source, location, and token lookup helpers. A group range
-includes its delimiters; `noc_syntax_inner_range` excludes them. Tree builds are
-transactional: malformed delimiters diagnose their exact source location and
-leave any prior tree intact. Trees borrow their token stream and become invalid
-after that stream is freed or successfully retokenized; failed retokenization
-preserves both the stream and its trees.
+preorder, inner-range, source, location, and token lookup helpers.
+`noc_syntax_node_at_token` maps an ordinary token to its leaf and an opening or
+closing delimiter to the group that owns it. `noc_syntax_node_covering_range`
+finds the deepest node containing a non-empty token range; depth and lowest
+common-ancestor queries support structural selections without rebuilding an
+index. A group range includes its delimiters; `noc_syntax_inner_range` excludes
+them. Tree builds are transactional: malformed delimiters diagnose their exact
+source location and leave any prior tree intact. Trees borrow their token stream
+and become invalid after that stream is freed or successfully retokenized;
+failed retokenization preserves both the stream and its trees.
 
 ## Lightweight C structure analysis
 

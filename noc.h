@@ -29,9 +29,9 @@
 #define NOC_H_INCLUDED
 
 #define NOC_VERSION_MAJOR 0
-#define NOC_VERSION_MINOR 16
+#define NOC_VERSION_MINOR 17
 #define NOC_VERSION_PATCH 0
-#define NOC_VERSION "0.16.0"
+#define NOC_VERSION "0.17.0"
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -437,6 +437,17 @@ NOCDEF size_t noc_syntax_first_child_of_kind(const Noc_Syntax_Tree *tree,
                                              size_t node,
                                              Noc_Syntax_Kind kind);
 NOCDEF size_t noc_syntax_next_preorder(const Noc_Syntax_Tree *tree, size_t node);
+/* Return the deepest node that owns token_index. Opening and closing delimiter
+   tokens belong to their group. EOF and invalid indices return NONE. */
+NOCDEF size_t noc_syntax_node_at_token(const Noc_Syntax_Tree *tree,
+                                       size_t token_index);
+/* Return the deepest node covering a non-empty, EOF-free token range. */
+NOCDEF size_t noc_syntax_node_covering_range(const Noc_Syntax_Tree *tree,
+                                             Noc_Token_Range range);
+NOCDEF size_t noc_syntax_depth(const Noc_Syntax_Tree *tree, size_t node);
+NOCDEF size_t noc_syntax_common_ancestor(const Noc_Syntax_Tree *tree,
+                                         size_t left,
+                                         size_t right);
 NOCDEF Noc_Token_Range noc_syntax_inner_range(const Noc_Syntax_Tree *tree,
                                               size_t node);
 NOCDEF Noc_Slice noc_syntax_source(const Noc_Syntax_Tree *tree, size_t node);
@@ -3238,6 +3249,93 @@ NOCDEF size_t noc_syntax_next_preorder(const Noc_Syntax_Tree *tree, size_t node)
         node = syntax->parent;
     }
     return NOC_SYNTAX_NONE;
+}
+
+NOCDEF size_t noc_syntax_node_covering_range(const Noc_Syntax_Tree *tree,
+                                             Noc_Token_Range range)
+{
+    size_t node;
+    const Noc_Syntax_Node *syntax;
+    if (!noc_syntax_tree_is_valid(tree) || range.begin >= range.end ||
+        !noc_token_range_is_valid(tree->stream, range)) {
+        return NOC_SYNTAX_NONE;
+    }
+    node = noc_syntax_root(tree);
+    syntax = noc_syntax_node(tree, node);
+    if (!syntax || range.begin < syntax->range.begin || range.end > syntax->range.end) {
+        return NOC_SYNTAX_NONE;
+    }
+    for (;;) {
+        size_t child = syntax->first_child;
+        size_t covering = NOC_SYNTAX_NONE;
+        while (child != NOC_SYNTAX_NONE) {
+            const Noc_Syntax_Node *candidate = noc_syntax_node(tree, child);
+            if (!candidate) return NOC_SYNTAX_NONE;
+            if (candidate->range.begin <= range.begin &&
+                range.end <= candidate->range.end) {
+                covering = child;
+                break;
+            }
+            if (candidate->range.begin > range.begin) break;
+            child = candidate->next_sibling;
+        }
+        if (covering == NOC_SYNTAX_NONE) return node;
+        node = covering;
+        syntax = &tree->items[node];
+    }
+}
+
+NOCDEF size_t noc_syntax_node_at_token(const Noc_Syntax_Tree *tree,
+                                       size_t token_index)
+{
+    Noc_Token_Range range;
+    if (!noc_syntax_tree_is_valid(tree) || token_index >= tree->stream->count - 1) {
+        return NOC_SYNTAX_NONE;
+    }
+    range.begin = token_index;
+    range.end = token_index + 1;
+    return noc_syntax_node_covering_range(tree, range);
+}
+
+NOCDEF size_t noc_syntax_depth(const Noc_Syntax_Tree *tree, size_t node)
+{
+    size_t depth = 0;
+    const Noc_Syntax_Node *syntax = noc_syntax_node(tree, node);
+    if (!syntax) return NOC_SYNTAX_NONE;
+    while (syntax->parent != NOC_SYNTAX_NONE) {
+        if (depth >= tree->count) return NOC_SYNTAX_NONE;
+        depth += 1;
+        syntax = noc_syntax_node(tree, syntax->parent);
+        if (!syntax) return NOC_SYNTAX_NONE;
+    }
+    return depth;
+}
+
+NOCDEF size_t noc_syntax_common_ancestor(const Noc_Syntax_Tree *tree,
+                                         size_t left,
+                                         size_t right)
+{
+    size_t left_depth = noc_syntax_depth(tree, left);
+    size_t right_depth = noc_syntax_depth(tree, right);
+    if (left_depth == NOC_SYNTAX_NONE || right_depth == NOC_SYNTAX_NONE) {
+        return NOC_SYNTAX_NONE;
+    }
+    while (left_depth > right_depth) {
+        left = tree->items[left].parent;
+        left_depth -= 1;
+    }
+    while (right_depth > left_depth) {
+        right = tree->items[right].parent;
+        right_depth -= 1;
+    }
+    while (left != right) {
+        if (left == NOC_SYNTAX_NONE || right == NOC_SYNTAX_NONE) {
+            return NOC_SYNTAX_NONE;
+        }
+        left = tree->items[left].parent;
+        right = tree->items[right].parent;
+    }
+    return left;
 }
 
 NOCDEF Noc_Token_Range noc_syntax_inner_range(const Noc_Syntax_Tree *tree,

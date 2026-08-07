@@ -27,6 +27,7 @@ passes, and the milestone has been committed and pushed.
       `()`, `[]`, and `{}` groups.
 - [x] Preserve trivia and exact source ranges in every node.
 - [x] Add traversal, parent/child lookup, source extraction, and destruction APIs.
+- [x] Add deepest token/range lookup, depth, and common-ancestor queries.
 - [x] Diagnose unmatched and mismatched delimiters with source locations.
 - [x] Add tree construction, traversal, malformed-input, and round-trip tests.
 

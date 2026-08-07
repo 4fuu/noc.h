@@ -386,9 +386,12 @@ static void test_lossless_syntax_tree(void)
     size_t parameters;
     size_t body;
     size_t bracket;
+    size_t bracket_value;
     size_t node;
     size_t visited = 0;
     Noc_Token_Range inner;
+    Noc_Token_Range spanning;
+    const Noc_Syntax_Node *bracket_syntax;
     const Noc_Token *token;
 
     noc_context_init(&context);
@@ -423,6 +426,35 @@ static void test_lossless_syntax_tree(void)
     bracket = find_descendant_kind(&tree, body, NOC_SYNTAX_BRACKET_GROUP);
     CHECK(bracket != NOC_SYNTAX_NONE);
     CHECK(slice_equals(noc_syntax_source(&tree, bracket), "[2]"));
+    bracket_syntax = noc_syntax_node(&tree, bracket);
+    inner = noc_syntax_inner_range(&tree, bracket);
+    bracket_value = noc_syntax_node_at_token(&tree, inner.begin);
+    CHECK(bracket_syntax != NULL);
+    CHECK(bracket_value != NOC_SYNTAX_NONE);
+    CHECK(noc_syntax_token(&tree, bracket_value) != NULL);
+    CHECK(noc_syntax_parent(&tree, bracket_value) == bracket);
+    CHECK(noc_syntax_node_at_token(&tree, bracket_syntax->range.begin) == bracket);
+    CHECK(noc_syntax_node_at_token(&tree, bracket_syntax->range.end - 1) == bracket);
+    CHECK(noc_syntax_node_covering_range(&tree, inner) == bracket_value);
+    CHECK(noc_syntax_node_covering_range(&tree, bracket_syntax->range) == bracket);
+    CHECK(noc_syntax_node_covering_range(&tree,
+                                         noc_syntax_node(&tree, body)->range) == body);
+    spanning.begin = noc_syntax_node(&tree, parameters)->range.begin;
+    spanning.end = noc_syntax_node(&tree, body)->range.end;
+    CHECK(noc_syntax_node_covering_range(&tree, spanning) == root);
+    CHECK(noc_syntax_depth(&tree, root) == 0);
+    CHECK(noc_syntax_depth(&tree, body) == 1);
+    CHECK(noc_syntax_depth(&tree, bracket) == 2);
+    CHECK(noc_syntax_depth(&tree, bracket_value) == 3);
+    CHECK(noc_syntax_common_ancestor(&tree, bracket, bracket_value) == bracket);
+    CHECK(noc_syntax_common_ancestor(&tree, parameters, body) == root);
+    CHECK(noc_syntax_common_ancestor(&tree, bracket_value, bracket_value) == bracket_value);
+    CHECK(noc_syntax_node_at_token(&tree, stream.count - 1) == NOC_SYNTAX_NONE);
+    CHECK(noc_syntax_node_covering_range(&tree,
+                                         (Noc_Token_Range){inner.begin,
+                                                           inner.begin}) == NOC_SYNTAX_NONE);
+    CHECK(noc_syntax_depth(&tree, tree.count) == NOC_SYNTAX_NONE);
+    CHECK(noc_syntax_common_ancestor(&tree, root, tree.count) == NOC_SYNTAX_NONE);
 
     node = root;
     while (node != NOC_SYNTAX_NONE && visited <= tree.count) {
@@ -437,6 +469,11 @@ static void test_lossless_syntax_tree(void)
 
     noc_syntax_tree_free(&tree);
     CHECK(!noc_syntax_tree_is_valid(&tree));
+    CHECK(noc_syntax_node_at_token(&tree, 0) == NOC_SYNTAX_NONE);
+    CHECK(noc_syntax_node_covering_range(&tree,
+                                         (Noc_Token_Range){0, 1}) == NOC_SYNTAX_NONE);
+    CHECK(noc_syntax_depth(&tree, 0) == NOC_SYNTAX_NONE);
+    CHECK(noc_syntax_common_ancestor(&tree, 0, 0) == NOC_SYNTAX_NONE);
     noc_token_stream_free(&stream);
     noc_context_deinit(&context);
 }
