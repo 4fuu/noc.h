@@ -43,6 +43,27 @@ static int output_rebuild_state(const char *output,
     return result;
 }
 
+static bool verify_generated_file(const char *actual_path, const char *expected_path)
+{
+    Nob_String_Builder actual = {0};
+    Nob_String_Builder expected = {0};
+    bool ok = false;
+    if (!nob_read_entire_file(actual_path, &actual) ||
+        !nob_read_entire_file(expected_path, &expected)) {
+        goto done;
+    }
+    ok = actual.count == expected.count &&
+         (actual.count == 0 || memcmp(actual.items, expected.items, actual.count) == 0);
+    if (!ok) {
+        nob_log(NOB_ERROR, "%s differs from %s", actual_path, expected_path);
+    }
+
+done:
+    nob_sb_free(actual);
+    nob_sb_free(expected);
+    return ok;
+}
+
 static void append_compile_command(Nob_Cmd *command,
                                    const char *output,
                                    const char *source)
@@ -99,6 +120,8 @@ static bool build_embed_dialect(void)
 
 static bool generate_embed_example(void)
 {
+    const char *output = "build/generated/embed_app.c";
+    const char *depfile = "build/generated/embed_app.d";
     const char *inputs[] = {
         "examples/embed/app.c",
         "examples/embed/message.txt",
@@ -106,19 +129,20 @@ static bool generate_embed_example(void)
         "nob.c",
     };
     Nob_Cmd command = {0};
-    int rebuild = output_rebuild_state("build/generated/embed_app.c",
-                                       inputs,
-                                       NOB_ARRAY_LEN(inputs));
+    int rebuild = output_rebuild_state(output, inputs, NOB_ARRAY_LEN(inputs));
     if (rebuild < 0) return false;
-    if (rebuild == 0) {
-        return nob_file_exists("build/generated/embed_app.c") > 0;
+    if (rebuild != 0 || nob_file_exists(depfile) <= 0) {
+        nob_cmd_append(&command,
+                       NOC_EMBED_DIALECT,
+                       "examples/embed/app.c",
+                       "-o",
+                       output,
+                       "--depfile",
+                       depfile);
+        if (!nob_cmd_run(&command)) return false;
     }
-    nob_cmd_append(&command,
-                   NOC_EMBED_DIALECT,
-                   "examples/embed/app.c",
-                   "-o",
-                   "build/generated/embed_app.c");
-    return nob_cmd_run(&command);
+    return nob_file_exists(output) > 0 &&
+           verify_generated_file(depfile, "tests/golden/embed_app.d");
 }
 
 static bool build_embed_example(void)
@@ -206,28 +230,6 @@ static bool generate_ide_metadata(void)
     return nob_cmd_run(&command);
 }
 
-static bool verify_ide_metadata(void)
-{
-    Nob_String_Builder actual = {0};
-    Nob_String_Builder expected = {0};
-    bool ok = false;
-    if (!nob_read_entire_file("build/generated/ide/rules_metadata.h", &actual) ||
-        !nob_read_entire_file("tests/golden/rules_metadata.h", &expected)) {
-        goto done;
-    }
-    ok = actual.count == expected.count &&
-         (actual.count == 0 || memcmp(actual.items, expected.items, actual.count) == 0);
-    if (!ok) {
-        nob_log(NOB_ERROR,
-                "generated IDE metadata differs from tests/golden/rules_metadata.h");
-    }
-
-done:
-    nob_sb_free(actual);
-    nob_sb_free(expected);
-    return ok;
-}
-
 static bool build_ide_example(void)
 {
     const char *output_source = "build/generated/ide/app.c";
@@ -239,7 +241,8 @@ static bool build_ide_example(void)
     if (!build_rules_dialect() ||
         !generate_ide_overlay("examples/ide/app.c", output_source) ||
         !generate_ide_overlay("examples/ide/math.h", output_header) ||
-        !generate_ide_metadata() || !verify_ide_metadata()) {
+        !generate_ide_metadata() ||
+        !verify_generated_file(metadata, "tests/golden/rules_metadata.h")) {
         return false;
     }
     rebuild = output_rebuild_state(NOC_IDE_EXAMPLE, inputs, NOB_ARRAY_LEN(inputs));

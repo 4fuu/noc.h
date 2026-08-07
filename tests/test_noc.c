@@ -1962,6 +1962,50 @@ static void test_buffer_self_append(void)
     noc_buffer_free(&buffer);
 }
 
+static void test_transform_file_with_result(void)
+{
+    const char *output_path = "build/noc-file-result.c";
+    Noc_Context context;
+    Noc_Transform_Result result = {0};
+    Noc_Transform_Result failed = {0};
+    Diagnostic_State diagnostics = {0};
+    FILE *file;
+    char *written;
+
+    noc_context_init(&context);
+    noc_context_set_diagnostic(&context, count_diagnostics, &diagnostics);
+    CHECK(noc_register_embed_rule(&context, "embed"));
+    CHECK(noc_transform_file_with_result(&context,
+                                         "examples/embed/app.c",
+                                         output_path,
+                                         &result));
+    CHECK(result.output != NULL && result.output_count > 0);
+    CHECK(result.dependency_count == 1);
+    CHECK(strcmp(result.dependencies[0], "examples/embed/message.txt") == 0);
+    written = (char *)malloc(result.output_count);
+    CHECK(written != NULL);
+    file = fopen(output_path, "rb");
+    CHECK(file != NULL);
+    if (file && written) {
+        CHECK(fread(written, 1, result.output_count, file) == result.output_count);
+        CHECK(memcmp(written, result.output, result.output_count) == 0);
+    }
+    if (file) CHECK(fclose(file) == 0);
+    free(written);
+    noc_transform_result_free(&result);
+    CHECK(result.output == NULL && result.dependencies == NULL);
+    CHECK(remove(output_path) == 0);
+
+    CHECK(!noc_transform_file_with_result(&context,
+                                          "examples/embed/app.c",
+                                          "examples/embed/app.c",
+                                          &failed));
+    CHECK(diagnostics.errors == 1);
+    CHECK(failed.output == NULL && failed.dependencies == NULL);
+    noc_transform_result_free(&failed);
+    noc_context_deinit(&context);
+}
+
 static void test_file_alias_rejection(void)
 {
     static const char contents[] = "int untouched;\n";
@@ -2034,6 +2078,7 @@ int main(void)
     test_trigraph_rejection();
     test_safe_c_string_and_line_path();
     test_buffer_self_append();
+    test_transform_file_with_result();
     test_file_alias_rejection();
     test_string_codec();
     if (failures != 0) {

@@ -62,8 +62,8 @@ passes, and the milestone has been committed and pushed.
 ## Later work
 
 - [ ] Multi-file CLI and mirrored source/output directory trees.
-- [ ] Add depfile CLI output and compiler-command signatures for exact
-      incremental builds. (Public Make/Ninja depfile serialization is complete.)
+- [x] Add Make/Ninja depfile API and CLI output.
+- [ ] Add compiler-command signatures for exact incremental builds.
 - [ ] Optional inactive-preprocessor-branch handling.
 - [ ] Normalize phase-2 splices inside identifiers and punctuators.
 - [ ] Fuzz lexer, syntax tree, and rewrite cursor APIs.

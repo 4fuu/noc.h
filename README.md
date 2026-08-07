@@ -349,6 +349,20 @@ dependencies, and ordering otherwise remains first-seen. Spaces, tabs, `#`,
 drive paths. Empty paths and embedded newlines are rejected without changing an
 existing destination buffer.
 
+File-oriented build drivers can use `noc_transform_file_with_result` to retain
+the same owning result after the transformed file is atomically written. The
+generic CLI wires both operations together without a second transformation:
+
+```console
+$ dialect input.c -o build/input.c --depfile build/input.d
+$ dialect input.c -o build/input.c --depfile build/input.d \
+    --dep-target build/input.o
+```
+
+The depfile target defaults to the transformed `-o` path. Input, transformed
+output, and depfile paths must be distinct; both generated files use unique
+temporary files and atomic replacement.
+
 Callbacks can pass a captured slice to `noc_rw_emit_transformed` when nested
 dialect expressions should be expanded before emission. Nested transforms use
 the same registry and source path, merge dependencies into the outer result,

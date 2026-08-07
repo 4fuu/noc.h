@@ -29,9 +29,9 @@
 #define NOC_H_INCLUDED
 
 #define NOC_VERSION_MAJOR 0
-#define NOC_VERSION_MINOR 12
+#define NOC_VERSION_MINOR 13
 #define NOC_VERSION_PATCH 0
-#define NOC_VERSION "0.12.0"
+#define NOC_VERSION "0.13.0"
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -546,6 +546,13 @@ NOCDEF bool noc_transform_source(Noc_Context *context,
                                  const char *source,
                                  size_t source_count,
                                  Noc_Transform_Result *result);
+/* Atomically write a transformed file while retaining its owning transform
+   result for dependency processing. Initialize result to {0}; failures publish
+   neither output text nor dependencies. */
+NOCDEF bool noc_transform_file_with_result(Noc_Context *context,
+                                           const char *input_path,
+                                           const char *output_path,
+                                           Noc_Transform_Result *result);
 NOCDEF bool noc_transform_file(Noc_Context *context,
                                const char *input_path,
                                const char *output_path);
@@ -4483,14 +4490,16 @@ done:
     return ok;
 }
 
-NOCDEF bool noc_transform_file(Noc_Context *context,
-                               const char *input_path,
-                               const char *output_path)
+NOCDEF bool noc_transform_file_with_result(Noc_Context *context,
+                                           const char *input_path,
+                                           const char *output_path,
+                                           Noc_Transform_Result *result)
 {
     Noc_Buffer source = {0};
-    Noc_Transform_Result result = {0};
     Noc_Location no_location = {0};
     bool ok = false;
+    if (!context || !input_path || !output_path || !result) return false;
+    memset(result, 0, sizeof(*result));
     if (noc__paths_refer_to_same_file(input_path, output_path)) {
         noc__report(context,
                     NOC_DIAGNOSTIC_ERROR,
@@ -4504,18 +4513,31 @@ NOCDEF bool noc_transform_file(Noc_Context *context,
                               input_path,
                               source.items ? source.items : "",
                               source.count,
-                              &result)) {
+                              result)) {
         goto done;
     }
     ok = noc__write_output_atomic(context,
                                   output_path,
-                                  result.output,
-                                  result.output_count,
+                                  result->output,
+                                  result->output_count,
                                   no_location);
 
 done:
-    noc_transform_result_free(&result);
+    if (!ok) noc_transform_result_free(result);
     noc_buffer_free(&source);
+    return ok;
+}
+
+NOCDEF bool noc_transform_file(Noc_Context *context,
+                               const char *input_path,
+                               const char *output_path)
+{
+    Noc_Transform_Result result = {0};
+    bool ok = noc_transform_file_with_result(context,
+                                             input_path,
+                                             output_path,
+                                             &result);
+    noc_transform_result_free(&result);
     return ok;
 }
 
@@ -4642,6 +4664,8 @@ static void noc__print_usage(FILE *stream, const char *program)
             "  %s --ide-metadata OUTPUT.h\n\n"
             "Options:\n"
             "  -o PATH               Write transformed C source/header to PATH\n"
+            "  --depfile PATH        Write Make/Ninja dependencies to PATH\n"
+            "  --dep-target PATH     Override the depfile target (default: -o PATH)\n"
             "  --describe            Describe all registered dialect rules\n"
             "  --ide-metadata PATH    Write a default IDE metadata header\n"
             "  --no-line-directives  Do not prepend a #line directive\n"
@@ -4655,6 +4679,8 @@ NOCDEF int noc_run_cli(Noc_Context *context, int argc, char **argv)
 {
     const char *input = NULL;
     const char *output = NULL;
+    const char *depfile = NULL;
+    const char *dep_target = NULL;
     int i;
     for (i = 1; i < argc; ++i) {
         const char *argument = argv[i];
@@ -4691,6 +4717,22 @@ NOCDEF int noc_run_cli(Noc_Context *context, int argc, char **argv)
             context->options.emit_line_directives = false;
             continue;
         }
+        if (strcmp(argument, "--depfile") == 0 ||
+            strcmp(argument, "--dep-target") == 0) {
+            const char **destination = strcmp(argument, "--depfile") == 0
+                                           ? &depfile
+                                           : &dep_target;
+            if (i + 1 >= argc) {
+                fprintf(stderr, "noc: error: %s requires a path\n", argument);
+                return 2;
+            }
+            if (*destination) {
+                fprintf(stderr, "noc: error: %s may be specified only once\n", argument);
+                return 2;
+            }
+            *destination = argv[++i];
+            continue;
+        }
         if (strcmp(argument, "-o") == 0) {
             if (i + 1 >= argc) {
                 fprintf(stderr, "noc: error: -o requires a path\n");
@@ -4712,6 +4754,41 @@ NOCDEF int noc_run_cli(Noc_Context *context, int argc, char **argv)
     if (!input || !output) {
         noc__print_usage(stderr, argv[0]);
         return 2;
+    }
+    if (dep_target && !depfile) {
+        fprintf(stderr, "noc: error: --dep-target requires --depfile\n");
+        return 2;
+    }
+    if (depfile &&
+        (noc__paths_refer_to_same_file(depfile, input) ||
+         noc__paths_refer_to_same_file(depfile, output))) {
+        fprintf(stderr, "noc: error: depfile path must differ from input and output\n");
+        return 2;
+    }
+    if (depfile) {
+        Noc_Transform_Result result = {0};
+        Noc_Buffer generated = {0};
+        Noc_Location no_location = {0};
+        bool ok = noc_transform_file_with_result(context, input, output, &result);
+        if (ok && noc__paths_refer_to_same_file(depfile, output)) {
+            fprintf(stderr, "noc: error: depfile path resolves to the output path\n");
+            ok = false;
+        }
+        if (ok) {
+            ok = noc_generate_depfile(context,
+                                      dep_target ? dep_target : output,
+                                      input,
+                                      &result,
+                                      &generated) &&
+                 noc__write_output_atomic(context,
+                                          depfile,
+                                          generated.items,
+                                          generated.count,
+                                          no_location);
+        }
+        noc_buffer_free(&generated);
+        noc_transform_result_free(&result);
+        return ok ? 0 : 1;
     }
     return noc_transform_file(context, input, output) ? 0 : 1;
 }
