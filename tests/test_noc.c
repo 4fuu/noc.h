@@ -1277,6 +1277,132 @@ static void test_transform_dependencies(void)
     noc_context_deinit(&context);
 }
 
+static bool expand_preserved_newlines(Noc_Rewriter *rewriter,
+                                      const Noc_Rule *rule,
+                                      void *user_data)
+{
+    Noc_Slice inside;
+    (void)rule;
+    (void)user_data;
+    return noc_rw_capture_balanced(rewriter, "(", ")", &inside) &&
+           noc_rw_emit_cstr(rewriter, "0") &&
+           noc_rw_preserve_newlines(rewriter, inside);
+}
+
+static bool expand_restored_line(Noc_Rewriter *rewriter,
+                                 const Noc_Rule *rule,
+                                 void *user_data)
+{
+    Noc_Location location = {0};
+    (void)rule;
+    (void)user_data;
+    location.path = "virtual?\t/a\"b\\c.h";
+    location.line = 91;
+    return noc_rw_expect_punct(rewriter, "(") &&
+           noc_rw_expect_punct(rewriter, ")") &&
+           noc_rw_emit_cstr(rewriter, "0") &&
+           noc_rw_emit_line_directive(rewriter, location);
+}
+
+static bool expand_restored_source_line(Noc_Rewriter *rewriter,
+                                        const Noc_Rule *rule,
+                                        void *user_data)
+{
+    Noc_Location location = {0};
+    (void)rule;
+    (void)user_data;
+    location.line = 17;
+    return noc_rw_emit_line_directive(rewriter, location);
+}
+
+static bool expand_invalid_line(Noc_Rewriter *rewriter,
+                                const Noc_Rule *rule,
+                                void *user_data)
+{
+    Noc_Location location = {0};
+    (void)rule;
+    (void)user_data;
+    return noc_rw_emit_cstr(rewriter, "partial") &&
+           noc_rw_emit_line_directive(rewriter, location);
+}
+
+static void test_rewriter_source_mapping(void)
+{
+    static const char source[] =
+        "int value = @squash(first\r\nsecond\nthird\rfourth);\n"
+        "int mapped = @restore();\n"
+        "@source_line int tail;\n";
+    static const char expected[] =
+        "int value = 0\r\n\n\r;\n"
+        "int mapped = 0\n"
+        "#line 91 \"virtual\\?\\t/a\\\"b\\\\c.h\"\n"
+        ";\n"
+        "#line 17 \"source-map.c\"\n"
+        " int tail;\n";
+    Noc_Context context;
+    Noc_Transform_Result result = {0};
+    Diagnostic_State diagnostics = {0};
+    Noc_Rule squash = {
+        "squash",
+        NOC_RULE_EXPRESSION,
+        "@squash(expression)",
+        "Replace an expression while retaining its physical newlines.",
+        expand_preserved_newlines,
+        NULL,
+    };
+    Noc_Rule restore = {
+        "restore",
+        NOC_RULE_EXPRESSION,
+        "@restore()",
+        "Restore an explicit source location.",
+        expand_restored_line,
+        NULL,
+    };
+    Noc_Rule source_line = {
+        "source_line",
+        NOC_RULE_TOKEN,
+        "@source_line",
+        "Restore a line while retaining the current source path.",
+        expand_restored_source_line,
+        NULL,
+    };
+    Noc_Rule invalid = {
+        "invalid_line",
+        NOC_RULE_TOKEN,
+        "@invalid_line",
+        "Exercise line-directive validation.",
+        expand_invalid_line,
+        NULL,
+    };
+
+    noc_context_init(&context);
+    context.options.emit_line_directives = false;
+    CHECK(noc_register_rule(&context, squash));
+    CHECK(noc_register_rule(&context, restore));
+    CHECK(noc_register_rule(&context, source_line));
+    CHECK(noc_register_rule(&context, invalid));
+    CHECK(noc_transform_source(&context,
+                               "source-map.c",
+                               source,
+                               sizeof(source) - 1,
+                               &result));
+    CHECK(result.output_count == sizeof(expected) - 1);
+    CHECK(memcmp(result.output, expected, sizeof(expected) - 1) == 0);
+    noc_transform_result_free(&result);
+
+    noc_context_set_diagnostic(&context, count_diagnostics, &diagnostics);
+    CHECK(!noc_transform_source(&context,
+                                "source-map-error.c",
+                                "@invalid_line",
+                                sizeof("@invalid_line") - 1,
+                                &result));
+    CHECK(diagnostics.errors == 1);
+    CHECK(strstr(diagnostics.last_message, "line 0") != NULL);
+    CHECK(result.output == NULL && result.output_count == 0);
+    noc_transform_result_free(&result);
+    noc_context_deinit(&context);
+}
+
 static bool expand_nested_value(Noc_Rewriter *rewriter,
                                 const Noc_Rule *rule,
                                 void *user_data)
@@ -1665,6 +1791,7 @@ int main(void)
     test_c_parameter_name_boundaries();
     test_syntax_edit_set();
     test_transform_dependencies();
+    test_rewriter_source_mapping();
     test_nested_transformation();
     test_custom_rule();
     test_transactional_match();

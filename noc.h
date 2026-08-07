@@ -29,9 +29,9 @@
 #define NOC_H_INCLUDED
 
 #define NOC_VERSION_MAJOR 0
-#define NOC_VERSION_MINOR 7
+#define NOC_VERSION_MINOR 8
 #define NOC_VERSION_PATCH 0
-#define NOC_VERSION "0.7.0"
+#define NOC_VERSION "0.8.0"
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -477,6 +477,14 @@ NOCDEF bool noc_rw_add_dependency(Noc_Rewriter *rewriter, const char *path);
 NOCDEF bool noc_rw_emit(Noc_Rewriter *rewriter, const void *data, size_t count);
 NOCDEF bool noc_rw_emit_slice(Noc_Rewriter *rewriter, Noc_Slice slice);
 NOCDEF bool noc_rw_emit_cstr(Noc_Rewriter *rewriter, const char *text);
+/* Emit only the physical newline sequences present in source. This lets a
+   replacement keep following source on its original physical line. */
+NOCDEF bool noc_rw_preserve_newlines(Noc_Rewriter *rewriter, Noc_Slice source);
+/* Start a #line directive and map the next output line to location.line. A
+   NULL location.path uses the current source path; offset and column are not
+   represented by C line directives. */
+NOCDEF bool noc_rw_emit_line_directive(Noc_Rewriter *rewriter,
+                                       Noc_Location location);
 /* Transform dialect syntax inside a captured slice with the same registry,
    merge its dependencies, and emit the resulting standard C. */
 NOCDEF bool noc_rw_emit_transformed(Noc_Rewriter *rewriter, Noc_Slice source);
@@ -1354,6 +1362,10 @@ NOCDEF void noc_describe(const Noc_Context *context, FILE *stream)
     }
 }
 
+static bool noc__emit_line_directive_at(Noc_Buffer *output,
+                                        const char *path,
+                                        size_t line);
+
 NOCDEF const Noc_Token *noc_rw_peek_raw(const Noc_Rewriter *rewriter, size_t lookahead)
 {
     size_t index = rewriter->cursor + lookahead;
@@ -1594,6 +1606,54 @@ NOCDEF bool noc_rw_emit_cstr(Noc_Rewriter *rewriter, const char *text)
     return noc_rw_emit(rewriter, text, strlen(text));
 }
 
+NOCDEF bool noc_rw_preserve_newlines(Noc_Rewriter *rewriter, Noc_Slice source)
+{
+    size_t i = 0;
+    if (!rewriter || (source.count > 0 && !source.data)) {
+        if (rewriter) noc_rw_error(rewriter, "invalid source while preserving newlines");
+        return false;
+    }
+    while (i < source.count) {
+        if (source.data[i] == '\r') {
+            size_t count = i + 1 < source.count && source.data[i + 1] == '\n' ? 2 : 1;
+            if (!noc_rw_emit(rewriter, source.data + i, count)) return false;
+            i += count;
+        } else if (source.data[i] == '\n') {
+            if (!noc_rw_emit(rewriter, source.data + i, 1)) return false;
+            i += 1;
+        } else {
+            i += 1;
+        }
+    }
+    return true;
+}
+
+NOCDEF bool noc_rw_emit_line_directive(Noc_Rewriter *rewriter,
+                                       Noc_Location location)
+{
+    const char *path;
+    if (!rewriter || location.line == 0) {
+        if (rewriter) noc_rw_error(rewriter, "cannot emit a #line directive for line 0");
+        return false;
+    }
+    path = location.path ? location.path : rewriter->path;
+    if (!path) {
+        noc_rw_error(rewriter, "cannot emit a #line directive without a source path");
+        return false;
+    }
+    if (rewriter->output->count > 0 &&
+        rewriter->output->items[rewriter->output->count - 1] != '\n' &&
+        rewriter->output->items[rewriter->output->count - 1] != '\r' &&
+        !noc_rw_emit_cstr(rewriter, "\n")) {
+        return false;
+    }
+    if (!noc__emit_line_directive_at(rewriter->output, path, location.line)) {
+        noc_rw_error(rewriter, "out of memory while emitting a #line directive");
+        return false;
+    }
+    return true;
+}
+
 NOCDEF bool noc_rw_emit_transformed(Noc_Rewriter *rewriter, Noc_Slice source)
 {
     Noc_Transform_Result nested = {0};
@@ -1800,20 +1860,22 @@ static bool noc__tokens_append(Noc__Tokens *tokens, Noc_Token token)
     return true;
 }
 
-static bool noc__emit_line_directive(Noc_Buffer *output, const char *path)
+static bool noc__emit_line_directive_at(Noc_Buffer *output,
+                                        const char *path,
+                                        size_t line)
 {
     const unsigned char *cursor = (const unsigned char *)path;
-    if (!noc_buffer_append_cstr(output, "#line 1 \"")) return false;
+    if (!noc_buffer_appendf(output, "#line %zu \"", line)) return false;
     while (*cursor) {
         if (*cursor == '\\' || *cursor == '"' || *cursor == '?') {
             if (!noc_buffer_append(output, "\\", 1)) return false;
         }
         if (*cursor == '\n') {
-            if (!noc_buffer_append_cstr(output, "n")) return false;
+            if (!noc_buffer_append_cstr(output, "\\n")) return false;
         } else if (*cursor == '\r') {
-            if (!noc_buffer_append_cstr(output, "r")) return false;
+            if (!noc_buffer_append_cstr(output, "\\r")) return false;
         } else if (*cursor == '\t') {
-            if (!noc_buffer_append_cstr(output, "t")) return false;
+            if (!noc_buffer_append_cstr(output, "\\t")) return false;
         } else if (*cursor >= 32 && *cursor <= 126) {
             if (!noc_buffer_append(output, cursor, 1)) return false;
         } else if (!noc_buffer_appendf(output, "\\%03o", (unsigned int)*cursor)) {
@@ -3751,7 +3813,7 @@ static bool noc__transform_source(Noc_Context *context,
     } while (token.kind != NOC_TOKEN_EOF);
     if (!ok) goto done;
 
-    if (emit_line_directives && !noc__emit_line_directive(&output, path)) {
+    if (emit_line_directives && !noc__emit_line_directive_at(&output, path, 1)) {
         noc__report(context,
                     NOC_DIAGNOSTIC_ERROR,
                     no_location,

@@ -262,6 +262,12 @@ and omit duplicate `#line` prologues. A bounded recursion depth rejects runaway
 self-expansion, and any nested error transactionally discards all outer partial
 output and dependencies.
 
+Callbacks that replace multiline syntax can call `noc_rw_preserve_newlines` to
+emit only the original CR, LF, or CRLF sequences and keep following source on
+its physical line. When generated text cannot preserve line counts,
+`noc_rw_emit_line_directive` starts a correctly escaped C `#line` directive;
+the following output line is mapped to the requested source line and path.
+
 ## Current boundary
 
 This version deliberately handles explicit token-level transformations, a
@@ -276,7 +282,9 @@ preprocessor directives. Splices inside identifiers or multi-character
 punctuators are not normalized for callbacks yet. C trigraphs are rejected
 explicitly. Because `noc.h` does not evaluate preprocessor conditions, a rule in
 an inactive `#if` branch is still visited. Expansion callbacks should preserve
-physical newline counts when exact diagnostics after an expansion matter.
+physical newline counts when exact diagnostics after an expansion matter; the
+rewriter source-mapping helpers make that policy explicit but do not infer it
+automatically.
 
 The staged implementation plan and current milestone status live in
 [`TODO.md`](TODO.md).
