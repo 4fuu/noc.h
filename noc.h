@@ -29,9 +29,9 @@
 #define NOC_H_INCLUDED
 
 #define NOC_VERSION_MAJOR 0
-#define NOC_VERSION_MINOR 13
+#define NOC_VERSION_MINOR 14
 #define NOC_VERSION_PATCH 0
-#define NOC_VERSION "0.13.0"
+#define NOC_VERSION "0.14.0"
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -269,6 +269,12 @@ typedef struct {
     const char *dialect_name;
     bool omit_descriptions;
 } Noc_Ide_Metadata_Options;
+
+typedef struct {
+    const char *input_root;
+    const char *output_root;
+    bool emit_depfiles;
+} Noc_Batch_Options;
 
 struct Noc_Context {
     Noc_Rule *rules;
@@ -556,6 +562,13 @@ NOCDEF bool noc_transform_file_with_result(Noc_Context *context,
 NOCDEF bool noc_transform_file(Noc_Context *context,
                                const char *input_path,
                                const char *output_path);
+/* Transform ordinary .c/.h inputs into a mirrored output tree. All mappings
+   and collisions are validated before writing; completed earlier files remain
+   if a later transformation fails. */
+NOCDEF bool noc_transform_files(Noc_Context *context,
+                                const Noc_Batch_Options *options,
+                                const char *const *input_paths,
+                                size_t input_count);
 NOCDEF void noc_transform_result_free(Noc_Transform_Result *result);
 NOCDEF int noc_run_cli(Noc_Context *context, int argc, char **argv);
 
@@ -584,6 +597,7 @@ NOCDEF bool noc_register_embed_rule(Noc_Context *context, const char *name);
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
 #endif
+#include <direct.h>
 #include <windows.h>
 #else
 #include <sys/stat.h>
@@ -4553,6 +4567,375 @@ static bool noc__path_is_absolute(const char *path)
 #endif
 }
 
+static bool noc__path_is_separator(char c)
+{
+    return c == '/' || c == '\\';
+}
+
+static bool noc__path_character_equal(char left, char right)
+{
+    if (noc__path_is_separator(left) && noc__path_is_separator(right)) return true;
+#ifdef _WIN32
+    return tolower((unsigned char)left) == tolower((unsigned char)right);
+#else
+    return left == right;
+#endif
+}
+
+static bool noc__paths_equal_for_output(const char *left, const char *right)
+{
+    while (*left && *right && noc__path_character_equal(*left, *right)) {
+        left += 1;
+        right += 1;
+    }
+    return *left == '\0' && *right == '\0';
+}
+
+static bool noc__batch_platform_path_is_supported(const char *path)
+{
+#ifdef _WIN32
+    const unsigned char *cursor = (const unsigned char *)path;
+    if (noc__path_is_separator(path[0]) && noc__path_is_separator(path[1])) {
+        return false;
+    }
+    if (isalpha((unsigned char)path[0]) && path[1] == ':' &&
+        !noc__path_is_separator(path[2])) {
+        return false;
+    }
+    while (*cursor) {
+        if (*cursor >= 128) return false;
+        cursor += 1;
+    }
+#else
+    (void)path;
+#endif
+    return true;
+}
+
+static bool noc__batch_map_output(Noc_Context *context,
+                                  const Noc_Batch_Options *options,
+                                  const char *input_path,
+                                  Noc_Buffer *output)
+{
+    const char *root = options->input_root;
+    const char *suffix;
+    const char *cursor;
+    size_t root_count;
+    size_t relative_components = 0;
+    Noc_Buffer relative = {0};
+    Noc_Location location = {0};
+    bool ok = false;
+    location.path = input_path;
+    if (!noc__depfile_path_is_valid(root) ||
+        !noc__depfile_path_is_valid(options->output_root) ||
+        !noc__depfile_path_is_valid(input_path)) {
+        noc__report(context,
+                    NOC_DIAGNOSTIC_ERROR,
+                    location,
+                    "batch paths must be non-empty and cannot contain newlines");
+        goto done;
+    }
+    if (!noc__batch_platform_path_is_supported(root) ||
+        !noc__batch_platform_path_is_supported(options->output_root) ||
+        !noc__batch_platform_path_is_supported(input_path)) {
+        noc__report(context,
+                    NOC_DIAGNOSTIC_ERROR,
+                    location,
+                    "batch path is not supported by the Windows ANSI path backend");
+        goto done;
+    }
+    root_count = strlen(root);
+    while (root_count > 1 && noc__path_is_separator(root[root_count - 1])) {
+#ifdef _WIN32
+        if (root_count == 3 && root[1] == ':') break;
+#endif
+        root_count -= 1;
+    }
+    if (root_count == 1 && root[0] == '.') {
+        if (noc__path_is_absolute(input_path)) {
+            noc__report(context,
+                        NOC_DIAGNOSTIC_ERROR,
+                        location,
+                        "absolute batch input is outside relative root '.'");
+            goto done;
+        }
+        suffix = input_path;
+        while (suffix[0] == '.' && noc__path_is_separator(suffix[1])) suffix += 2;
+    } else {
+        size_t i;
+        for (i = 0; i < root_count; ++i) {
+            if (!input_path[i] || !noc__path_character_equal(root[i], input_path[i])) {
+                noc__report(context,
+                            NOC_DIAGNOSTIC_ERROR,
+                            location,
+                            "batch input is outside input root '%s'",
+                            root);
+                goto done;
+            }
+        }
+        suffix = input_path + root_count;
+        if (root_count == 0 || !noc__path_is_separator(root[root_count - 1])) {
+            if (!noc__path_is_separator(*suffix)) {
+                noc__report(context,
+                            NOC_DIAGNOSTIC_ERROR,
+                            location,
+                            "batch input is outside input root '%s'",
+                            root);
+                goto done;
+            }
+        }
+        while (noc__path_is_separator(*suffix)) suffix += 1;
+    }
+    cursor = suffix;
+    while (*cursor) {
+        const char *component;
+        size_t component_count;
+        while (noc__path_is_separator(*cursor)) cursor += 1;
+        if (!*cursor) break;
+        component = cursor;
+        while (*cursor && !noc__path_is_separator(*cursor)) cursor += 1;
+        component_count = (size_t)(cursor - component);
+        if ((component_count == 1 && component[0] == '.') ||
+            (component_count == 2 && component[0] == '.' && component[1] == '.') ||
+            memchr(component, ':', component_count) != NULL) {
+            noc__report(context,
+                        NOC_DIAGNOSTIC_ERROR,
+                        location,
+                        "batch input contains a non-portable or escaping path component");
+            goto done;
+        }
+        if ((relative_components > 0 && !noc_buffer_append_cstr(&relative, "/")) ||
+            !noc_buffer_append(&relative, component, component_count)) {
+            goto memory_failed;
+        }
+        relative_components += 1;
+    }
+    if (relative.count < 2 || relative.items[relative.count - 2] != '.' ||
+        (relative.items[relative.count - 1] != 'c' &&
+         relative.items[relative.count - 1] != 'h')) {
+        noc__report(context,
+                    NOC_DIAGNOSTIC_ERROR,
+                    location,
+                    "batch inputs must use ordinary .c or .h suffixes");
+        goto done;
+    }
+    {
+        size_t output_root_count = strlen(options->output_root);
+        size_t i;
+        while (output_root_count > 1 &&
+               noc__path_is_separator(options->output_root[output_root_count - 1])) {
+#ifdef _WIN32
+            if (output_root_count == 3 && options->output_root[1] == ':') break;
+#endif
+            output_root_count -= 1;
+        }
+        for (i = 0; i < output_root_count; ++i) {
+            char c = noc__path_is_separator(options->output_root[i])
+                         ? '/'
+                         : options->output_root[i];
+            if (!noc_buffer_append(output, &c, 1)) goto memory_failed;
+        }
+        if ((output_root_count > 0 && output->items[output->count - 1] != '/' &&
+             !noc_buffer_append_cstr(output, "/")) ||
+            !noc_buffer_append(output, relative.items, relative.count) ||
+            !noc_buffer_terminate(output)) {
+            goto memory_failed;
+        }
+    }
+    ok = true;
+    goto done;
+
+memory_failed:
+    noc__report(context,
+                NOC_DIAGNOSTIC_ERROR,
+                location,
+                "out of memory while mapping batch output path");
+done:
+    noc_buffer_free(&relative);
+    return ok;
+}
+
+static bool noc__directory_exists(const char *path)
+{
+#ifdef _WIN32
+    DWORD attributes = GetFileAttributesA(path);
+    return attributes != INVALID_FILE_ATTRIBUTES &&
+           (attributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
+#else
+    struct stat info;
+    return stat(path, &info) == 0 && S_ISDIR(info.st_mode);
+#endif
+}
+
+static bool noc__make_directory(const char *path)
+{
+    if (noc__directory_exists(path)) return true;
+#ifdef _WIN32
+    return _mkdir(path) == 0 || (errno == EEXIST && noc__directory_exists(path));
+#else
+    return mkdir(path, 0777) == 0 || (errno == EEXIST && noc__directory_exists(path));
+#endif
+}
+
+static bool noc__ensure_parent_directories(Noc_Context *context, const char *path)
+{
+    Noc_Buffer copy = {0};
+    Noc_Location location = {0};
+    size_t i;
+    bool ok = false;
+    location.path = path;
+    if (!noc_buffer_append_cstr(&copy, path) || !noc_buffer_terminate(&copy)) {
+        noc__report(context,
+                    NOC_DIAGNOSTIC_ERROR,
+                    location,
+                    "out of memory while creating output directories");
+        goto done;
+    }
+    for (i = 0; i < copy.count; ++i) {
+        bool separator = copy.items[i] == '/';
+#ifdef _WIN32
+        separator = separator || copy.items[i] == '\\';
+#endif
+        if (!separator || i == 0) continue;
+#ifdef _WIN32
+        if (i == 2 && copy.items[1] == ':') continue;
+#endif
+        copy.items[i] = '\0';
+        if (!noc__make_directory(copy.items)) {
+            noc__report(context,
+                        NOC_DIAGNOSTIC_ERROR,
+                        location,
+                        "could not create output directory '%s': %s",
+                        copy.items,
+                        strerror(errno));
+            copy.items[i] = '/';
+            goto done;
+        }
+        copy.items[i] = '/';
+    }
+    ok = true;
+
+done:
+    noc_buffer_free(&copy);
+    return ok;
+}
+
+NOCDEF bool noc_transform_files(Noc_Context *context,
+                                const Noc_Batch_Options *options,
+                                const char *const *input_paths,
+                                size_t input_count)
+{
+    Noc_Buffer *outputs = NULL;
+    Noc_Location no_location = {0};
+    size_t i;
+    size_t j;
+    bool ok = false;
+    if (!context || !options || !input_paths || input_count == 0 ||
+        input_count > SIZE_MAX / sizeof(*outputs)) {
+        if (context) {
+            noc__report(context,
+                        NOC_DIAGNOSTIC_ERROR,
+                        no_location,
+                        "batch transformation requires at least one input");
+        }
+        return false;
+    }
+    outputs = (Noc_Buffer *)calloc(input_count, sizeof(*outputs));
+    if (!outputs) {
+        noc__report(context,
+                    NOC_DIAGNOSTIC_ERROR,
+                    no_location,
+                    "out of memory while preparing batch transformation");
+        return false;
+    }
+    for (i = 0; i < input_count; ++i) {
+        if (!input_paths[i]) {
+            noc__report(context,
+                        NOC_DIAGNOSTIC_ERROR,
+                        no_location,
+                        "batch input path cannot be NULL");
+            goto done;
+        }
+        if (!noc__batch_map_output(context, options, input_paths[i], &outputs[i])) {
+            goto done;
+        }
+        for (j = 0; j < i; ++j) {
+            if (noc__paths_equal_for_output(outputs[j].items, outputs[i].items)) {
+                Noc_Location location = {0};
+                location.path = input_paths[i];
+                noc__report(context,
+                            NOC_DIAGNOSTIC_ERROR,
+                            location,
+                            "batch inputs map to the same output '%s'",
+                            outputs[i].items);
+                goto done;
+            }
+        }
+    }
+    for (i = 0; i < input_count; ++i) {
+        for (j = 0; j < input_count; ++j) {
+            if (noc__paths_equal_for_output(outputs[i].items, input_paths[j]) ||
+                noc__paths_refer_to_same_file(outputs[i].items, input_paths[j])) {
+                Noc_Location location = {0};
+                location.path = input_paths[j];
+                noc__report(context,
+                            NOC_DIAGNOSTIC_ERROR,
+                            location,
+                            "batch output '%s' aliases input '%s'",
+                            outputs[i].items,
+                            input_paths[j]);
+                goto done;
+            }
+        }
+    }
+    for (i = 0; i < input_count; ++i) {
+        if (!noc__ensure_parent_directories(context, outputs[i].items)) goto done;
+        if (options->emit_depfiles) {
+            Noc_Transform_Result result = {0};
+            Noc_Buffer depfile = {0};
+            Noc_Buffer depfile_path = {0};
+            size_t errors_before = context->error_count;
+            bool transformed = noc_transform_file_with_result(context,
+                                                               input_paths[i],
+                                                               outputs[i].items,
+                                                               &result);
+            if (transformed) {
+                transformed = noc_buffer_append_cstr(&depfile_path, outputs[i].items) &&
+                              noc_buffer_append_cstr(&depfile_path, ".d") &&
+                              noc_buffer_terminate(&depfile_path) &&
+                              noc_generate_depfile(context,
+                                                   outputs[i].items,
+                                                   input_paths[i],
+                                                   &result,
+                                                   &depfile) &&
+                              noc__write_output_atomic(context,
+                                                       depfile_path.items,
+                                                       depfile.items,
+                                                       depfile.count,
+                                                       no_location);
+                if (!transformed && context->error_count == errors_before) {
+                    noc__report(context,
+                                NOC_DIAGNOSTIC_ERROR,
+                                no_location,
+                                "could not generate batch depfile");
+                }
+            }
+            noc_buffer_free(&depfile_path);
+            noc_buffer_free(&depfile);
+            noc_transform_result_free(&result);
+            if (!transformed) goto done;
+        } else if (!noc_transform_file(context, input_paths[i], outputs[i].items)) {
+            goto done;
+        }
+    }
+    ok = true;
+
+done:
+    for (i = 0; i < input_count; ++i) noc_buffer_free(&outputs[i]);
+    free(outputs);
+    return ok;
+}
+
 static bool noc__resolve_path(const char *source_path,
                               const char *referenced_path,
                               Noc_Buffer *resolved)
@@ -4660,6 +5043,8 @@ static void noc__print_usage(FILE *stream, const char *program)
     fprintf(stream,
             "Usage:\n"
             "  %s [options] INPUT.[ch] -o OUTPUT.[ch]\n"
+            "  %s --batch INPUT_ROOT OUTPUT_ROOT INPUT.[ch]...\n"
+            "  %s --batch-depfiles INPUT_ROOT OUTPUT_ROOT INPUT.[ch]...\n"
             "  %s --describe\n"
             "  %s --ide-metadata OUTPUT.h\n\n"
             "Options:\n"
@@ -4672,6 +5057,8 @@ static void noc__print_usage(FILE *stream, const char *program)
             "  -h, --help            Show this help\n",
             program,
             program,
+            program,
+            program,
             program);
 }
 
@@ -4682,6 +5069,36 @@ NOCDEF int noc_run_cli(Noc_Context *context, int argc, char **argv)
     const char *depfile = NULL;
     const char *dep_target = NULL;
     int i;
+    if (argc > 1 &&
+        (strcmp(argv[1], "--batch") == 0 ||
+         strcmp(argv[1], "--batch-depfiles") == 0)) {
+        Noc_Batch_Options options;
+        const char **batch_inputs;
+        size_t batch_input_count;
+        bool ok;
+        if (argc < 5) {
+            noc__print_usage(stderr, argv[0]);
+            return 2;
+        }
+        options.input_root = argv[2];
+        options.output_root = argv[3];
+        options.emit_depfiles = strcmp(argv[1], "--batch-depfiles") == 0;
+        batch_input_count = (size_t)(argc - 4);
+        if (batch_input_count > SIZE_MAX / sizeof(*batch_inputs)) return 1;
+        batch_inputs = (const char **)malloc(batch_input_count * sizeof(*batch_inputs));
+        if (!batch_inputs) {
+            Noc_Location no_location = {0};
+            noc__report(context,
+                        NOC_DIAGNOSTIC_ERROR,
+                        no_location,
+                        "out of memory while preparing batch CLI inputs");
+            return 1;
+        }
+        for (i = 0; i < (int)batch_input_count; ++i) batch_inputs[i] = argv[i + 4];
+        ok = noc_transform_files(context, &options, batch_inputs, batch_input_count);
+        free(batch_inputs);
+        return ok ? 0 : 1;
+    }
     for (i = 1; i < argc; ++i) {
         const char *argument = argv[i];
         if (strcmp(argument, "-h") == 0 || strcmp(argument, "--help") == 0) {

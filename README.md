@@ -363,6 +363,53 @@ The depfile target defaults to the transformed `-o` path. Input, transformed
 output, and depfile paths must be distinct; both generated files use unique
 temporary files and atomic replacement.
 
+## Mirrored multi-file transformation
+
+`noc_transform_files` preflights a set of ordinary `.c`/`.h` paths, maps each
+path relative to an input root, creates the corresponding output directories,
+and transforms them into an isolated mirror:
+
+```c
+const char *inputs[] = {
+    "src/app.c",
+    "src/include/project.h",
+};
+Noc_Batch_Options batch = {
+    .input_root = "src",
+    .output_root = "build/generated",
+    .emit_depfiles = true,
+};
+
+if (!noc_transform_files(&noc, &batch, inputs, 2)) return 1;
+```
+
+This produces `build/generated/app.c` and
+`build/generated/include/project.h`; optional depfiles are written beside them
+as `.c.d`/`.h.d`. The dialect CLI exposes the same operation:
+
+```console
+$ dialect --batch src build/generated \
+    src/app.c src/include/project.h
+$ dialect --batch-depfiles src build/generated \
+    src/app.c src/include/project.h
+```
+
+All mappings and duplicate output collisions are checked before the first write.
+Inputs must reside lexically below `input_root`, use `.c` or `.h`, and cannot
+contain `.`/`..` or colon-bearing relative components, preventing output-root
+escape and keeping mirrors portable to Windows. Each file is atomically
+replaced, but the batch as a whole is intentionally not a cross-file
+transaction: outputs completed before a later transformation error remain.
+Outputs are also preflighted against every input, so an output tree nested under
+the input root cannot overwrite a source that the batch has not read yet.
+
+The current Windows backend uses narrow ANSI filesystem calls. Batch mode
+therefore rejects UNC roots, drive-relative forms such as `C:relative`, and
+non-ASCII paths rather than silently applying incorrect containment or collision
+rules. Rooted drive paths such as `C:/project/src` remain supported. Removing
+these restrictions requires a future end-to-end UTF-16 filesystem backend, not
+only a different string comparison.
+
 Callbacks can pass a captured slice to `noc_rw_emit_transformed` when nested
 dialect expressions should be expanded before emission. Nested transforms use
 the same registry and source path, merge dependencies into the outer result,

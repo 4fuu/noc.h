@@ -207,15 +207,35 @@ static bool build_rules_example(void)
     return nob_cmd_run(&command);
 }
 
-static bool generate_ide_overlay(const char *input, const char *output)
+static bool generate_ide_overlays(void)
 {
-    const char *inputs[] = {input, NOC_RULES_DIALECT, "nob.c"};
+    const char *app_output = "build/generated/ide/app.c";
+    const char *header_output = "build/generated/ide/math.h";
+    const char *inputs[] = {
+        "examples/ide/app.c",
+        "examples/ide/math.h",
+        NOC_RULES_DIALECT,
+        "nob.c",
+    };
     Nob_Cmd command = {0};
-    int rebuild = output_rebuild_state(output, inputs, NOB_ARRAY_LEN(inputs));
-    if (rebuild < 0) return false;
-    if (rebuild == 0) return nob_file_exists(output) > 0;
-    nob_cmd_append(&command, NOC_RULES_DIALECT, input, "-o", output);
-    return nob_cmd_run(&command);
+    int app_rebuild = output_rebuild_state(app_output, inputs, NOB_ARRAY_LEN(inputs));
+    int header_rebuild = output_rebuild_state(header_output,
+                                              inputs,
+                                              NOB_ARRAY_LEN(inputs));
+    if (app_rebuild < 0 || header_rebuild < 0) return false;
+    if (app_rebuild != 0 || header_rebuild != 0 ||
+        nob_file_exists("build/generated/ide/app.c.d") <= 0 ||
+        nob_file_exists("build/generated/ide/math.h.d") <= 0) {
+        nob_cmd_append(&command,
+                       NOC_RULES_DIALECT,
+                       "--batch-depfiles",
+                       "examples/ide",
+                       "build/generated/ide",
+                       "examples/ide/app.c",
+                       "examples/ide/math.h");
+        if (!nob_cmd_run(&command)) return false;
+    }
+    return nob_file_exists(app_output) > 0 && nob_file_exists(header_output) > 0;
 }
 
 static bool generate_ide_metadata(void)
@@ -239,8 +259,7 @@ static bool build_ide_example(void)
     Nob_Cmd command = {0};
     int rebuild;
     if (!build_rules_dialect() ||
-        !generate_ide_overlay("examples/ide/app.c", output_source) ||
-        !generate_ide_overlay("examples/ide/math.h", output_header) ||
+        !generate_ide_overlays() ||
         !generate_ide_metadata() ||
         !verify_generated_file(metadata, "tests/golden/rules_metadata.h")) {
         return false;

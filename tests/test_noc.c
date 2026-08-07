@@ -1138,6 +1138,15 @@ static bool expand_twice(Noc_Rewriter *rewriter,
            noc_rw_emit_cstr(rewriter, "))");
 }
 
+static bool expand_static_attribute(Noc_Rewriter *rewriter,
+                                    const Noc_Rule *rule,
+                                    void *user_data)
+{
+    (void)rule;
+    (void)user_data;
+    return noc_rw_emit_cstr(rewriter, "static");
+}
+
 static void test_ide_metadata_header(void)
 {
     Noc_Context context;
@@ -1249,6 +1258,167 @@ static void test_depfile_generation(void)
     CHECK(output.items == preserved_items && output.count == preserved_count);
 
     noc_buffer_free(&output);
+    noc_context_deinit(&context);
+}
+
+static void test_batch_transformation(void)
+{
+    const char *inputs[] = {
+        "examples/ide/app.c",
+        "examples/ide/math.h",
+    };
+    const char *duplicates[] = {
+        "examples/ide/app.c",
+        "examples/ide/app.c",
+    };
+    const char *escaping[] = {"examples/ide/../ide/app.c"};
+    const char *overlapping[] = {
+        "tests/fixtures/batch-overlap/a.c",
+        "tests/fixtures/batch-overlap/sub/a.c",
+    };
+    const char *late_invalid[] = {
+        "examples/ide/app.c",
+        "examples-other/not-under-root.c",
+    };
+    static const char app_depfile[] =
+        "build/batch-api/ide/app.c: examples/ide/app.c\n";
+    static const char header_depfile[] =
+        "build/batch-api/ide/math.h: examples/ide/math.h\n";
+    Noc_Batch_Options options = {"examples", "build/batch-api", true};
+    Noc_Context context;
+    Diagnostic_State diagnostics = {0};
+    Noc_Rule square = {
+        "square",
+        NOC_RULE_EXPRESSION,
+        "@square(expression)",
+        "Test batch expression rule.",
+        expand_twice,
+        NULL,
+    };
+    Noc_Rule private_rule = {
+        "private",
+        NOC_RULE_ATTRIBUTE,
+        "@private declaration",
+        "Test batch attribute rule.",
+        expand_static_attribute,
+        NULL,
+    };
+    const char *paths[] = {
+        "build/batch-api/ide/app.c",
+        "build/batch-api/ide/math.h",
+        "build/batch-api/ide/app.c.d",
+        "build/batch-api/ide/math.h.d",
+    };
+    char contents[2048];
+    size_t counts[4] = {0};
+    size_t i;
+
+    noc_context_init(&context);
+    noc_context_set_diagnostic(&context, count_diagnostics, &diagnostics);
+    context.options.emit_line_directives = false;
+    CHECK(noc_register_rule(&context, square));
+    CHECK(noc_register_rule(&context, private_rule));
+    CHECK(noc_transform_files(&context,
+                              &options,
+                              inputs,
+                              sizeof(inputs) / sizeof(inputs[0])));
+    for (i = 0; i < sizeof(paths) / sizeof(paths[0]); ++i) {
+        FILE *file = fopen(paths[i], "rb");
+        CHECK(file != NULL);
+        if (file) {
+            counts[i] = fread(contents, 1, sizeof(contents) - 1, file);
+            CHECK(!ferror(file));
+            CHECK(fclose(file) == 0);
+            contents[counts[i]] = '\0';
+            if (i < 2) CHECK(strchr(contents, '@') == NULL);
+            if (i == 2) CHECK(slice_equals((Noc_Slice){contents, counts[i]}, app_depfile));
+            if (i == 3) CHECK(slice_equals((Noc_Slice){contents, counts[i]}, header_depfile));
+        }
+    }
+    CHECK(counts[0] > 0 && counts[1] > 0);
+
+    options.input_root = "tests/fixtures/batch-overlap";
+    options.output_root = "tests/fixtures/batch-overlap/sub";
+    options.emit_depfiles = false;
+    CHECK(!noc_transform_files(&context,
+                               &options,
+                               overlapping,
+                               sizeof(overlapping) / sizeof(overlapping[0])));
+    CHECK(diagnostics.errors == 1);
+    CHECK(strstr(diagnostics.last_message, "aliases input") != NULL);
+    {
+        static const char preserved[] = "static int second_input = 2;\n";
+        FILE *file = fopen("tests/fixtures/batch-overlap/sub/a.c", "rb");
+        CHECK(file != NULL);
+        if (file) {
+            size_t count = fread(contents, 1, sizeof(contents), file);
+            CHECK(fclose(file) == 0);
+            CHECK(count == sizeof(preserved) - 1);
+            CHECK(memcmp(contents, preserved, sizeof(preserved) - 1) == 0);
+        }
+    }
+
+    options.input_root = "examples";
+    options.output_root = "build/batch-collision";
+    CHECK(!noc_transform_files(&context,
+                               &options,
+                               duplicates,
+                               sizeof(duplicates) / sizeof(duplicates[0])));
+    CHECK(diagnostics.errors == 2);
+    CHECK(strstr(diagnostics.last_message, "same output") != NULL);
+
+    options.output_root = "build/batch-escape";
+    CHECK(!noc_transform_files(&context,
+                               &options,
+                               escaping,
+                               sizeof(escaping) / sizeof(escaping[0])));
+    CHECK(diagnostics.errors == 3);
+    CHECK(strstr(diagnostics.last_message, "escaping path component") != NULL);
+
+    (void)remove("build/batch-preflight/ide/app.c");
+    options.output_root = "build/batch-preflight";
+    CHECK(!noc_transform_files(&context,
+                               &options,
+                               late_invalid,
+                               sizeof(late_invalid) / sizeof(late_invalid[0])));
+    CHECK(diagnostics.errors == 4);
+    CHECK(strstr(diagnostics.last_message, "outside input root") != NULL);
+    {
+        FILE *file = fopen("build/batch-preflight/ide/app.c", "rb");
+        CHECK(file == NULL);
+        if (file) fclose(file);
+    }
+#ifdef _WIN32
+    {
+        const char *drive_input[] = {"C:\\src\\app.c"};
+        const char *unc_input[] = {"\\\\server\\share\\app.c"};
+        const char *non_ascii_input[] = {"examples/\200/app.c"};
+        const char *case_collision[] = {
+            "examples/ide/app.c",
+            "examples/ide/APP.c",
+        };
+        const char *separator_collision[] = {
+            "examples/ide/app.c",
+            "examples\\ide\\app.c",
+        };
+        options.input_root = "C:";
+        options.output_root = "build/batch-windows";
+        CHECK(!noc_transform_files(&context, &options, drive_input, 1));
+        CHECK(diagnostics.errors == 5);
+        options.input_root = "\\\\server\\share";
+        CHECK(!noc_transform_files(&context, &options, unc_input, 1));
+        CHECK(diagnostics.errors == 6);
+        options.input_root = "examples";
+        CHECK(!noc_transform_files(&context, &options, non_ascii_input, 1));
+        CHECK(diagnostics.errors == 7);
+        CHECK(!noc_transform_files(&context, &options, case_collision, 2));
+        CHECK(diagnostics.errors == 8);
+        CHECK(strstr(diagnostics.last_message, "same output") != NULL);
+        CHECK(!noc_transform_files(&context, &options, separator_collision, 2));
+        CHECK(diagnostics.errors == 9);
+        CHECK(strstr(diagnostics.last_message, "same output") != NULL);
+    }
+#endif
     noc_context_deinit(&context);
 }
 
@@ -2066,6 +2236,7 @@ int main(void)
     test_syntax_edit_set();
     test_ide_metadata_header();
     test_depfile_generation();
+    test_batch_transformation();
     test_transform_dependencies();
     test_rewriter_source_mapping();
     test_rewriter_structure_bridge();
