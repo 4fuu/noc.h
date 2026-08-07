@@ -52,12 +52,12 @@ passes, and the milestone has been committed and pushed.
 ## Milestone 5 — IDE artifacts (lower priority)
 
 - [x] Define an IDE-generation options structure and stable public API.
-- [ ] Generate transformed header overlays from dialect `.h` files.
+- [x] Generate transformed header overlays from dialect `.h` files.
 - [x] Generate a dialect metadata header containing registered rule names,
       scopes, syntax, and descriptions for tooling/autocomplete integrations.
-- [ ] Evaluate and document clangd/compile_commands integration using generated
+- [x] Evaluate and document clangd/compile_commands integration using generated
       `.c` files and `#line` mappings.
-- [ ] Add golden-file tests and an end-to-end IDE-header example.
+- [x] Add golden-file tests and an end-to-end IDE-header example.
 
 ## Later work
 

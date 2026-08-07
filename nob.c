@@ -15,6 +15,7 @@
 #define NOC_EMBED_EXAMPLE "build/embed-example" NOC_EXE
 #define NOC_RULES_DIALECT "build/rules-dialect" NOC_EXE
 #define NOC_RULES_EXAMPLE "build/rules-example" NOC_EXE
+#define NOC_IDE_EXAMPLE "build/ide-example" NOC_EXE
 
 #if !defined(_MSC_VER) || defined(__clang__)
 static const char *compiler(void)
@@ -27,7 +28,8 @@ static const char *compiler(void)
 static bool ensure_build_directories(void)
 {
     return nob_mkdir_if_not_exists("build") &&
-           nob_mkdir_if_not_exists("build/generated");
+           nob_mkdir_if_not_exists("build/generated") &&
+           nob_mkdir_if_not_exists("build/generated/ide");
 }
 
 static int output_rebuild_state(const char *output,
@@ -181,6 +183,72 @@ static bool build_rules_example(void)
     return nob_cmd_run(&command);
 }
 
+static bool generate_ide_overlay(const char *input, const char *output)
+{
+    const char *inputs[] = {input, NOC_RULES_DIALECT, "nob.c"};
+    Nob_Cmd command = {0};
+    int rebuild = output_rebuild_state(output, inputs, NOB_ARRAY_LEN(inputs));
+    if (rebuild < 0) return false;
+    if (rebuild == 0) return nob_file_exists(output) > 0;
+    nob_cmd_append(&command, NOC_RULES_DIALECT, input, "-o", output);
+    return nob_cmd_run(&command);
+}
+
+static bool generate_ide_metadata(void)
+{
+    const char *output = "build/generated/ide/rules_metadata.h";
+    const char *inputs[] = {NOC_RULES_DIALECT, "nob.c"};
+    Nob_Cmd command = {0};
+    int rebuild = output_rebuild_state(output, inputs, NOB_ARRAY_LEN(inputs));
+    if (rebuild < 0) return false;
+    if (rebuild == 0) return nob_file_exists(output) > 0;
+    nob_cmd_append(&command, NOC_RULES_DIALECT, "--ide-metadata", output);
+    return nob_cmd_run(&command);
+}
+
+static bool verify_ide_metadata(void)
+{
+    Nob_String_Builder actual = {0};
+    Nob_String_Builder expected = {0};
+    bool ok = false;
+    if (!nob_read_entire_file("build/generated/ide/rules_metadata.h", &actual) ||
+        !nob_read_entire_file("tests/golden/rules_metadata.h", &expected)) {
+        goto done;
+    }
+    ok = actual.count == expected.count &&
+         (actual.count == 0 || memcmp(actual.items, expected.items, actual.count) == 0);
+    if (!ok) {
+        nob_log(NOB_ERROR,
+                "generated IDE metadata differs from tests/golden/rules_metadata.h");
+    }
+
+done:
+    nob_sb_free(actual);
+    nob_sb_free(expected);
+    return ok;
+}
+
+static bool build_ide_example(void)
+{
+    const char *output_source = "build/generated/ide/app.c";
+    const char *output_header = "build/generated/ide/math.h";
+    const char *metadata = "build/generated/ide/rules_metadata.h";
+    const char *inputs[] = {output_source, output_header, metadata, "nob.c"};
+    Nob_Cmd command = {0};
+    int rebuild;
+    if (!build_rules_dialect() ||
+        !generate_ide_overlay("examples/ide/app.c", output_source) ||
+        !generate_ide_overlay("examples/ide/math.h", output_header) ||
+        !generate_ide_metadata() || !verify_ide_metadata()) {
+        return false;
+    }
+    rebuild = output_rebuild_state(NOC_IDE_EXAMPLE, inputs, NOB_ARRAY_LEN(inputs));
+    if (rebuild < 0) return false;
+    if (rebuild == 0) return nob_file_exists(NOC_IDE_EXAMPLE) > 0;
+    append_compile_command(&command, NOC_IDE_EXAMPLE, output_source);
+    return nob_cmd_run(&command);
+}
+
 static bool remove_build_entry(Nob_Walk_Entry entry)
 {
     int result;
@@ -219,20 +287,27 @@ int main(int argc, char **argv)
 
     if (strcmp(target, "test") == 0) {
         Nob_Cmd command = {0};
-        if (!build_tests() || !build_embed_example() || !build_rules_example()) return 1;
+        if (!build_tests() || !build_embed_example() || !build_rules_example() ||
+            !build_ide_example()) {
+            return 1;
+        }
         nob_cmd_append(&command, NOC_TESTS);
         if (!nob_cmd_run(&command)) return 1;
         nob_cmd_append(&command, NOC_EMBED_EXAMPLE);
         if (!nob_cmd_run(&command)) return 1;
         nob_cmd_append(&command, NOC_RULES_EXAMPLE);
+        if (!nob_cmd_run(&command)) return 1;
+        nob_cmd_append(&command, NOC_IDE_EXAMPLE);
         return nob_cmd_run(&command) ? 0 : 1;
     }
     if (strcmp(target, "example") == 0) {
         Nob_Cmd command = {0};
-        if (!build_embed_example() || !build_rules_example()) return 1;
+        if (!build_embed_example() || !build_rules_example() || !build_ide_example()) return 1;
         nob_cmd_append(&command, NOC_EMBED_EXAMPLE);
         if (!nob_cmd_run(&command)) return 1;
         nob_cmd_append(&command, NOC_RULES_EXAMPLE);
+        if (!nob_cmd_run(&command)) return 1;
+        nob_cmd_append(&command, NOC_IDE_EXAMPLE);
         return nob_cmd_run(&command) ? 0 : 1;
     }
     if (strcmp(target, "describe") == 0) {

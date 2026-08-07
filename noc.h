@@ -29,9 +29,9 @@
 #define NOC_H_INCLUDED
 
 #define NOC_VERSION_MAJOR 0
-#define NOC_VERSION_MINOR 10
+#define NOC_VERSION_MINOR 11
 #define NOC_VERSION_PATCH 0
-#define NOC_VERSION "0.10.0"
+#define NOC_VERSION "0.11.0"
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -4335,17 +4335,67 @@ static bool noc__replace_output(const char *temporary_path, const char *output_p
 #endif
 }
 
+static bool noc__write_output_atomic(Noc_Context *context,
+                                     const char *output_path,
+                                     const void *data,
+                                     size_t count,
+                                     Noc_Location location)
+{
+    Noc_Buffer temporary_path = {0};
+    FILE *file = NULL;
+    bool ok = false;
+    bool temporary_created = false;
+    file = noc__open_unique_output(context, output_path, &temporary_path, location);
+    if (!file) goto done;
+    temporary_created = true;
+    if (count > 0 && fwrite(data, 1, count, file) != count) {
+        noc__report(context,
+                    NOC_DIAGNOSTIC_ERROR,
+                    location,
+                    "could not write '%s': %s",
+                    temporary_path.items,
+                    strerror(errno));
+        goto done;
+    }
+    if (fclose(file) != 0) {
+        file = NULL;
+        noc__report(context,
+                    NOC_DIAGNOSTIC_ERROR,
+                    location,
+                    "could not close '%s': %s",
+                    temporary_path.items,
+                    strerror(errno));
+        goto done;
+    }
+    file = NULL;
+    if (!noc__replace_output(temporary_path.items, output_path)) {
+        noc__report(context,
+                    NOC_DIAGNOSTIC_ERROR,
+                    location,
+                    "could not rename '%s' to '%s': %s",
+                    temporary_path.items,
+                    output_path,
+                    strerror(errno));
+        goto done;
+    }
+    temporary_created = false;
+    ok = true;
+
+done:
+    if (file) fclose(file);
+    if (temporary_created) (void)remove(temporary_path.items);
+    noc_buffer_free(&temporary_path);
+    return ok;
+}
+
 NOCDEF bool noc_transform_file(Noc_Context *context,
                                const char *input_path,
                                const char *output_path)
 {
     Noc_Buffer source = {0};
-    Noc_Buffer temporary_path = {0};
     Noc_Transform_Result result = {0};
     Noc_Location no_location = {0};
-    FILE *file = NULL;
     bool ok = false;
-    bool temporary_created = false;
     if (noc__paths_refer_to_same_file(input_path, output_path)) {
         noc__report(context,
                     NOC_DIAGNOSTIC_ERROR,
@@ -4362,48 +4412,14 @@ NOCDEF bool noc_transform_file(Noc_Context *context,
                               &result)) {
         goto done;
     }
-    file = noc__open_unique_output(context, output_path, &temporary_path, no_location);
-    if (!file) goto done;
-    temporary_created = true;
-    if (result.output_count > 0 &&
-        fwrite(result.output, 1, result.output_count, file) != result.output_count) {
-        noc__report(context,
-                    NOC_DIAGNOSTIC_ERROR,
-                    no_location,
-                    "could not write '%s': %s",
-                    temporary_path.items,
-                    strerror(errno));
-        goto done;
-    }
-    if (fclose(file) != 0) {
-        file = NULL;
-        noc__report(context,
-                    NOC_DIAGNOSTIC_ERROR,
-                    no_location,
-                    "could not close '%s': %s",
-                    temporary_path.items,
-                    strerror(errno));
-        goto done;
-    }
-    file = NULL;
-    if (!noc__replace_output(temporary_path.items, output_path)) {
-        noc__report(context,
-                    NOC_DIAGNOSTIC_ERROR,
-                    no_location,
-                    "could not rename '%s' to '%s': %s",
-                    temporary_path.items,
-                    output_path,
-                    strerror(errno));
-        goto done;
-    }
-    temporary_created = false;
-    ok = true;
+    ok = noc__write_output_atomic(context,
+                                  output_path,
+                                  result.output,
+                                  result.output_count,
+                                  no_location);
 
 done:
-    if (file) fclose(file);
-    if (temporary_created) (void)remove(temporary_path.items);
     noc_transform_result_free(&result);
-    noc_buffer_free(&temporary_path);
     noc_buffer_free(&source);
     return ok;
 }
@@ -4526,13 +4542,16 @@ static void noc__print_usage(FILE *stream, const char *program)
 {
     fprintf(stream,
             "Usage:\n"
-            "  %s [options] INPUT.c -o OUTPUT.c\n"
-            "  %s --describe\n\n"
+            "  %s [options] INPUT.[ch] -o OUTPUT.[ch]\n"
+            "  %s --describe\n"
+            "  %s --ide-metadata OUTPUT.h\n\n"
             "Options:\n"
-            "  -o PATH               Write transformed C to PATH\n"
+            "  -o PATH               Write transformed C source/header to PATH\n"
             "  --describe            Describe all registered dialect rules\n"
+            "  --ide-metadata PATH    Write a default IDE metadata header\n"
             "  --no-line-directives  Do not prepend a #line directive\n"
             "  -h, --help            Show this help\n",
+            program,
             program,
             program);
 }
@@ -4551,6 +4570,27 @@ NOCDEF int noc_run_cli(Noc_Context *context, int argc, char **argv)
         if (strcmp(argument, "--describe") == 0) {
             noc_describe(context, stdout);
             return 0;
+        }
+        if (strcmp(argument, "--ide-metadata") == 0) {
+            Noc_Buffer metadata = {0};
+            Noc_Location no_location = {0};
+            bool ok;
+            if (i + 1 >= argc) {
+                fprintf(stderr, "noc: error: --ide-metadata requires a path\n");
+                return 2;
+            }
+            if (i != 1 || argc != 3) {
+                fprintf(stderr, "noc: error: --ide-metadata must be used alone\n");
+                return 2;
+            }
+            ok = noc_generate_ide_metadata_header(context, NULL, &metadata) &&
+                 noc__write_output_atomic(context,
+                                          argv[i + 1],
+                                          metadata.items,
+                                          metadata.count,
+                                          no_location);
+            noc_buffer_free(&metadata);
+            return ok ? 0 : 1;
         }
         if (strcmp(argument, "--no-line-directives") == 0) {
             context->options.emit_line_directives = false;

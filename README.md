@@ -98,6 +98,12 @@ fwrite(header.items, 1, header.count, stdout);
 noc_buffer_free(&header);
 ```
 
+The generic dialect CLI exposes the default form directly:
+
+```console
+$ build/rules-dialect --ide-metadata build/generated/ide/rules_metadata.h
+```
+
 Options may be `NULL` or zero-initialized for deterministic defaults;
 `omit_descriptions` reduces the artifact when descriptions are unnecessary.
 The include guard and macro prefix must be C identifiers, arbitrary metadata is
@@ -105,6 +111,40 @@ escaped as C strings, and generation replaces the destination buffer only on
 success. This metadata enables integrations to discover the dialect, but a
 header alone cannot make an ordinary C parser understand `@name` syntax;
 indexers should consume transformed source/header overlays.
+
+### clangd and transformed overlays
+
+The [`examples/ide`](examples/ide) build demonstrates the complete indexing
+shape. Its ordinary [`math.h`](examples/ide/math.h) contains dialect syntax.
+The rules dialect transforms both that header and `app.c` into the same mirrored
+output directory, generates `rules_metadata.h`, then compiles and runs the
+overlay as standard C. The metadata output is also checked byte-for-byte against
+[`tests/golden/rules_metadata.h`](tests/golden/rules_metadata.h).
+
+For clangd, generate a mirrored tree such as `build/generated/ide`, keep source
+and header relative paths aligned, and make `compile_commands.json` name the
+generated `.c` translation units rather than originals containing `@` syntax.
+Put the generated include root before the original include root:
+
+```json
+{
+  "directory": "/absolute/path/to/project",
+  "file": "/absolute/path/to/project/build/generated/ide/app.c",
+  "arguments": [
+    "cc", "-std=c11",
+    "-I/absolute/path/to/project/build/generated/ide",
+    "-c", "/absolute/path/to/project/build/generated/ide/app.c"
+  ]
+}
+```
+
+Default `#line` directives point diagnostics from overlays back to the ordinary
+`.c`/`.h` dialect paths. Regenerate overlays and the compilation database when
+sources, registered rules, dialect binaries, or reported dependencies change.
+Editors still open original sources for authoring; completion and semantic
+indexing come from the generated mirror. Tools that cannot associate the mirror
+with originals may expose generated paths for navigation, which is a clangd
+client integration limitation rather than something a metadata header can fix.
 
 ## Token streams and cursors
 
