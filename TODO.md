@@ -32,12 +32,12 @@ passes, and the milestone has been committed and pushed.
 
 ## Milestone 3 — reusable C structure analysis
 
-- [ ] Add lightweight top-level declaration/function discovery without claiming
+- [x] Add lightweight top-level declaration/function discovery without claiming
       to be a complete semantic C frontend.
-- [ ] Expose declaration kind, name token, signature range, body group, and source
+- [x] Expose declaration kind, name token, signature range, body group, and source
       location where determinable.
-- [ ] Add function parameter and compound-statement helpers.
-- [ ] Test functions, prototypes, variables, typedefs, structs/enums, attributes,
+- [x] Add function parameter and compound-statement helpers.
+- [x] Test functions, prototypes, variables, typedefs, structs/enums, attributes,
       nested declarators, and deliberately unsupported ambiguity.
 
 ## Milestone 4 — AST-assisted rewriting and composition

@@ -136,6 +136,50 @@ leave any prior tree intact. Trees borrow their token stream and become invalid
 after that stream is freed or successfully retokenized; failed retokenization
 preserves both the stream and its trees.
 
+## Lightweight C structure analysis
+
+`noc_c_translation_unit_build` discovers top-level declarations and ordinary
+prototype-style function definitions without performing macro expansion or
+typedef resolution. Each item contains exact token ranges for the complete
+item and signature, plus a best-effort name token and parameter/body ranges:
+
+```c
+Noc_C_Translation_Unit unit = {0};
+if (!noc_c_translation_unit_build(&noc, &tree, &unit)) return 1;
+
+for (size_t i = 0; i < unit.count; ++i) {
+    const Noc_C_External_Item *item = noc_c_external_item(&unit, i);
+    printf("%s: %s\n",
+           noc_c_external_kind_name(item->kind),
+           noc_c_declaration_kind_name(item->declaration_kind));
+
+    if (item->parameters.begin != NOC_TOKEN_INDEX_NONE) {
+        Noc_C_Parameter_List parameters = {0};
+        if (noc_c_parse_parameters(unit.stream, item->parameters, &parameters)) {
+            /* Parameter ranges and best-effort name tokens are now available. */
+        }
+        noc_c_parameter_list_free(&parameters);
+    }
+}
+
+noc_c_translation_unit_free(&unit);
+```
+
+The analysis distinguishes object, function, typedef, tag, and unknown
+declarations. Its declarator walker handles parenthesized pointers, functions
+returning function pointers, arrays, inline tag definitions, and recognized C,
+GNU, and MSVC attribute forms. Compound-statement helpers validate a body range
+and return its delimiter-free inner range. Translation-unit results own their
+item arrays and borrow only the token stream, so the lossless tree may be freed
+after analysis; successful retokenization invalidates the result.
+
+Classification is intentionally conservative. A comma declaration is reported
+as unknown because one item can declare mixed object and function entities.
+Names that require typedef knowledge, nested abstract parameter declarators,
+and unrecognized attribute macros may be left unset. K&R function definitions
+are not analyzed as functions; unknown top-level brace ranges are isolated so
+they do not consume the following declaration.
+
 ## Define a custom rule
 
 All extensions use the same registry and callback interface:
@@ -175,11 +219,12 @@ rejected.
 
 ## Current boundary
 
-This version deliberately handles explicit token-level transformations and a
-lossless delimiter tree. It does not expand C macros, build a semantic C AST,
-resolve typedefs, or change the C type system. Rules inside preprocessor
-directives are left untouched. More structured statement and declaration
-helpers can be added without changing the registration model.
+This version deliberately handles explicit token-level transformations, a
+lossless delimiter tree, and lightweight C structure discovery. It does not
+expand C macros, build a semantic C AST, resolve typedefs, or change the C type
+system. Rules inside preprocessor directives are left untouched. More
+structured statement and declaration helpers can be added without changing the
+registration model.
 
 The lexer accounts for backslash-newline splicing when recognizing comments and
 preprocessor directives. Splices inside identifiers or multi-character
