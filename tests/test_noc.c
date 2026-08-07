@@ -1403,6 +1403,122 @@ static void test_rewriter_source_mapping(void)
     noc_context_deinit(&context);
 }
 
+static bool expand_token_range(Noc_Rewriter *rewriter,
+                               const Noc_Rule *rule,
+                               void *user_data)
+{
+    const Noc_Token_Stream *stream = noc_rw_token_stream(rewriter);
+    Noc_Token_Range remaining = noc_rw_remaining_range(rewriter);
+    Noc_Token_Range wrong;
+    Noc_Token_Range whole;
+    Noc_Token_Range inside;
+    Noc_Token_Range consumed;
+    Noc_Token_Cursor cursor;
+    Noc_Slice source;
+    (void)rule;
+    (void)user_data;
+    CHECK(stream != NULL);
+    CHECK(noc_token_range_is_valid(stream, remaining));
+    if (!stream || !noc_token_cursor_init_range(&cursor, stream, remaining)) return false;
+    wrong.begin = remaining.begin + 1;
+    wrong.end = wrong.begin;
+    CHECK(!noc_rw_consume_range(rewriter, wrong));
+    CHECK(noc_rw_remaining_range(rewriter).begin == remaining.begin);
+    if (!noc_token_cursor_take_balanced(&cursor, "(", ")", &whole, &inside)) {
+        return false;
+    }
+    consumed.begin = remaining.begin;
+    consumed.end = cursor.index;
+    if (!noc_rw_consume_range(rewriter, consumed)) return false;
+    CHECK(noc_rw_remaining_range(rewriter).begin == consumed.end);
+    source = noc_token_range_source(stream, inside);
+    return source.data && noc_rw_emit_slice(rewriter, source);
+}
+
+static bool expand_syntax_node(Noc_Rewriter *rewriter,
+                               const Noc_Rule *rule,
+                               void *user_data)
+{
+    const Noc_Syntax_Tree *tree = noc_rw_syntax_tree(rewriter);
+    bool expect_tree = *(const bool *)user_data;
+    Noc_Token_Range before = noc_rw_remaining_range(rewriter);
+    Noc_Token_Range inner;
+    Noc_Slice source;
+    size_t node = NOC_SYNTAX_NONE;
+    (void)rule;
+    if (expect_tree) CHECK(tree != NULL);
+    CHECK(tree == noc_rw_syntax_tree(rewriter));
+    CHECK(!noc_rw_take_syntax(rewriter, NOC_SYNTAX_ROOT, &node));
+    CHECK(!noc_rw_take_syntax(rewriter, NOC_SYNTAX_BRACE_GROUP, &node));
+    CHECK(noc_rw_remaining_range(rewriter).begin == before.begin);
+    if (!tree ||
+        !noc_rw_take_syntax(rewriter, NOC_SYNTAX_PAREN_GROUP, &node)) {
+        return false;
+    }
+    CHECK(noc_syntax_node(tree, node)->kind == NOC_SYNTAX_PAREN_GROUP);
+    CHECK(noc_syntax_parent(tree, node) == noc_syntax_root(tree));
+    inner = noc_syntax_inner_range(tree, node);
+    CHECK(slice_equals(noc_token_range_source(tree->stream, inner), "(alpha), beta"));
+    source = noc_syntax_source(tree, node);
+    return source.data && noc_rw_emit_slice(rewriter, source);
+}
+
+static void test_rewriter_structure_bridge(void)
+{
+    static const char source[] =
+        "int ranged = @range /* lead */ (alpha, nested(1));\n"
+        "int syntax = @syntax /* gap */ ((alpha), beta);\n";
+    static const char expected[] =
+        "int ranged = alpha, nested(1);\n"
+        "int syntax = ((alpha), beta);\n";
+    Noc_Context context;
+    Noc_Transform_Result result = {0};
+    Diagnostic_State diagnostics = {0};
+    bool expect_tree = true;
+    Noc_Rule range_rule = {
+        "range",
+        NOC_RULE_EXPRESSION,
+        "@range(expression)",
+        "Parse and consume a token range through the public stream.",
+        expand_token_range,
+        NULL,
+    };
+    Noc_Rule syntax_rule = {
+        "syntax",
+        NOC_RULE_EXPRESSION,
+        "@syntax(group)",
+        "Consume a complete lossless syntax node.",
+        expand_syntax_node,
+        &expect_tree,
+    };
+
+    noc_context_init(&context);
+    context.options.emit_line_directives = false;
+    CHECK(noc_register_rule(&context, range_rule));
+    CHECK(noc_register_rule(&context, syntax_rule));
+    CHECK(noc_transform_source(&context,
+                               "structure-bridge.c",
+                               source,
+                               sizeof(source) - 1,
+                               &result));
+    CHECK(result.output_count == sizeof(expected) - 1);
+    CHECK(memcmp(result.output, expected, sizeof(expected) - 1) == 0);
+    noc_transform_result_free(&result);
+
+    noc_context_set_diagnostic(&context, count_diagnostics, &diagnostics);
+    expect_tree = false;
+    CHECK(!noc_transform_source(&context,
+                                "malformed-structure.c",
+                                "prefix @syntax (value] suffix",
+                                sizeof("prefix @syntax (value] suffix") - 1,
+                                &result));
+    CHECK(diagnostics.errors == 1);
+    CHECK(strstr(diagnostics.last_message, "expected closing delimiter") != NULL);
+    CHECK(result.output == NULL && result.output_count == 0);
+    noc_transform_result_free(&result);
+    noc_context_deinit(&context);
+}
+
 static bool expand_nested_value(Noc_Rewriter *rewriter,
                                 const Noc_Rule *rule,
                                 void *user_data)
@@ -1792,6 +1908,7 @@ int main(void)
     test_syntax_edit_set();
     test_transform_dependencies();
     test_rewriter_source_mapping();
+    test_rewriter_structure_bridge();
     test_nested_transformation();
     test_custom_rule();
     test_transactional_match();

@@ -29,9 +29,9 @@
 #define NOC_H_INCLUDED
 
 #define NOC_VERSION_MAJOR 0
-#define NOC_VERSION_MINOR 8
+#define NOC_VERSION_MINOR 9
 #define NOC_VERSION_PATCH 0
-#define NOC_VERSION "0.8.0"
+#define NOC_VERSION "0.9.0"
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -470,6 +470,20 @@ NOCDEF bool noc_rw_capture_balanced(Noc_Rewriter *rewriter,
                                     Noc_Slice *inside);
 NOCDEF const char *noc_rw_source_path(const Noc_Rewriter *rewriter);
 NOCDEF Noc_Location noc_rw_trigger_location(const Noc_Rewriter *rewriter);
+/* The stream and lazily built tree are borrowed and valid only for the current
+   expansion callback. They must not be modified, freed, retokenized, or
+   retained. The remaining half-open range excludes EOF and may be empty. */
+NOCDEF const Noc_Token_Stream *noc_rw_token_stream(const Noc_Rewriter *rewriter);
+NOCDEF Noc_Token_Range noc_rw_remaining_range(const Noc_Rewriter *rewriter);
+/* Consume a range beginning at the exact raw rewrite cursor. Invalid or
+   out-of-order ranges are rejected without moving the cursor. */
+NOCDEF bool noc_rw_consume_range(Noc_Rewriter *rewriter, Noc_Token_Range range);
+NOCDEF const Noc_Syntax_Tree *noc_rw_syntax_tree(Noc_Rewriter *rewriter);
+/* Skip trivia and consume the next complete lossless syntax node when its kind
+   matches. A mismatch leaves the cursor unchanged. */
+NOCDEF bool noc_rw_take_syntax(Noc_Rewriter *rewriter,
+                               Noc_Syntax_Kind kind,
+                               size_t *node);
 /* Record a build input in the transform result. Paths are copied and duplicate
    strings are coalesced in first-seen order. */
 NOCDEF bool noc_rw_add_dependency(Noc_Rewriter *rewriter, const char *path);
@@ -563,6 +577,9 @@ struct Noc_Rewriter {
     const Noc_Token *tokens;
     size_t tokens_count;
     size_t cursor;
+    const Noc_Token_Stream *stream;
+    Noc_Syntax_Tree syntax_tree;
+    bool syntax_tree_attempted;
     Noc_Location trigger_location;
     Noc_Buffer *output;
     Noc__String_List *dependencies;
@@ -1524,6 +1541,78 @@ NOCDEF const char *noc_rw_source_path(const Noc_Rewriter *rewriter)
 NOCDEF Noc_Location noc_rw_trigger_location(const Noc_Rewriter *rewriter)
 {
     return rewriter->trigger_location;
+}
+
+NOCDEF const Noc_Token_Stream *noc_rw_token_stream(const Noc_Rewriter *rewriter)
+{
+    return rewriter && noc_token_stream_is_valid(rewriter->stream)
+               ? rewriter->stream
+               : NULL;
+}
+
+NOCDEF Noc_Token_Range noc_rw_remaining_range(const Noc_Rewriter *rewriter)
+{
+    Noc_Token_Range invalid = {NOC_TOKEN_INDEX_NONE, NOC_TOKEN_INDEX_NONE};
+    const Noc_Token_Stream *stream = noc_rw_token_stream(rewriter);
+    if (!stream || rewriter->cursor >= stream->count) return invalid;
+    invalid.begin = rewriter->cursor;
+    invalid.end = stream->count - 1;
+    return invalid;
+}
+
+NOCDEF bool noc_rw_consume_range(Noc_Rewriter *rewriter, Noc_Token_Range range)
+{
+    Noc_Token_Range remaining = noc_rw_remaining_range(rewriter);
+    if (remaining.begin == NOC_TOKEN_INDEX_NONE || range.begin != remaining.begin ||
+        range.end < range.begin || range.end > remaining.end) {
+        return false;
+    }
+    rewriter->cursor = range.end;
+    return true;
+}
+
+NOCDEF const Noc_Syntax_Tree *noc_rw_syntax_tree(Noc_Rewriter *rewriter)
+{
+    if (!rewriter || !noc_rw_token_stream(rewriter)) return NULL;
+    if (!rewriter->syntax_tree_attempted) {
+        rewriter->syntax_tree_attempted = true;
+        if (!noc_syntax_tree_build(rewriter->context,
+                                   rewriter->stream,
+                                   &rewriter->syntax_tree)) {
+            rewriter->failed = true;
+            return NULL;
+        }
+    }
+    return noc_syntax_tree_is_valid(&rewriter->syntax_tree)
+               ? &rewriter->syntax_tree
+               : NULL;
+}
+
+NOCDEF bool noc_rw_take_syntax(Noc_Rewriter *rewriter,
+                               Noc_Syntax_Kind kind,
+                               size_t *node)
+{
+    const Noc_Syntax_Tree *tree;
+    size_t cursor;
+    size_t i;
+    if (!rewriter || kind == NOC_SYNTAX_ROOT) return false;
+    cursor = rewriter->cursor;
+    while (cursor < rewriter->tokens_count &&
+           noc_token_is_trivia(rewriter->tokens[cursor])) {
+        cursor += 1;
+    }
+    tree = noc_rw_syntax_tree(rewriter);
+    if (!tree) return false;
+    for (i = 1; i < tree->count; ++i) {
+        const Noc_Syntax_Node *syntax = &tree->items[i];
+        if (syntax->range.begin == cursor) {
+            if (syntax->kind != kind) return false;
+            rewriter->cursor = syntax->range.end;
+            if (node) *node = i;
+            return true;
+        }
+    }
+    return false;
 }
 
 static void noc__string_list_free(Noc__String_List *list)
@@ -3812,6 +3901,10 @@ static bool noc__transform_source(Noc_Context *context,
         }
     } while (token.kind != NOC_TOKEN_EOF);
     if (!ok) goto done;
+    tokens.source = (char *)source;
+    tokens.source_count = source_count;
+    tokens.path = (char *)(path ? path : "<memory>");
+    tokens.generation = 1;
 
     if (emit_line_directives && !noc__emit_line_directive_at(&output, path, 1)) {
         noc__report(context,
@@ -3847,11 +3940,13 @@ static bool noc__transform_source(Noc_Context *context,
                     rewriter.tokens = tokens.items;
                     rewriter.tokens_count = tokens.count;
                     rewriter.cursor = name_index + 1;
+                    rewriter.stream = &tokens;
                     rewriter.trigger_location = token.location;
                     rewriter.output = &output;
                     rewriter.dependencies = &dependencies;
                     rewriter.expansion_depth = expansion_depth;
                     expanded = rule->expand(&rewriter, rule, rule->user_data);
+                    noc_syntax_tree_free(&rewriter.syntax_tree);
                     if (!expanded && context->error_count == expansion_errors) {
                         noc_rw_error(&rewriter,
                                      "expansion callback for @%s failed without reporting an error",

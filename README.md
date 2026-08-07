@@ -268,10 +268,19 @@ its physical line. When generated text cannot preserve line counts,
 `noc_rw_emit_line_directive` starts a correctly escaped C `#line` directive;
 the following output line is mapped to the requested source line and path.
 
+For structured callbacks, `noc_rw_token_stream` and
+`noc_rw_remaining_range` expose a callback-lifetime view compatible with the
+standalone cursor and parser APIs. `noc_rw_consume_range` advances only across
+an exact range beginning at the current raw cursor, so failed speculative parses
+cannot skip source accidentally. `noc_rw_syntax_tree` lazily builds one lossless
+tree for the current source, and `noc_rw_take_syntax` atomically matches and
+consumes its next complete token or delimiter-group node. Borrowed stream, tree,
+and node references must not escape the callback.
+
 ## Current boundary
 
-This version deliberately handles explicit token-level transformations, a
-lossless delimiter tree, and lightweight C structure discovery. It does not
+This version deliberately handles explicit token/AST-assisted transformations,
+a lossless delimiter tree, and lightweight C structure discovery. It does not
 expand C macros, build a semantic C AST, resolve typedefs, or change the C type
 system. Rules inside preprocessor directives are left untouched. More
 structured statement and declaration helpers can be added without changing the
