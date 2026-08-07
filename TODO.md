@@ -46,7 +46,7 @@ passes, and the milestone has been committed and pushed.
 - [ ] Let rules consume syntax nodes and token ranges safely.
 - [ ] Add transformed emission for nested rule composition.
 - [ ] Add newline/source-map restoration helpers.
-- [ ] Add dependency reporting so rules such as `@embed` expose build inputs.
+- [x] Add dependency reporting so rules such as `@embed` expose build inputs.
 - [ ] Add examples for expression, statement, declaration, and attribute rules.
 
 ## Milestone 5 — IDE artifacts (lower priority)

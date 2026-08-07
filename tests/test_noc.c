@@ -1170,6 +1170,113 @@ static bool expand_question_bytes(Noc_Rewriter *rewriter,
            noc_rw_emit_c_string(rewriter, bytes, sizeof(bytes));
 }
 
+typedef struct {
+    char first[32];
+    char second[32];
+} Dependency_Paths;
+
+static bool expand_dependencies(Noc_Rewriter *rewriter,
+                                const Noc_Rule *rule,
+                                void *user_data)
+{
+    Dependency_Paths *paths = (Dependency_Paths *)user_data;
+    (void)rule;
+    return noc_rw_expect_punct(rewriter, "(") &&
+           noc_rw_expect_punct(rewriter, ")") &&
+           noc_rw_add_dependency(rewriter, paths->first) &&
+           noc_rw_add_dependency(rewriter, paths->second) &&
+           noc_rw_add_dependency(rewriter, paths->first) &&
+           noc_rw_emit_cstr(rewriter, "0");
+}
+
+static bool expand_dependency_then_error(Noc_Rewriter *rewriter,
+                                         const Noc_Rule *rule,
+                                         void *user_data)
+{
+    Noc_Context *context = (Noc_Context *)user_data;
+    Noc_Token_Stream invalid = {0};
+    (void)rule;
+    if (!noc_rw_add_dependency(rewriter, "partial/dependency.h")) return false;
+    CHECK(!noc_tokenize(context, "dependency-error.c", "/*", 2, &invalid));
+    noc_token_stream_free(&invalid);
+    return true;
+}
+
+static void test_transform_dependencies(void)
+{
+    static const char source[] = "int first = @depends(); int second = @depends();\n";
+    static const char embed_source[] = "static const char text[] = @embed(\"message.txt\");\n";
+    Dependency_Paths paths = {{0}, {0}};
+    Noc_Context context;
+    Noc_Transform_Result result;
+    Diagnostic_State diagnostics = {0};
+    Noc_Rule rule = {
+        "depends",
+        NOC_RULE_EXPRESSION,
+        "@depends()",
+        "Record deterministic test dependencies.",
+        expand_dependencies,
+        &paths,
+    };
+    Noc_Rule failing_rule = {
+        "dependency_error",
+        NOC_RULE_TOKEN,
+        "@dependency_error",
+        "Record a dependency and then report an error.",
+        expand_dependency_then_error,
+        &context,
+    };
+    (void)snprintf(paths.first, sizeof(paths.first), "%s", "include/first.h");
+    (void)snprintf(paths.second, sizeof(paths.second), "%s", "assets/second.bin");
+
+    noc_context_init(&context);
+    context.options.emit_line_directives = false;
+    CHECK(noc_register_rule(&context, rule));
+    CHECK(noc_transform_source(&context,
+                               "dependencies.c",
+                               source,
+                               sizeof(source) - 1,
+                               &result));
+    CHECK(strcmp(result.output, "int first = 0; int second = 0;\n") == 0);
+    CHECK(result.dependency_count == 2);
+    CHECK(strcmp(result.dependencies[0], "include/first.h") == 0);
+    CHECK(strcmp(result.dependencies[1], "assets/second.bin") == 0);
+    paths.first[0] = 'X';
+    paths.second[0] = 'X';
+    CHECK(strcmp(result.dependencies[0], "include/first.h") == 0);
+    CHECK(strcmp(result.dependencies[1], "assets/second.bin") == 0);
+    noc_transform_result_free(&result);
+    CHECK(result.dependencies == NULL && result.dependency_count == 0);
+
+    noc_context_set_diagnostic(&context, count_diagnostics, &diagnostics);
+    CHECK(noc_register_rule(&context, failing_rule));
+    CHECK(!noc_transform_source(&context,
+                                "dependency-error.c",
+                                "@dependency_error",
+                                sizeof("@dependency_error") - 1,
+                                &result));
+    CHECK(diagnostics.errors == 1);
+    CHECK(result.output == NULL);
+    CHECK(result.dependencies == NULL);
+    CHECK(result.dependency_count == 0);
+    noc_transform_result_free(&result);
+    noc_context_deinit(&context);
+
+    noc_context_init(&context);
+    context.options.emit_line_directives = false;
+    CHECK(noc_register_embed_rule(&context, "embed"));
+    CHECK(noc_transform_source(&context,
+                               "examples/embed/dependency-test.c",
+                               embed_source,
+                               sizeof(embed_source) - 1,
+                               &result));
+    CHECK(result.dependency_count == 1);
+    CHECK(strcmp(result.dependencies[0], "examples/embed/message.txt") == 0);
+    CHECK(strstr(result.output, "Hello from a normal .c file") != NULL);
+    noc_transform_result_free(&result);
+    noc_context_deinit(&context);
+}
+
 static void test_custom_rule(void)
 {
     static const char source[] = "int answer = @twice(20 + 1);\n";
@@ -1424,6 +1531,7 @@ int main(void)
     test_c_declarator_boundaries();
     test_c_parameter_name_boundaries();
     test_syntax_edit_set();
+    test_transform_dependencies();
     test_custom_rule();
     test_transactional_match();
     test_unknown_rule();

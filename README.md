@@ -248,6 +248,13 @@ through unchanged. File output uses a uniquely created temporary file in the
 destination directory and an atomic replacement, and input/output aliases are
 rejected.
 
+Rules that read additional build inputs call `noc_rw_add_dependency`. Paths are
+copied, deduplicated in first-seen order, and returned through
+`Noc_Transform_Result.dependencies`; `noc_transform_result_free` releases both
+the generated output and dependency list. Failed transforms publish neither
+partial output nor partial dependencies. The built-in `@embed` rule reports its
+resolved source-relative file path automatically.
+
 ## Current boundary
 
 This version deliberately handles explicit token-level transformations, a

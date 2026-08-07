@@ -29,9 +29,9 @@
 #define NOC_H_INCLUDED
 
 #define NOC_VERSION_MAJOR 0
-#define NOC_VERSION_MINOR 5
+#define NOC_VERSION_MINOR 6
 #define NOC_VERSION_PATCH 0
-#define NOC_VERSION "0.5.0"
+#define NOC_VERSION "0.6.0"
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -276,6 +276,8 @@ struct Noc_Context {
 typedef struct {
     char *output;
     size_t output_count;
+    char **dependencies;
+    size_t dependency_count;
     size_t error_count;
 } Noc_Transform_Result;
 
@@ -468,6 +470,9 @@ NOCDEF bool noc_rw_capture_balanced(Noc_Rewriter *rewriter,
                                     Noc_Slice *inside);
 NOCDEF const char *noc_rw_source_path(const Noc_Rewriter *rewriter);
 NOCDEF Noc_Location noc_rw_trigger_location(const Noc_Rewriter *rewriter);
+/* Record a build input in the transform result. Paths are copied and duplicate
+   strings are coalesced in first-seen order. */
+NOCDEF bool noc_rw_add_dependency(Noc_Rewriter *rewriter, const char *path);
 
 NOCDEF bool noc_rw_emit(Noc_Rewriter *rewriter, const void *data, size_t count);
 NOCDEF bool noc_rw_emit_slice(Noc_Rewriter *rewriter, Noc_Slice slice);
@@ -532,6 +537,12 @@ NOCDEF bool noc_register_embed_rule(Noc_Context *context, const char *name);
 
 typedef Noc_Token_Stream Noc__Tokens;
 
+typedef struct {
+    char **items;
+    size_t count;
+    size_t capacity;
+} Noc__String_List;
+
 struct Noc_Rewriter {
     Noc_Context *context;
     const Noc_Rule *rule;
@@ -543,6 +554,7 @@ struct Noc_Rewriter {
     size_t cursor;
     Noc_Location trigger_location;
     Noc_Buffer *output;
+    Noc__String_List *dependencies;
     bool failed;
 };
 
@@ -1488,6 +1500,67 @@ NOCDEF const char *noc_rw_source_path(const Noc_Rewriter *rewriter)
 NOCDEF Noc_Location noc_rw_trigger_location(const Noc_Rewriter *rewriter)
 {
     return rewriter->trigger_location;
+}
+
+static void noc__string_list_free(Noc__String_List *list)
+{
+    size_t i;
+    for (i = 0; i < list->count; ++i) free(list->items[i]);
+    free(list->items);
+    memset(list, 0, sizeof(*list));
+}
+
+static bool noc__string_list_append_unique(Noc__String_List *list, const char *text)
+{
+    char **items;
+    char *copy;
+    size_t text_count;
+    size_t capacity;
+    size_t maximum = SIZE_MAX / sizeof(*items);
+    size_t i;
+    for (i = 0; i < list->count; ++i) {
+        if (strcmp(list->items[i], text) == 0) return true;
+    }
+    text_count = strlen(text);
+    if (text_count == SIZE_MAX) return false;
+    copy = (char *)malloc(text_count + 1);
+    if (!copy) return false;
+    memcpy(copy, text, text_count + 1);
+    if (list->count == list->capacity) {
+        if (list->capacity >= maximum) goto failed;
+        if (list->capacity == 0) {
+            capacity = maximum < 4 ? maximum : 4;
+        } else if (list->capacity > maximum / 2) {
+            capacity = maximum;
+        } else {
+            capacity = list->capacity * 2;
+        }
+        if (capacity <= list->capacity) goto failed;
+        items = (char **)realloc(list->items, capacity * sizeof(*items));
+        if (!items) goto failed;
+        list->items = items;
+        list->capacity = capacity;
+    }
+    list->items[list->count++] = copy;
+    return true;
+
+failed:
+    free(copy);
+    return false;
+}
+
+NOCDEF bool noc_rw_add_dependency(Noc_Rewriter *rewriter, const char *path)
+{
+    if (!rewriter || !rewriter->dependencies || !path || !path[0] ||
+        !noc__string_list_append_unique(rewriter->dependencies, path)) {
+        if (rewriter) {
+            noc_rw_error(rewriter,
+                         "could not record dependency while expanding @%s",
+                         rewriter->rule->name);
+        }
+        return false;
+    }
+    return true;
 }
 
 NOCDEF bool noc_rw_emit(Noc_Rewriter *rewriter, const void *data, size_t count)
@@ -3587,6 +3660,7 @@ NOCDEF bool noc_transform_source(Noc_Context *context,
     Noc_Lexer lexer;
     Noc__Tokens tokens = {0};
     Noc_Buffer output = {0};
+    Noc__String_List dependencies = {0};
     Noc_Token token;
     size_t index = 0;
     size_t errors_before = context->error_count;
@@ -3659,13 +3733,16 @@ NOCDEF bool noc_transform_source(Noc_Context *context,
                     rewriter.cursor = name_index + 1;
                     rewriter.trigger_location = token.location;
                     rewriter.output = &output;
+                    rewriter.dependencies = &dependencies;
                     expanded = rule->expand(&rewriter, rule, rule->user_data);
                     if (!expanded && context->error_count == expansion_errors) {
                         noc_rw_error(&rewriter,
                                      "expansion callback for @%s failed without reporting an error",
                                      rule->name);
                     }
-                    if (!expanded) rewriter.failed = true;
+                    if (!expanded || context->error_count != expansion_errors) {
+                        rewriter.failed = true;
+                    }
                     if (rewriter.failed) {
                         ok = false;
                         goto done;
@@ -3709,22 +3786,35 @@ NOCDEF bool noc_transform_source(Noc_Context *context,
         ok = false;
         goto done;
     }
+    if (context->error_count != errors_before) {
+        ok = false;
+        goto done;
+    }
     result->output = output.items;
     result->output_count = output.count;
+    result->dependencies = dependencies.items;
+    result->dependency_count = dependencies.count;
     output.items = NULL;
     output.count = 0;
     output.capacity = 0;
+    dependencies.items = NULL;
+    dependencies.count = 0;
+    dependencies.capacity = 0;
 
 done:
     result->error_count = context->error_count - errors_before;
     free(tokens.items);
     noc_buffer_free(&output);
+    noc__string_list_free(&dependencies);
     return ok && result->error_count == 0;
 }
 
 NOCDEF void noc_transform_result_free(Noc_Transform_Result *result)
 {
+    size_t i;
     free(result->output);
+    for (i = 0; i < result->dependency_count; ++i) free(result->dependencies[i]);
+    free(result->dependencies);
     memset(result, 0, sizeof(*result));
 }
 
@@ -4034,6 +4124,7 @@ static bool noc__expand_embed(Noc_Rewriter *rewriter,
         rewriter->failed = true;
         goto done;
     }
+    if (!noc_rw_add_dependency(rewriter, resolved_path.items)) goto done;
     if (!noc_rw_emit_c_string(rewriter, contents.items, contents.count)) goto done;
     ok = true;
 
