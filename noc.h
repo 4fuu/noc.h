@@ -29,9 +29,9 @@
 #define NOC_H_INCLUDED
 
 #define NOC_VERSION_MAJOR 0
-#define NOC_VERSION_MINOR 11
+#define NOC_VERSION_MINOR 12
 #define NOC_VERSION_PATCH 0
-#define NOC_VERSION "0.11.0"
+#define NOC_VERSION "0.12.0"
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -331,6 +331,14 @@ NOCDEF bool noc_generate_ide_metadata_header(
     Noc_Context *context,
     const Noc_Ide_Metadata_Options *options,
     Noc_Buffer *output);
+/* Serialize a Make/Ninja-compatible depfile from a transform result. The source
+   path is always the first dependency; duplicate source entries are omitted.
+   Initialize output to {0}; it is replaced only on success. */
+NOCDEF bool noc_generate_depfile(Noc_Context *context,
+                                 const char *target_path,
+                                 const char *source_path,
+                                 const Noc_Transform_Result *result,
+                                 Noc_Buffer *output);
 
 /* Owning token streams. Initialize the output to {0}. Tokens and their
    text/location pointers remain valid until successful retokenization or
@@ -1536,6 +1544,93 @@ failed:
                 NOC_DIAGNOSTIC_ERROR,
                 no_location,
                 "out of memory while generating IDE metadata header");
+    return false;
+}
+
+static bool noc__depfile_path_is_valid(const char *path)
+{
+    const unsigned char *cursor = (const unsigned char *)path;
+    if (!cursor || !cursor[0]) return false;
+    while (*cursor) {
+        if (*cursor == '\n' || *cursor == '\r') return false;
+        cursor += 1;
+    }
+    return true;
+}
+
+static bool noc__depfile_append_path(Noc_Buffer *output, const char *path)
+{
+    const unsigned char *cursor = (const unsigned char *)path;
+    while (*cursor) {
+        if (*cursor == '$') {
+            if (!noc_buffer_append_cstr(output, "$$")) return false;
+        } else {
+            if ((*cursor == ' ' || *cursor == '\t' || *cursor == '#' ||
+                 *cursor == ':' || *cursor == '\\') &&
+                !noc_buffer_append(output, "\\", 1)) {
+                return false;
+            }
+            if (!noc_buffer_append(output, cursor, 1)) return false;
+        }
+        cursor += 1;
+    }
+    return true;
+}
+
+NOCDEF bool noc_generate_depfile(Noc_Context *context,
+                                 const char *target_path,
+                                 const char *source_path,
+                                 const Noc_Transform_Result *result,
+                                 Noc_Buffer *output)
+{
+    Noc_Buffer generated = {0};
+    Noc_Location no_location = {0};
+    size_t i;
+    if (!context || !result || !output) return false;
+    if (!noc__depfile_path_is_valid(target_path) ||
+        !noc__depfile_path_is_valid(source_path) ||
+        (result->dependency_count > 0 && !result->dependencies)) {
+        noc__report(context,
+                    NOC_DIAGNOSTIC_ERROR,
+                    no_location,
+                    "depfile paths must be non-empty and cannot contain newlines");
+        return false;
+    }
+    for (i = 0; i < result->dependency_count; ++i) {
+        if (!noc__depfile_path_is_valid(result->dependencies[i])) {
+            noc__report(context,
+                        NOC_DIAGNOSTIC_ERROR,
+                        no_location,
+                        "depfile paths must be non-empty and cannot contain newlines");
+            return false;
+        }
+    }
+    if (!noc__depfile_append_path(&generated, target_path) ||
+        !noc_buffer_append_cstr(&generated, ": ") ||
+        !noc__depfile_append_path(&generated, source_path)) {
+        goto failed;
+    }
+    for (i = 0; i < result->dependency_count; ++i) {
+        if (strcmp(result->dependencies[i], source_path) == 0) continue;
+        if (!noc_buffer_append_cstr(&generated, " ") ||
+            !noc__depfile_append_path(&generated, result->dependencies[i])) {
+            goto failed;
+        }
+    }
+    if (!noc_buffer_append_cstr(&generated, "\n") ||
+        !noc_buffer_terminate(&generated)) {
+        goto failed;
+    }
+    noc_buffer_free(output);
+    *output = generated;
+    return true;
+
+failed:
+    noc_buffer_free(&generated);
+    noc__report(context,
+                NOC_DIAGNOSTIC_ERROR,
+                no_location,
+                "out of memory while generating depfile");
     return false;
 }
 

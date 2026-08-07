@@ -1203,6 +1203,55 @@ static void test_ide_metadata_header(void)
     noc_context_deinit(&context);
 }
 
+static void test_depfile_generation(void)
+{
+    char *dependencies[] = {
+        "src/my input.c",
+        "C:\\sdk\\a b#$.h",
+        "include/ordinary.h",
+    };
+    char *invalid_dependencies[] = {"include/bad\nname.h"};
+    static const char expected[] =
+        "build/my\\ output$$\\:obj.o: src/my\\ input.c "
+        "C\\:\\\\sdk\\\\a\\ b\\#$$.h include/ordinary.h\n";
+    Noc_Transform_Result result = {0};
+    Noc_Transform_Result invalid = {0};
+    Noc_Context context;
+    Noc_Buffer output = {0};
+    Diagnostic_State diagnostics = {0};
+    char *preserved_items;
+    size_t preserved_count;
+
+    result.dependencies = dependencies;
+    result.dependency_count = sizeof(dependencies) / sizeof(dependencies[0]);
+    invalid.dependencies = invalid_dependencies;
+    invalid.dependency_count = 1;
+    noc_context_init(&context);
+    noc_context_set_diagnostic(&context, count_diagnostics, &diagnostics);
+    CHECK(noc_generate_depfile(&context,
+                               "build/my output$:obj.o",
+                               "src/my input.c",
+                               &result,
+                               &output));
+    CHECK(output.count == sizeof(expected) - 1);
+    CHECK(memcmp(output.items, expected, sizeof(expected) - 1) == 0);
+    CHECK(output.items[output.count] == '\0');
+
+    preserved_items = output.items;
+    preserved_count = output.count;
+    CHECK(!noc_generate_depfile(&context,
+                                "build/output.o",
+                                "src/input.c",
+                                &invalid,
+                                &output));
+    CHECK(diagnostics.errors == 1);
+    CHECK(strstr(diagnostics.last_message, "cannot contain newlines") != NULL);
+    CHECK(output.items == preserved_items && output.count == preserved_count);
+
+    noc_buffer_free(&output);
+    noc_context_deinit(&context);
+}
+
 static bool expand_optional(Noc_Rewriter *rewriter,
                             const Noc_Rule *rule,
                             void *user_data)
@@ -1972,6 +2021,7 @@ int main(void)
     test_c_parameter_name_boundaries();
     test_syntax_edit_set();
     test_ide_metadata_header();
+    test_depfile_generation();
     test_transform_dependencies();
     test_rewriter_source_mapping();
     test_rewriter_structure_bridge();

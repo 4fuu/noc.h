@@ -328,6 +328,27 @@ the generated output and dependency list. Failed transforms publish neither
 partial output nor partial dependencies. The built-in `@embed` rule reports its
 resolved source-relative file path automatically.
 
+`noc_generate_depfile` turns that result into a transactional,
+Make/Ninja-compatible dependency buffer:
+
+```c
+Noc_Transform_Result result = {0};
+Noc_Buffer depfile = {0};
+
+if (!noc_transform_source(&noc, input, source, source_count, &result)) return 1;
+if (!noc_generate_depfile(&noc, output, input, &result, &depfile)) return 1;
+
+fwrite(depfile.items, 1, depfile.count, stdout);
+noc_buffer_free(&depfile);
+noc_transform_result_free(&result);
+```
+
+The primary source is emitted first, its duplicate is suppressed from reported
+dependencies, and ordering otherwise remains first-seen. Spaces, tabs, `#`,
+`$`, colons, and backslashes are escaped for depfile readers, including Windows
+drive paths. Empty paths and embedded newlines are rejected without changing an
+existing destination buffer.
+
 Callbacks can pass a captured slice to `noc_rw_emit_transformed` when nested
 dialect expressions should be expanded before emission. Nested transforms use
 the same registry and source path, merge dependencies into the outer result,
