@@ -1,0 +1,2025 @@
+/* noc.h - a single-header toolkit for building explicit, project-local C dialects
+
+   This software is released into the public domain. See the end of this file.
+
+   Quick start:
+
+       #define NOC_IMPLEMENTATION
+       #include "noc.h"
+
+       int main(int argc, char **argv)
+       {
+           Noc_Context noc;
+           noc_context_init(&noc);
+           noc_register_embed_rule(&noc, "embed");
+           int result = noc_run_cli(&noc, argc, argv);
+           noc_context_deinit(&noc);
+           return result;
+       }
+
+   A source file can then use an explicitly registered extension while retaining
+   its normal .c or .h suffix:
+
+       static const char text[] = @embed("message.txt");
+
+   Compile the transformed output, not the dialect source itself.
+*/
+
+#ifndef NOC_H_INCLUDED
+#define NOC_H_INCLUDED
+
+#define NOC_VERSION_MAJOR 0
+#define NOC_VERSION_MINOR 1
+#define NOC_VERSION_PATCH 0
+#define NOC_VERSION "0.1.0"
+
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdio.h>
+
+#ifndef NOCDEF
+#define NOCDEF extern
+#endif
+
+#if defined(__GNUC__) || defined(__clang__)
+#define NOC_PRINTF_FORMAT(format_index, first_arg) \
+    __attribute__((format(printf, format_index, first_arg)))
+#else
+#define NOC_PRINTF_FORMAT(format_index, first_arg)
+#endif
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+typedef struct {
+    const char *data;
+    size_t count;
+} Noc_Slice;
+
+typedef struct {
+    const char *path;
+    size_t offset;
+    size_t line;
+    size_t column;
+} Noc_Location;
+
+typedef enum {
+    NOC_TOKEN_EOF = 0,
+    NOC_TOKEN_WHITESPACE,
+    NOC_TOKEN_NEWLINE,
+    NOC_TOKEN_IDENTIFIER,
+    NOC_TOKEN_NUMBER,
+    NOC_TOKEN_STRING,
+    NOC_TOKEN_CHARACTER,
+    NOC_TOKEN_LINE_COMMENT,
+    NOC_TOKEN_BLOCK_COMMENT,
+    NOC_TOKEN_PREPROCESSOR,
+    NOC_TOKEN_PUNCTUATOR,
+    NOC_TOKEN_INVALID,
+} Noc_Token_Kind;
+
+typedef struct {
+    Noc_Token_Kind kind;
+    Noc_Slice text;
+    Noc_Location location;
+} Noc_Token;
+
+typedef struct {
+    const char *path;
+    const char *source;
+    size_t source_count;
+    size_t cursor;
+    size_t line;
+    size_t column;
+    bool beginning_of_line;
+    bool continuing_block_comment;
+} Noc_Lexer;
+
+typedef struct {
+    char *items;
+    size_t count;
+    size_t capacity;
+} Noc_Buffer;
+
+typedef enum {
+    NOC_DIAGNOSTIC_NOTE = 0,
+    NOC_DIAGNOSTIC_WARNING,
+    NOC_DIAGNOSTIC_ERROR,
+} Noc_Diagnostic_Severity;
+
+typedef struct {
+    Noc_Diagnostic_Severity severity;
+    Noc_Location location;
+    const char *message;
+} Noc_Diagnostic;
+
+typedef void (*Noc_Diagnostic_Fn)(void *user_data, const Noc_Diagnostic *diagnostic);
+
+typedef enum {
+    NOC_RULE_TOKEN = 0,
+    NOC_RULE_EXPRESSION,
+    NOC_RULE_STATEMENT,
+    NOC_RULE_DECLARATION,
+    NOC_RULE_ATTRIBUTE,
+    NOC_RULE_DIRECTIVE,
+} Noc_Rule_Scope;
+
+typedef struct Noc_Context Noc_Context;
+typedef struct Noc_Rewriter Noc_Rewriter;
+typedef struct Noc_Rule Noc_Rule;
+
+typedef bool (*Noc_Expand_Fn)(Noc_Rewriter *rewriter,
+                              const Noc_Rule *rule,
+                              void *user_data);
+
+struct Noc_Rule {
+    const char *name;
+    Noc_Rule_Scope scope;
+    const char *syntax;
+    const char *description;
+    Noc_Expand_Fn expand;
+    void *user_data;
+};
+
+typedef struct {
+    bool emit_line_directives;
+    bool unknown_rule_is_error;
+} Noc_Options;
+
+struct Noc_Context {
+    Noc_Rule *rules;
+    size_t rules_count;
+    size_t rules_capacity;
+    Noc_Diagnostic_Fn diagnostic;
+    void *diagnostic_user_data;
+    Noc_Options options;
+    size_t error_count;
+};
+
+typedef struct {
+    char *output;
+    size_t output_count;
+    size_t error_count;
+} Noc_Transform_Result;
+
+/* Slices and tokens */
+NOCDEF Noc_Slice noc_slice_from_cstr(const char *text);
+NOCDEF bool noc_slice_equal(Noc_Slice left, Noc_Slice right);
+NOCDEF bool noc_slice_equal_cstr(Noc_Slice slice, const char *text);
+NOCDEF const char *noc_token_kind_name(Noc_Token_Kind kind);
+NOCDEF bool noc_token_is_trivia(Noc_Token token);
+NOCDEF bool noc_token_is_punct(Noc_Token token, const char *punctuator);
+NOCDEF bool noc_token_is_identifier(Noc_Token token, const char *identifier);
+
+/* Standalone lexer */
+NOCDEF void noc_lexer_init(Noc_Lexer *lexer,
+                           const char *path,
+                           const char *source,
+                           size_t source_count);
+NOCDEF Noc_Token noc_lexer_next(Noc_Lexer *lexer);
+
+/* General-purpose growable byte buffer */
+NOCDEF void noc_buffer_free(Noc_Buffer *buffer);
+NOCDEF bool noc_buffer_reserve(Noc_Buffer *buffer, size_t additional_count);
+NOCDEF bool noc_buffer_append(Noc_Buffer *buffer, const void *data, size_t count);
+NOCDEF bool noc_buffer_append_slice(Noc_Buffer *buffer, Noc_Slice slice);
+NOCDEF bool noc_buffer_append_cstr(Noc_Buffer *buffer, const char *text);
+NOCDEF bool noc_buffer_appendf(Noc_Buffer *buffer, const char *format, ...)
+    NOC_PRINTF_FORMAT(2, 3);
+NOCDEF bool noc_buffer_terminate(Noc_Buffer *buffer);
+
+/* Context and rule registry. Rule strings must outlive the context. */
+NOCDEF void noc_context_init(Noc_Context *context);
+NOCDEF void noc_context_deinit(Noc_Context *context);
+NOCDEF void noc_context_set_diagnostic(Noc_Context *context,
+                                       Noc_Diagnostic_Fn diagnostic,
+                                       void *user_data);
+NOCDEF bool noc_register_rule(Noc_Context *context, Noc_Rule rule);
+NOCDEF const Noc_Rule *noc_find_rule(const Noc_Context *context, Noc_Slice name);
+NOCDEF void noc_describe(const Noc_Context *context, FILE *stream);
+NOCDEF const char *noc_rule_scope_name(Noc_Rule_Scope scope);
+
+/* Rewriter API available to expansion callbacks. The callback starts just after
+   the @name trigger. Raw operations include trivia; significant operations skip
+   whitespace and comments. */
+NOCDEF const Noc_Token *noc_rw_peek_raw(const Noc_Rewriter *rewriter, size_t lookahead);
+NOCDEF const Noc_Token *noc_rw_peek(const Noc_Rewriter *rewriter, size_t lookahead);
+NOCDEF bool noc_rw_take_raw(Noc_Rewriter *rewriter, Noc_Token *token);
+NOCDEF void noc_rw_skip_trivia(Noc_Rewriter *rewriter);
+NOCDEF bool noc_rw_match_punct(Noc_Rewriter *rewriter, const char *punctuator);
+NOCDEF bool noc_rw_match_identifier(Noc_Rewriter *rewriter, const char *identifier);
+NOCDEF bool noc_rw_expect_punct(Noc_Rewriter *rewriter, const char *punctuator);
+NOCDEF bool noc_rw_expect_identifier(Noc_Rewriter *rewriter,
+                                     const char *identifier,
+                                     Noc_Token *token);
+NOCDEF bool noc_rw_capture_balanced(Noc_Rewriter *rewriter,
+                                    const char *open,
+                                    const char *close,
+                                    Noc_Slice *inside);
+NOCDEF const char *noc_rw_source_path(const Noc_Rewriter *rewriter);
+NOCDEF Noc_Location noc_rw_trigger_location(const Noc_Rewriter *rewriter);
+
+NOCDEF bool noc_rw_emit(Noc_Rewriter *rewriter, const void *data, size_t count);
+NOCDEF bool noc_rw_emit_slice(Noc_Rewriter *rewriter, Noc_Slice slice);
+NOCDEF bool noc_rw_emit_cstr(Noc_Rewriter *rewriter, const char *text);
+NOCDEF bool noc_rw_emitf(Noc_Rewriter *rewriter, const char *format, ...)
+    NOC_PRINTF_FORMAT(2, 3);
+NOCDEF bool noc_rw_emit_c_string(Noc_Rewriter *rewriter,
+                                 const void *data,
+                                 size_t count);
+NOCDEF void noc_rw_error(Noc_Rewriter *rewriter, const char *format, ...)
+    NOC_PRINTF_FORMAT(2, 3);
+NOCDEF void noc_rw_error_at(Noc_Rewriter *rewriter,
+                            Noc_Location location,
+                            const char *format,
+                            ...) NOC_PRINTF_FORMAT(3, 4);
+
+/* Decode one ordinary C string token. Prefixes and adjacent string literals are
+   intentionally not accepted by this helper. */
+NOCDEF bool noc_decode_string_token(Noc_Token token, Noc_Buffer *decoded);
+
+/* Transformation and file/CLI front ends */
+NOCDEF bool noc_transform_source(Noc_Context *context,
+                                 const char *path,
+                                 const char *source,
+                                 size_t source_count,
+                                 Noc_Transform_Result *result);
+NOCDEF bool noc_transform_file(Noc_Context *context,
+                               const char *input_path,
+                               const char *output_path);
+NOCDEF void noc_transform_result_free(Noc_Transform_Result *result);
+NOCDEF int noc_run_cli(Noc_Context *context, int argc, char **argv);
+
+/* Optional built-in modules */
+NOCDEF bool noc_register_embed_rule(Noc_Context *context, const char *name);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif /* NOC_H_INCLUDED */
+
+#ifdef NOC_IMPLEMENTATION
+#ifndef NOC_IMPLEMENTATION_INCLUDED
+#define NOC_IMPLEMENTATION_INCLUDED
+
+#include <ctype.h>
+#include <errno.h>
+#include <stdarg.h>
+#include <stdint.h>
+#include <stdlib.h>
+#include <string.h>
+#include <time.h>
+
+#ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+#else
+#include <sys/stat.h>
+#endif
+
+typedef struct {
+    Noc_Token *items;
+    size_t count;
+    size_t capacity;
+} Noc__Tokens;
+
+struct Noc_Rewriter {
+    Noc_Context *context;
+    const Noc_Rule *rule;
+    const char *path;
+    const char *source;
+    size_t source_count;
+    const Noc_Token *tokens;
+    size_t tokens_count;
+    size_t cursor;
+    Noc_Location trigger_location;
+    Noc_Buffer *output;
+    bool failed;
+};
+
+static bool noc__is_identifier_start(unsigned char c)
+{
+    return c == '_' || isalpha(c) || c >= 128;
+}
+
+static bool noc__is_identifier_continue(unsigned char c)
+{
+    return c == '_' || isalnum(c) || c >= 128;
+}
+
+static bool noc__is_horizontal_space(char c)
+{
+    return c == ' ' || c == '\t' || c == '\v' || c == '\f';
+}
+
+static bool noc__contains_newline(const char *data, size_t count)
+{
+    size_t i;
+    for (i = 0; i < count; ++i) {
+        if (data[i] == '\n' || data[i] == '\r') return true;
+    }
+    return false;
+}
+
+static void noc__lexer_advance(Noc_Lexer *lexer, size_t end)
+{
+    while (lexer->cursor < end) {
+        char c = lexer->source[lexer->cursor++];
+        if (c == '\r') {
+            if (lexer->cursor < end && lexer->source[lexer->cursor] == '\n') {
+                lexer->cursor += 1;
+            }
+            lexer->line += 1;
+            lexer->column = 1;
+        } else if (c == '\n') {
+            lexer->line += 1;
+            lexer->column = 1;
+        } else {
+            lexer->column += 1;
+        }
+    }
+}
+
+static Noc_Token noc__make_token(Noc_Lexer *lexer,
+                                 Noc_Token_Kind kind,
+                                 size_t start,
+                                 size_t end,
+                                 Noc_Location location)
+{
+    Noc_Token token;
+    token.kind = kind;
+    token.text.data = lexer->source + start;
+    token.text.count = end - start;
+    token.location = location;
+    noc__lexer_advance(lexer, end);
+    return token;
+}
+
+NOCDEF Noc_Slice noc_slice_from_cstr(const char *text)
+{
+    Noc_Slice slice;
+    slice.data = text;
+    slice.count = text ? strlen(text) : 0;
+    return slice;
+}
+
+NOCDEF bool noc_slice_equal(Noc_Slice left, Noc_Slice right)
+{
+    return left.count == right.count &&
+           (left.count == 0 || memcmp(left.data, right.data, left.count) == 0);
+}
+
+NOCDEF bool noc_slice_equal_cstr(Noc_Slice slice, const char *text)
+{
+    return noc_slice_equal(slice, noc_slice_from_cstr(text));
+}
+
+NOCDEF const char *noc_token_kind_name(Noc_Token_Kind kind)
+{
+    switch (kind) {
+    case NOC_TOKEN_EOF: return "end of file";
+    case NOC_TOKEN_WHITESPACE: return "whitespace";
+    case NOC_TOKEN_NEWLINE: return "newline";
+    case NOC_TOKEN_IDENTIFIER: return "identifier";
+    case NOC_TOKEN_NUMBER: return "number";
+    case NOC_TOKEN_STRING: return "string";
+    case NOC_TOKEN_CHARACTER: return "character";
+    case NOC_TOKEN_LINE_COMMENT: return "line comment";
+    case NOC_TOKEN_BLOCK_COMMENT: return "block comment";
+    case NOC_TOKEN_PREPROCESSOR: return "preprocessor directive";
+    case NOC_TOKEN_PUNCTUATOR: return "punctuator";
+    case NOC_TOKEN_INVALID: return "invalid token";
+    }
+    return "unknown token";
+}
+
+NOCDEF bool noc_token_is_trivia(Noc_Token token)
+{
+    return token.kind == NOC_TOKEN_WHITESPACE ||
+           token.kind == NOC_TOKEN_NEWLINE ||
+           token.kind == NOC_TOKEN_LINE_COMMENT ||
+           token.kind == NOC_TOKEN_BLOCK_COMMENT;
+}
+
+NOCDEF bool noc_token_is_punct(Noc_Token token, const char *punctuator)
+{
+    return token.kind == NOC_TOKEN_PUNCTUATOR &&
+           noc_slice_equal_cstr(token.text, punctuator);
+}
+
+NOCDEF bool noc_token_is_identifier(Noc_Token token, const char *identifier)
+{
+    return token.kind == NOC_TOKEN_IDENTIFIER &&
+           noc_slice_equal_cstr(token.text, identifier);
+}
+
+NOCDEF void noc_lexer_init(Noc_Lexer *lexer,
+                           const char *path,
+                           const char *source,
+                           size_t source_count)
+{
+    lexer->path = path;
+    lexer->source = source;
+    lexer->source_count = source_count;
+    lexer->cursor = 0;
+    lexer->line = 1;
+    lexer->column = 1;
+    lexer->beginning_of_line = true;
+    lexer->continuing_block_comment = false;
+}
+
+static size_t noc__splice_length(const char *source, size_t count, size_t position)
+{
+    if (position + 1 >= count || source[position] != '\\') return 0;
+    if (source[position + 1] == '\n') return 2;
+    if (source[position + 1] == '\r') {
+        return position + 2 < count && source[position + 2] == '\n' ? 3 : 2;
+    }
+    return 0;
+}
+
+static size_t noc__skip_splices(const char *source, size_t count, size_t position)
+{
+    size_t splice;
+    while ((splice = noc__splice_length(source, count, position)) != 0) {
+        position += splice;
+    }
+    return position;
+}
+
+static bool noc__logical_pair(const char *source,
+                              size_t count,
+                              size_t position,
+                              char first,
+                              char second,
+                              size_t *second_position)
+{
+    size_t next;
+    if (position >= count || source[position] != first) return false;
+    next = noc__skip_splices(source, count, position + 1);
+    if (next >= count || source[next] != second) return false;
+    if (second_position) *second_position = next;
+    return true;
+}
+
+static bool noc__quoted_prefix(const char *source,
+                               size_t count,
+                               size_t start,
+                               size_t *quote_position)
+{
+    if (start >= count) return false;
+    if (source[start] == '"' || source[start] == '\'') {
+        *quote_position = start;
+        return true;
+    }
+    if ((source[start] == 'L' || source[start] == 'u' || source[start] == 'U') &&
+        start + 1 < count &&
+        (source[start + 1] == '"' || source[start + 1] == '\'')) {
+        *quote_position = start + 1;
+        return true;
+    }
+    if (source[start] == 'u' && start + 2 < count && source[start + 1] == '8' &&
+        source[start + 2] == '"') {
+        *quote_position = start + 2;
+        return true;
+    }
+    return false;
+}
+
+static size_t noc__scan_line_comment(const Noc_Lexer *lexer, size_t second_slash)
+{
+    size_t i = second_slash + 1;
+    while (i < lexer->source_count) {
+        size_t splice = noc__splice_length(lexer->source, lexer->source_count, i);
+        if (splice != 0) {
+            i += splice;
+            continue;
+        }
+        if (lexer->source[i] == '\n' || lexer->source[i] == '\r') break;
+        i += 1;
+    }
+    return i;
+}
+
+static size_t noc__scan_block_comment(const Noc_Lexer *lexer,
+                                      size_t content_start,
+                                      bool *closed)
+{
+    size_t i = content_start;
+    *closed = false;
+    while (i < lexer->source_count) {
+        size_t slash;
+        size_t splice;
+        if (noc__logical_pair(lexer->source,
+                              lexer->source_count,
+                              i,
+                              '*',
+                              '/',
+                              &slash)) {
+            *closed = true;
+            return slash + 1;
+        }
+        splice = noc__splice_length(lexer->source, lexer->source_count, i);
+        i += splice ? splice : 1;
+    }
+    return i;
+}
+
+static size_t noc__scan_preprocessor(Noc_Lexer *lexer, size_t start)
+{
+    size_t i = start;
+    char quote = 0;
+    bool block_comment = false;
+    bool line_comment = false;
+    while (i < lexer->source_count) {
+        size_t second;
+        size_t splice = noc__splice_length(lexer->source, lexer->source_count, i);
+        char c;
+        if (splice != 0) {
+            i += splice;
+            continue;
+        }
+        c = lexer->source[i];
+        if (c == '\n' || c == '\r') {
+            i += 1;
+            if (c == '\r' && i < lexer->source_count && lexer->source[i] == '\n') i += 1;
+            if (block_comment) lexer->continuing_block_comment = true;
+            return i;
+        }
+        if (line_comment) {
+            i += 1;
+            continue;
+        }
+        if (block_comment) {
+            if (noc__logical_pair(lexer->source,
+                                  lexer->source_count,
+                                  i,
+                                  '*',
+                                  '/',
+                                  &second)) {
+                block_comment = false;
+                i = second + 1;
+            } else {
+                i += 1;
+            }
+            continue;
+        }
+        if (quote != 0) {
+            if (c == '\\' && i + 1 < lexer->source_count) {
+                i += 2;
+            } else {
+                if (c == quote) quote = 0;
+                i += 1;
+            }
+            continue;
+        }
+        if (c == '"' || c == '\'') {
+            quote = c;
+            i += 1;
+            continue;
+        }
+        if (noc__logical_pair(lexer->source,
+                              lexer->source_count,
+                              i,
+                              '/',
+                              '/',
+                              &second)) {
+            line_comment = true;
+            i = second + 1;
+            continue;
+        }
+        if (noc__logical_pair(lexer->source,
+                              lexer->source_count,
+                              i,
+                              '/',
+                              '*',
+                              &second)) {
+            block_comment = true;
+            i = second + 1;
+            continue;
+        }
+        i += 1;
+    }
+    if (block_comment) lexer->continuing_block_comment = true;
+    return i;
+}
+
+static size_t noc__punctuator_length(const char *source, size_t remaining)
+{
+    static const char *const punctuators4[] = {
+        "%:%:", NULL
+    };
+    static const char *const punctuators3[] = {
+        "<<=", ">>=", "...", NULL
+    };
+    static const char *const punctuators2[] = {
+        "->", "++", "--", "<<", ">>", "<=", ">=", "==", "!=",
+        "&&", "||", "*=", "/=", "%=", "+=", "-=", "&=", "^=",
+        "|=", "##", "<:", ":>", "<%", "%>", "%:", NULL
+    };
+    size_t i;
+    if (remaining >= 4) {
+        for (i = 0; punctuators4[i]; ++i) {
+            if (memcmp(source, punctuators4[i], 4) == 0) return 4;
+        }
+    }
+    if (remaining >= 3) {
+        for (i = 0; punctuators3[i]; ++i) {
+            if (memcmp(source, punctuators3[i], 3) == 0) return 3;
+        }
+    }
+    if (remaining >= 2) {
+        for (i = 0; punctuators2[i]; ++i) {
+            if (memcmp(source, punctuators2[i], 2) == 0) return 2;
+        }
+    }
+    return 1;
+}
+
+NOCDEF Noc_Token noc_lexer_next(Noc_Lexer *lexer)
+{
+    size_t start = lexer->cursor;
+    size_t end = start;
+    size_t quote = 0;
+    bool closed = false;
+    Noc_Token_Kind kind;
+    Noc_Location location;
+    Noc_Token token;
+
+    location.path = lexer->path;
+    location.offset = start;
+    location.line = lexer->line;
+    location.column = lexer->column;
+
+    if (start >= lexer->source_count) {
+        if (lexer->continuing_block_comment) {
+            lexer->continuing_block_comment = false;
+            token.kind = NOC_TOKEN_INVALID;
+            token.text.data = lexer->source + lexer->source_count;
+            token.text.count = 0;
+            token.location = location;
+            return token;
+        }
+        token.kind = NOC_TOKEN_EOF;
+        token.text.data = lexer->source + lexer->source_count;
+        token.text.count = 0;
+        token.location = location;
+        return token;
+    }
+
+    if (lexer->continuing_block_comment) {
+        end = noc__scan_block_comment(lexer, start, &closed);
+        lexer->continuing_block_comment = !closed;
+        token = noc__make_token(lexer,
+                                closed ? NOC_TOKEN_BLOCK_COMMENT : NOC_TOKEN_INVALID,
+                                start,
+                                end,
+                                location);
+        lexer->beginning_of_line = true;
+        return token;
+    }
+
+    if (lexer->beginning_of_line &&
+        (lexer->source[start] == '#' ||
+         noc__logical_pair(lexer->source,
+                           lexer->source_count,
+                           start,
+                           '%',
+                           ':',
+                           NULL))) {
+        end = noc__scan_preprocessor(lexer, start);
+        token = noc__make_token(lexer, NOC_TOKEN_PREPROCESSOR, start, end, location);
+        lexer->beginning_of_line = noc__contains_newline(token.text.data, token.text.count);
+        return token;
+    }
+
+    if (lexer->source[start] == '\r' || lexer->source[start] == '\n') {
+        end = start + 1;
+        if (lexer->source[start] == '\r' && end < lexer->source_count &&
+            lexer->source[end] == '\n') {
+            end += 1;
+        }
+        token = noc__make_token(lexer, NOC_TOKEN_NEWLINE, start, end, location);
+        lexer->beginning_of_line = true;
+        return token;
+    }
+
+    if (noc__is_horizontal_space(lexer->source[start]) ||
+        (lexer->source[start] == '\\' && start + 1 < lexer->source_count &&
+         (lexer->source[start + 1] == '\n' || lexer->source[start + 1] == '\r'))) {
+        end = start;
+        while (end < lexer->source_count) {
+            if (noc__is_horizontal_space(lexer->source[end])) {
+                end += 1;
+            } else if (lexer->source[end] == '\\' && end + 1 < lexer->source_count &&
+                       lexer->source[end + 1] == '\n') {
+                end += 2;
+            } else if (lexer->source[end] == '\\' && end + 1 < lexer->source_count &&
+                       lexer->source[end + 1] == '\r') {
+                end += 2;
+                if (end < lexer->source_count && lexer->source[end] == '\n') end += 1;
+            } else {
+                break;
+            }
+        }
+        return noc__make_token(lexer, NOC_TOKEN_WHITESPACE, start, end, location);
+    }
+
+    if (noc__logical_pair(lexer->source,
+                          lexer->source_count,
+                          start,
+                          '/',
+                          '/',
+                          &end)) {
+        end = noc__scan_line_comment(lexer, end);
+        return noc__make_token(lexer, NOC_TOKEN_LINE_COMMENT, start, end, location);
+    }
+
+    if (noc__logical_pair(lexer->source,
+                          lexer->source_count,
+                          start,
+                          '/',
+                          '*',
+                          &end)) {
+        end = noc__scan_block_comment(lexer, end + 1, &closed);
+        token = noc__make_token(lexer,
+                                closed ? NOC_TOKEN_BLOCK_COMMENT : NOC_TOKEN_INVALID,
+                                start,
+                                end,
+                                location);
+        if (noc__contains_newline(token.text.data, token.text.count)) {
+            lexer->beginning_of_line = true;
+        }
+        return token;
+    }
+
+    if (noc__quoted_prefix(lexer->source, lexer->source_count, start, &quote)) {
+        char quote_character = lexer->source[quote];
+        end = quote + 1;
+        while (end < lexer->source_count) {
+            if (lexer->source[end] == '\\') {
+                end += 1;
+                if (end < lexer->source_count) {
+                    if (lexer->source[end] == '\r' && end + 1 < lexer->source_count &&
+                        lexer->source[end + 1] == '\n') {
+                        end += 2;
+                    } else {
+                        end += 1;
+                    }
+                }
+            } else if (lexer->source[end] == quote_character) {
+                end += 1;
+                closed = true;
+                break;
+            } else if (lexer->source[end] == '\n' || lexer->source[end] == '\r') {
+                break;
+            } else {
+                end += 1;
+            }
+        }
+        kind = quote_character == '"' ? NOC_TOKEN_STRING : NOC_TOKEN_CHARACTER;
+        token = noc__make_token(lexer, closed ? kind : NOC_TOKEN_INVALID, start, end, location);
+        lexer->beginning_of_line = false;
+        return token;
+    }
+
+    if (noc__is_identifier_start((unsigned char)lexer->source[start])) {
+        end = start + 1;
+        while (end < lexer->source_count &&
+               noc__is_identifier_continue((unsigned char)lexer->source[end])) {
+            end += 1;
+        }
+        lexer->beginning_of_line = false;
+        return noc__make_token(lexer, NOC_TOKEN_IDENTIFIER, start, end, location);
+    }
+
+    if (isdigit((unsigned char)lexer->source[start]) ||
+        (lexer->source[start] == '.' && start + 1 < lexer->source_count &&
+         isdigit((unsigned char)lexer->source[start + 1]))) {
+        end = start + 1;
+        while (end < lexer->source_count) {
+            unsigned char c = (unsigned char)lexer->source[end];
+            if (isalnum(c) || c == '_' || c == '.') {
+                end += 1;
+            } else if ((c == '+' || c == '-') && end > start &&
+                       (lexer->source[end - 1] == 'e' || lexer->source[end - 1] == 'E' ||
+                        lexer->source[end - 1] == 'p' || lexer->source[end - 1] == 'P')) {
+                end += 1;
+            } else {
+                break;
+            }
+        }
+        lexer->beginning_of_line = false;
+        return noc__make_token(lexer, NOC_TOKEN_NUMBER, start, end, location);
+    }
+
+    end = start + noc__punctuator_length(lexer->source + start,
+                                         lexer->source_count - start);
+    lexer->beginning_of_line = false;
+    return noc__make_token(lexer, NOC_TOKEN_PUNCTUATOR, start, end, location);
+}
+
+NOCDEF void noc_buffer_free(Noc_Buffer *buffer)
+{
+    free(buffer->items);
+    buffer->items = NULL;
+    buffer->count = 0;
+    buffer->capacity = 0;
+}
+
+NOCDEF bool noc_buffer_reserve(Noc_Buffer *buffer, size_t additional_count)
+{
+    size_t needed;
+    size_t capacity;
+    char *items;
+    if (additional_count > SIZE_MAX - buffer->count) return false;
+    needed = buffer->count + additional_count;
+    if (needed <= buffer->capacity) return true;
+    capacity = buffer->capacity ? buffer->capacity : 256;
+    while (capacity < needed) {
+        if (capacity > SIZE_MAX / 2) {
+            capacity = needed;
+            break;
+        }
+        capacity *= 2;
+    }
+    items = (char *)realloc(buffer->items, capacity);
+    if (!items) return false;
+    buffer->items = items;
+    buffer->capacity = capacity;
+    return true;
+}
+
+NOCDEF bool noc_buffer_append(Noc_Buffer *buffer, const void *data, size_t count)
+{
+    uintptr_t source_address;
+    uintptr_t buffer_address;
+    size_t source_offset = 0;
+    bool source_is_internal = false;
+    if (count == 0) return true;
+    source_address = (uintptr_t)data;
+    buffer_address = (uintptr_t)buffer->items;
+    if (buffer->items && source_address >= buffer_address &&
+        source_address <= buffer_address + buffer->count) {
+        source_offset = (size_t)(source_address - buffer_address);
+        if (count > buffer->count - source_offset) return false;
+        source_is_internal = true;
+    }
+    if (!noc_buffer_reserve(buffer, count)) return false;
+    if (source_is_internal) data = buffer->items + source_offset;
+    memmove(buffer->items + buffer->count, data, count);
+    buffer->count += count;
+    return true;
+}
+
+NOCDEF bool noc_buffer_append_slice(Noc_Buffer *buffer, Noc_Slice slice)
+{
+    return noc_buffer_append(buffer, slice.data, slice.count);
+}
+
+NOCDEF bool noc_buffer_append_cstr(Noc_Buffer *buffer, const char *text)
+{
+    return noc_buffer_append(buffer, text, strlen(text));
+}
+
+static bool noc__buffer_appendfv(Noc_Buffer *buffer, const char *format, va_list arguments)
+{
+    va_list copy;
+    int required;
+    va_copy(copy, arguments);
+    required = vsnprintf(NULL, 0, format, copy);
+    va_end(copy);
+    if (required < 0) return false;
+    if (!noc_buffer_reserve(buffer, (size_t)required + 1)) return false;
+    va_copy(copy, arguments);
+    (void)vsnprintf(buffer->items + buffer->count, (size_t)required + 1, format, copy);
+    va_end(copy);
+    buffer->count += (size_t)required;
+    return true;
+}
+
+NOCDEF bool noc_buffer_appendf(Noc_Buffer *buffer, const char *format, ...)
+{
+    bool result;
+    va_list arguments;
+    va_start(arguments, format);
+    result = noc__buffer_appendfv(buffer, format, arguments);
+    va_end(arguments);
+    return result;
+}
+
+NOCDEF bool noc_buffer_terminate(Noc_Buffer *buffer)
+{
+    if (!noc_buffer_reserve(buffer, 1)) return false;
+    buffer->items[buffer->count] = '\0';
+    return true;
+}
+
+static const char *noc__diagnostic_name(Noc_Diagnostic_Severity severity)
+{
+    switch (severity) {
+    case NOC_DIAGNOSTIC_NOTE: return "note";
+    case NOC_DIAGNOSTIC_WARNING: return "warning";
+    case NOC_DIAGNOSTIC_ERROR: return "error";
+    }
+    return "diagnostic";
+}
+
+static void noc__default_diagnostic(void *user_data, const Noc_Diagnostic *diagnostic)
+{
+    FILE *stream = user_data ? (FILE *)user_data : stderr;
+    if (diagnostic->location.path) {
+        fprintf(stream,
+                "%s:%zu:%zu: %s: %s\n",
+                diagnostic->location.path,
+                diagnostic->location.line,
+                diagnostic->location.column,
+                noc__diagnostic_name(diagnostic->severity),
+                diagnostic->message);
+    } else {
+        fprintf(stream,
+                "noc: %s: %s\n",
+                noc__diagnostic_name(diagnostic->severity),
+                diagnostic->message);
+    }
+}
+
+static void noc__reportv(Noc_Context *context,
+                         Noc_Diagnostic_Severity severity,
+                         Noc_Location location,
+                         const char *format,
+                         va_list arguments)
+{
+    Noc_Buffer message = {0};
+    Noc_Diagnostic diagnostic;
+    if (!noc__buffer_appendfv(&message, format, arguments) ||
+        !noc_buffer_terminate(&message)) {
+        static const char allocation_failure[] = "out of memory while formatting diagnostic";
+        diagnostic.severity = NOC_DIAGNOSTIC_ERROR;
+        diagnostic.location = location;
+        diagnostic.message = allocation_failure;
+    } else {
+        diagnostic.severity = severity;
+        diagnostic.location = location;
+        diagnostic.message = message.items;
+    }
+    if (severity == NOC_DIAGNOSTIC_ERROR) context->error_count += 1;
+    context->diagnostic(context->diagnostic_user_data, &diagnostic);
+    noc_buffer_free(&message);
+}
+
+static void noc__report(Noc_Context *context,
+                        Noc_Diagnostic_Severity severity,
+                        Noc_Location location,
+                        const char *format,
+                        ...)
+{
+    va_list arguments;
+    va_start(arguments, format);
+    noc__reportv(context, severity, location, format, arguments);
+    va_end(arguments);
+}
+
+NOCDEF void noc_context_init(Noc_Context *context)
+{
+    memset(context, 0, sizeof(*context));
+    context->diagnostic = noc__default_diagnostic;
+    context->options.emit_line_directives = true;
+    context->options.unknown_rule_is_error = true;
+}
+
+NOCDEF void noc_context_deinit(Noc_Context *context)
+{
+    free(context->rules);
+    memset(context, 0, sizeof(*context));
+}
+
+NOCDEF void noc_context_set_diagnostic(Noc_Context *context,
+                                       Noc_Diagnostic_Fn diagnostic,
+                                       void *user_data)
+{
+    context->diagnostic = diagnostic ? diagnostic : noc__default_diagnostic;
+    context->diagnostic_user_data = user_data;
+}
+
+NOCDEF const Noc_Rule *noc_find_rule(const Noc_Context *context, Noc_Slice name)
+{
+    size_t i;
+    for (i = 0; i < context->rules_count; ++i) {
+        if (noc_slice_equal_cstr(name, context->rules[i].name)) return &context->rules[i];
+    }
+    return NULL;
+}
+
+NOCDEF bool noc_register_rule(Noc_Context *context, Noc_Rule rule)
+{
+    Noc_Rule *rules;
+    size_t capacity;
+    Noc_Location no_location = {0};
+    if (!rule.name || !rule.name[0]) {
+        noc__report(context, NOC_DIAGNOSTIC_ERROR, no_location, "rule name cannot be empty");
+        return false;
+    }
+    if (!rule.expand) {
+        noc__report(context,
+                    NOC_DIAGNOSTIC_ERROR,
+                    no_location,
+                    "rule '%s' has no expansion callback",
+                    rule.name);
+        return false;
+    }
+    if (noc_find_rule(context, noc_slice_from_cstr(rule.name))) {
+        noc__report(context,
+                    NOC_DIAGNOSTIC_ERROR,
+                    no_location,
+                    "rule '%s' is already registered",
+                    rule.name);
+        return false;
+    }
+    if (context->rules_count == context->rules_capacity) {
+        capacity = context->rules_capacity ? context->rules_capacity * 2 : 8;
+        rules = (Noc_Rule *)realloc(context->rules, capacity * sizeof(*rules));
+        if (!rules) {
+            noc__report(context,
+                        NOC_DIAGNOSTIC_ERROR,
+                        no_location,
+                        "out of memory while registering rule '%s'",
+                        rule.name);
+            return false;
+        }
+        context->rules = rules;
+        context->rules_capacity = capacity;
+    }
+    context->rules[context->rules_count++] = rule;
+    return true;
+}
+
+NOCDEF const char *noc_rule_scope_name(Noc_Rule_Scope scope)
+{
+    switch (scope) {
+    case NOC_RULE_TOKEN: return "token";
+    case NOC_RULE_EXPRESSION: return "expression";
+    case NOC_RULE_STATEMENT: return "statement";
+    case NOC_RULE_DECLARATION: return "declaration";
+    case NOC_RULE_ATTRIBUTE: return "attribute";
+    case NOC_RULE_DIRECTIVE: return "directive";
+    }
+    return "unknown";
+}
+
+NOCDEF void noc_describe(const Noc_Context *context, FILE *stream)
+{
+    size_t i;
+    fprintf(stream, "Project dialect (%zu rule%s):\n",
+            context->rules_count,
+            context->rules_count == 1 ? "" : "s");
+    for (i = 0; i < context->rules_count; ++i) {
+        const Noc_Rule *rule = &context->rules[i];
+        fprintf(stream, "\n  @%s [%s]\n", rule->name, noc_rule_scope_name(rule->scope));
+        if (rule->syntax) fprintf(stream, "    Syntax: %s\n", rule->syntax);
+        if (rule->description) fprintf(stream, "    %s\n", rule->description);
+    }
+}
+
+NOCDEF const Noc_Token *noc_rw_peek_raw(const Noc_Rewriter *rewriter, size_t lookahead)
+{
+    size_t index = rewriter->cursor + lookahead;
+    if (index >= rewriter->tokens_count) return NULL;
+    return &rewriter->tokens[index];
+}
+
+NOCDEF const Noc_Token *noc_rw_peek(const Noc_Rewriter *rewriter, size_t lookahead)
+{
+    size_t index = rewriter->cursor;
+    size_t found = 0;
+    while (index < rewriter->tokens_count) {
+        if (!noc_token_is_trivia(rewriter->tokens[index])) {
+            if (found == lookahead) return &rewriter->tokens[index];
+            found += 1;
+        }
+        index += 1;
+    }
+    return NULL;
+}
+
+NOCDEF bool noc_rw_take_raw(Noc_Rewriter *rewriter, Noc_Token *token)
+{
+    if (rewriter->cursor >= rewriter->tokens_count) return false;
+    if (token) *token = rewriter->tokens[rewriter->cursor];
+    rewriter->cursor += 1;
+    return true;
+}
+
+NOCDEF void noc_rw_skip_trivia(Noc_Rewriter *rewriter)
+{
+    while (rewriter->cursor < rewriter->tokens_count &&
+           noc_token_is_trivia(rewriter->tokens[rewriter->cursor])) {
+        rewriter->cursor += 1;
+    }
+}
+
+NOCDEF bool noc_rw_match_punct(Noc_Rewriter *rewriter, const char *punctuator)
+{
+    size_t cursor = rewriter->cursor;
+    while (cursor < rewriter->tokens_count &&
+           noc_token_is_trivia(rewriter->tokens[cursor])) {
+        cursor += 1;
+    }
+    if (cursor < rewriter->tokens_count &&
+        noc_token_is_punct(rewriter->tokens[cursor], punctuator)) {
+        rewriter->cursor = cursor + 1;
+        return true;
+    }
+    return false;
+}
+
+NOCDEF bool noc_rw_match_identifier(Noc_Rewriter *rewriter, const char *identifier)
+{
+    size_t cursor = rewriter->cursor;
+    while (cursor < rewriter->tokens_count &&
+           noc_token_is_trivia(rewriter->tokens[cursor])) {
+        cursor += 1;
+    }
+    if (cursor < rewriter->tokens_count &&
+        noc_token_is_identifier(rewriter->tokens[cursor], identifier)) {
+        rewriter->cursor = cursor + 1;
+        return true;
+    }
+    return false;
+}
+
+NOCDEF bool noc_rw_expect_punct(Noc_Rewriter *rewriter, const char *punctuator)
+{
+    const Noc_Token *token = noc_rw_peek(rewriter, 0);
+    if (noc_rw_match_punct(rewriter, punctuator)) return true;
+    if (token) {
+        noc_rw_error_at(rewriter,
+                        token->location,
+                        "expected '%s' after @%s, got %s '%.*s'",
+                        punctuator,
+                        rewriter->rule->name,
+                        noc_token_kind_name(token->kind),
+                        (int)token->text.count,
+                        token->text.data);
+    } else {
+        noc_rw_error(rewriter, "expected '%s' after @%s", punctuator, rewriter->rule->name);
+    }
+    return false;
+}
+
+NOCDEF bool noc_rw_expect_identifier(Noc_Rewriter *rewriter,
+                                     const char *identifier,
+                                     Noc_Token *token)
+{
+    const Noc_Token *next;
+    noc_rw_skip_trivia(rewriter);
+    next = noc_rw_peek_raw(rewriter, 0);
+    if (next && next->kind == NOC_TOKEN_IDENTIFIER &&
+        (!identifier || noc_slice_equal_cstr(next->text, identifier))) {
+        if (token) *token = *next;
+        rewriter->cursor += 1;
+        return true;
+    }
+    if (next) {
+        noc_rw_error_at(rewriter,
+                        next->location,
+                        "expected %sidentifier after @%s, got %s '%.*s'",
+                        identifier ? identifier : "",
+                        rewriter->rule->name,
+                        noc_token_kind_name(next->kind),
+                        (int)next->text.count,
+                        next->text.data);
+    } else {
+        noc_rw_error(rewriter, "expected identifier after @%s", rewriter->rule->name);
+    }
+    return false;
+}
+
+NOCDEF bool noc_rw_capture_balanced(Noc_Rewriter *rewriter,
+                                    const char *open,
+                                    const char *close,
+                                    Noc_Slice *inside)
+{
+    const Noc_Token *token;
+    size_t start;
+    size_t depth = 1;
+    if (!noc_rw_expect_punct(rewriter, open)) return false;
+    start = rewriter->cursor < rewriter->tokens_count
+                ? rewriter->tokens[rewriter->cursor].location.offset
+                : rewriter->source_count;
+    while (rewriter->cursor < rewriter->tokens_count) {
+        token = &rewriter->tokens[rewriter->cursor++];
+        if (token->kind == NOC_TOKEN_EOF) break;
+        if (noc_token_is_punct(*token, open)) {
+            depth += 1;
+        } else if (noc_token_is_punct(*token, close)) {
+            depth -= 1;
+            if (depth == 0) {
+                inside->data = rewriter->source + start;
+                inside->count = token->location.offset - start;
+                return true;
+            }
+        }
+    }
+    noc_rw_error(rewriter,
+                 "unterminated '%s ... %s' after @%s",
+                 open,
+                 close,
+                 rewriter->rule->name);
+    return false;
+}
+
+NOCDEF const char *noc_rw_source_path(const Noc_Rewriter *rewriter)
+{
+    return rewriter->path;
+}
+
+NOCDEF Noc_Location noc_rw_trigger_location(const Noc_Rewriter *rewriter)
+{
+    return rewriter->trigger_location;
+}
+
+NOCDEF bool noc_rw_emit(Noc_Rewriter *rewriter, const void *data, size_t count)
+{
+    if (!noc_buffer_append(rewriter->output, data, count)) {
+        noc_rw_error(rewriter, "out of memory while expanding @%s", rewriter->rule->name);
+        return false;
+    }
+    return true;
+}
+
+NOCDEF bool noc_rw_emit_slice(Noc_Rewriter *rewriter, Noc_Slice slice)
+{
+    return noc_rw_emit(rewriter, slice.data, slice.count);
+}
+
+NOCDEF bool noc_rw_emit_cstr(Noc_Rewriter *rewriter, const char *text)
+{
+    return noc_rw_emit(rewriter, text, strlen(text));
+}
+
+NOCDEF bool noc_rw_emitf(Noc_Rewriter *rewriter, const char *format, ...)
+{
+    bool result;
+    va_list arguments;
+    va_start(arguments, format);
+    result = noc__buffer_appendfv(rewriter->output, format, arguments);
+    va_end(arguments);
+    if (!result) noc_rw_error(rewriter, "out of memory while expanding @%s", rewriter->rule->name);
+    return result;
+}
+
+NOCDEF bool noc_rw_emit_c_string(Noc_Rewriter *rewriter,
+                                 const void *data,
+                                 size_t count)
+{
+    const unsigned char *bytes = (const unsigned char *)data;
+    size_t i;
+    if (!noc_rw_emit_cstr(rewriter, "\"")) return false;
+    for (i = 0; i < count; ++i) {
+        unsigned char c = bytes[i];
+        switch (c) {
+        case '\\': if (!noc_rw_emit_cstr(rewriter, "\\\\")) return false; break;
+        case '"': if (!noc_rw_emit_cstr(rewriter, "\\\"")) return false; break;
+        case '?': if (!noc_rw_emit_cstr(rewriter, "\\?")) return false; break;
+        case '\n': if (!noc_rw_emit_cstr(rewriter, "\\n")) return false; break;
+        case '\r': if (!noc_rw_emit_cstr(rewriter, "\\r")) return false; break;
+        case '\t': if (!noc_rw_emit_cstr(rewriter, "\\t")) return false; break;
+        default:
+            if (c >= 32 && c <= 126) {
+                if (!noc_rw_emit(rewriter, &c, 1)) return false;
+            } else if (!noc_rw_emitf(rewriter, "\\%03o", (unsigned int)c)) {
+                return false;
+            }
+            break;
+        }
+    }
+    return noc_rw_emit_cstr(rewriter, "\"");
+}
+
+NOCDEF void noc_rw_error_at(Noc_Rewriter *rewriter,
+                            Noc_Location location,
+                            const char *format,
+                            ...)
+{
+    va_list arguments;
+    rewriter->failed = true;
+    va_start(arguments, format);
+    noc__reportv(rewriter->context, NOC_DIAGNOSTIC_ERROR, location, format, arguments);
+    va_end(arguments);
+}
+
+NOCDEF void noc_rw_error(Noc_Rewriter *rewriter, const char *format, ...)
+{
+    va_list arguments;
+    rewriter->failed = true;
+    va_start(arguments, format);
+    noc__reportv(rewriter->context,
+                 NOC_DIAGNOSTIC_ERROR,
+                 rewriter->trigger_location,
+                 format,
+                 arguments);
+    va_end(arguments);
+}
+
+static int noc__hex_digit(char c)
+{
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+    return -1;
+}
+
+NOCDEF bool noc_decode_string_token(Noc_Token token, Noc_Buffer *decoded)
+{
+    size_t i;
+    if (token.kind != NOC_TOKEN_STRING || token.text.count < 2 ||
+        token.text.data[0] != '"' || token.text.data[token.text.count - 1] != '"') {
+        return false;
+    }
+    i = 1;
+    while (i + 1 < token.text.count) {
+        unsigned char value;
+        char c = token.text.data[i++];
+        if (c != '\\') {
+            if (!noc_buffer_append(decoded, &c, 1)) return false;
+            continue;
+        }
+        if (i + 1 > token.text.count) return false;
+        c = token.text.data[i++];
+        switch (c) {
+        case '\'': value = '\''; break;
+        case '"': value = '"'; break;
+        case '?': value = '?'; break;
+        case '\\': value = '\\'; break;
+        case 'a': value = '\a'; break;
+        case 'b': value = '\b'; break;
+        case 'f': value = '\f'; break;
+        case 'n': value = '\n'; break;
+        case 'r': value = '\r'; break;
+        case 't': value = '\t'; break;
+        case 'v': value = '\v'; break;
+        case 'x': {
+            int digit;
+            unsigned int number = 0;
+            size_t digits = 0;
+            while (i + 1 < token.text.count &&
+                   (digit = noc__hex_digit(token.text.data[i])) >= 0) {
+                number = number * 16u + (unsigned int)digit;
+                i += 1;
+                digits += 1;
+            }
+            if (digits == 0 || number > 255u) return false;
+            value = (unsigned char)number;
+            break;
+        }
+        case '\n': continue;
+        case '\r':
+            if (i + 1 < token.text.count && token.text.data[i] == '\n') i += 1;
+            continue;
+        default:
+            if (c >= '0' && c <= '7') {
+                unsigned int number = (unsigned int)(c - '0');
+                size_t digits = 1;
+                while (digits < 3 && i + 1 < token.text.count &&
+                       token.text.data[i] >= '0' && token.text.data[i] <= '7') {
+                    number = number * 8u + (unsigned int)(token.text.data[i] - '0');
+                    i += 1;
+                    digits += 1;
+                }
+                if (number > 255u) return false;
+                value = (unsigned char)number;
+            } else {
+                return false;
+            }
+            break;
+        }
+        if (!noc_buffer_append(decoded, &value, 1)) return false;
+    }
+    return true;
+}
+
+static bool noc__tokens_append(Noc__Tokens *tokens, Noc_Token token)
+{
+    Noc_Token *items;
+    size_t capacity;
+    if (tokens->count == tokens->capacity) {
+        capacity = tokens->capacity ? tokens->capacity * 2 : 256;
+        items = (Noc_Token *)realloc(tokens->items, capacity * sizeof(*items));
+        if (!items) return false;
+        tokens->items = items;
+        tokens->capacity = capacity;
+    }
+    tokens->items[tokens->count++] = token;
+    return true;
+}
+
+static bool noc__emit_line_directive(Noc_Buffer *output, const char *path)
+{
+    const unsigned char *cursor = (const unsigned char *)path;
+    if (!noc_buffer_append_cstr(output, "#line 1 \"")) return false;
+    while (*cursor) {
+        if (*cursor == '\\' || *cursor == '"' || *cursor == '?') {
+            if (!noc_buffer_append(output, "\\", 1)) return false;
+        }
+        if (*cursor == '\n') {
+            if (!noc_buffer_append_cstr(output, "n")) return false;
+        } else if (*cursor == '\r') {
+            if (!noc_buffer_append_cstr(output, "r")) return false;
+        } else if (*cursor == '\t') {
+            if (!noc_buffer_append_cstr(output, "t")) return false;
+        } else if (*cursor >= 32 && *cursor <= 126) {
+            if (!noc_buffer_append(output, cursor, 1)) return false;
+        } else if (!noc_buffer_appendf(output, "\\%03o", (unsigned int)*cursor)) {
+            return false;
+        }
+        cursor += 1;
+    }
+    return noc_buffer_append_cstr(output, "\"\n");
+}
+
+static bool noc__reject_trigraphs(Noc_Context *context,
+                                  const char *path,
+                                  const char *source,
+                                  size_t source_count)
+{
+    size_t i;
+    size_t line = 1;
+    size_t column = 1;
+    for (i = 0; i < source_count; ++i) {
+        if (i + 2 < source_count && source[i] == '?' && source[i + 1] == '?' &&
+            strchr("=/'()!<>-", source[i + 2]) != NULL) {
+            Noc_Location location;
+            location.path = path;
+            location.offset = i;
+            location.line = line;
+            location.column = column;
+            noc__report(context,
+                        NOC_DIAGNOSTIC_ERROR,
+                        location,
+                        "C trigraphs are not supported by noc.h");
+            return false;
+        }
+        if (source[i] == '\r') {
+            if (i + 1 < source_count && source[i + 1] == '\n') i += 1;
+            line += 1;
+            column = 1;
+        } else if (source[i] == '\n') {
+            line += 1;
+            column = 1;
+        } else {
+            column += 1;
+        }
+    }
+    return true;
+}
+
+NOCDEF bool noc_transform_source(Noc_Context *context,
+                                 const char *path,
+                                 const char *source,
+                                 size_t source_count,
+                                 Noc_Transform_Result *result)
+{
+    Noc_Lexer lexer;
+    Noc__Tokens tokens = {0};
+    Noc_Buffer output = {0};
+    Noc_Token token;
+    size_t index = 0;
+    size_t errors_before = context->error_count;
+    bool ok = true;
+    Noc_Location no_location = {0};
+
+    memset(result, 0, sizeof(*result));
+    if (!noc__reject_trigraphs(context, path, source, source_count)) {
+        ok = false;
+        goto done;
+    }
+    noc_lexer_init(&lexer, path, source, source_count);
+    do {
+        token = noc_lexer_next(&lexer);
+        if (!noc__tokens_append(&tokens, token)) {
+            noc__report(context,
+                        NOC_DIAGNOSTIC_ERROR,
+                        no_location,
+                        "out of memory while tokenizing '%s'",
+                        path);
+            ok = false;
+            goto done;
+        }
+        if (token.kind == NOC_TOKEN_INVALID) {
+            noc__report(context,
+                        NOC_DIAGNOSTIC_ERROR,
+                        token.location,
+                        "unterminated or invalid token '%.*s'",
+                        (int)token.text.count,
+                        token.text.data);
+            ok = false;
+        }
+    } while (token.kind != NOC_TOKEN_EOF);
+    if (!ok) goto done;
+
+    if (context->options.emit_line_directives && !noc__emit_line_directive(&output, path)) {
+        noc__report(context,
+                    NOC_DIAGNOSTIC_ERROR,
+                    no_location,
+                    "out of memory while starting output for '%s'",
+                    path);
+        ok = false;
+        goto done;
+    }
+
+    while (index < tokens.count && tokens.items[index].kind != NOC_TOKEN_EOF) {
+        token = tokens.items[index];
+        if (noc_token_is_punct(token, "@")) {
+            size_t name_index = index + 1;
+            const Noc_Rule *rule;
+            while (name_index < tokens.count && noc_token_is_trivia(tokens.items[name_index])) {
+                name_index += 1;
+            }
+            if (name_index < tokens.count &&
+                tokens.items[name_index].kind == NOC_TOKEN_IDENTIFIER) {
+                rule = noc_find_rule(context, tokens.items[name_index].text);
+                if (rule) {
+                    Noc_Rewriter rewriter;
+                    size_t expansion_errors = context->error_count;
+                    bool expanded;
+                    memset(&rewriter, 0, sizeof(rewriter));
+                    rewriter.context = context;
+                    rewriter.rule = rule;
+                    rewriter.path = path;
+                    rewriter.source = source;
+                    rewriter.source_count = source_count;
+                    rewriter.tokens = tokens.items;
+                    rewriter.tokens_count = tokens.count;
+                    rewriter.cursor = name_index + 1;
+                    rewriter.trigger_location = token.location;
+                    rewriter.output = &output;
+                    expanded = rule->expand(&rewriter, rule, rule->user_data);
+                    if (!expanded && context->error_count == expansion_errors) {
+                        noc_rw_error(&rewriter,
+                                     "expansion callback for @%s failed without reporting an error",
+                                     rule->name);
+                    }
+                    if (!expanded) rewriter.failed = true;
+                    if (rewriter.failed) {
+                        ok = false;
+                        goto done;
+                    }
+                    index = rewriter.cursor;
+                    continue;
+                }
+                if (context->options.unknown_rule_is_error) {
+                    noc__report(context,
+                                NOC_DIAGNOSTIC_ERROR,
+                                token.location,
+                                "unknown dialect rule '@%.*s'",
+                                (int)tokens.items[name_index].text.count,
+                                tokens.items[name_index].text.data);
+                    ok = false;
+                    goto done;
+                }
+            }
+        }
+        if (!noc_buffer_append_slice(&output, token.text)) {
+            noc__report(context,
+                        NOC_DIAGNOSTIC_ERROR,
+                        token.location,
+                        "out of memory while transforming '%s'",
+                        path);
+            ok = false;
+            goto done;
+        }
+        index += 1;
+    }
+
+    if (!noc_buffer_terminate(&output)) {
+        noc__report(context,
+                    NOC_DIAGNOSTIC_ERROR,
+                    no_location,
+                    "out of memory while finishing output for '%s'",
+                    path);
+        ok = false;
+        goto done;
+    }
+    result->output = output.items;
+    result->output_count = output.count;
+    output.items = NULL;
+    output.count = 0;
+    output.capacity = 0;
+
+done:
+    result->error_count = context->error_count - errors_before;
+    free(tokens.items);
+    noc_buffer_free(&output);
+    return ok && result->error_count == 0;
+}
+
+NOCDEF void noc_transform_result_free(Noc_Transform_Result *result)
+{
+    free(result->output);
+    memset(result, 0, sizeof(*result));
+}
+
+static bool noc__read_file(Noc_Context *context,
+                           const char *path,
+                           Noc_Buffer *contents,
+                           Noc_Location location)
+{
+    FILE *file = fopen(path, "rb");
+    char chunk[8192];
+    size_t count;
+    if (!file) {
+        noc__report(context,
+                    NOC_DIAGNOSTIC_ERROR,
+                    location,
+                    "could not open '%s': %s",
+                    path,
+                    strerror(errno));
+        return false;
+    }
+    while ((count = fread(chunk, 1, sizeof(chunk), file)) > 0) {
+        if (!noc_buffer_append(contents, chunk, count)) {
+            fclose(file);
+            noc__report(context,
+                        NOC_DIAGNOSTIC_ERROR,
+                        location,
+                        "out of memory while reading '%s'",
+                        path);
+            return false;
+        }
+    }
+    if (ferror(file)) {
+        noc__report(context,
+                    NOC_DIAGNOSTIC_ERROR,
+                    location,
+                    "could not read '%s': %s",
+                    path,
+                    strerror(errno));
+        fclose(file);
+        return false;
+    }
+    fclose(file);
+    return true;
+}
+
+static bool noc__paths_refer_to_same_file(const char *left, const char *right)
+{
+    if (strcmp(left, right) == 0) return true;
+#ifdef _WIN32
+    {
+        HANDLE left_handle = CreateFileA(left,
+                                         0,
+                                         FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                                         NULL,
+                                         OPEN_EXISTING,
+                                         FILE_FLAG_BACKUP_SEMANTICS,
+                                         NULL);
+        HANDLE right_handle = CreateFileA(right,
+                                          0,
+                                          FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                                          NULL,
+                                          OPEN_EXISTING,
+                                          FILE_FLAG_BACKUP_SEMANTICS,
+                                          NULL);
+        BY_HANDLE_FILE_INFORMATION left_info;
+        BY_HANDLE_FILE_INFORMATION right_info;
+        bool same = false;
+        if (left_handle != INVALID_HANDLE_VALUE && right_handle != INVALID_HANDLE_VALUE &&
+            GetFileInformationByHandle(left_handle, &left_info) &&
+            GetFileInformationByHandle(right_handle, &right_info)) {
+            same = left_info.dwVolumeSerialNumber == right_info.dwVolumeSerialNumber &&
+                   left_info.nFileIndexHigh == right_info.nFileIndexHigh &&
+                   left_info.nFileIndexLow == right_info.nFileIndexLow;
+        }
+        if (left_handle != INVALID_HANDLE_VALUE) CloseHandle(left_handle);
+        if (right_handle != INVALID_HANDLE_VALUE) CloseHandle(right_handle);
+        return same;
+    }
+#else
+    {
+        struct stat left_stat;
+        struct stat right_stat;
+        return stat(left, &left_stat) == 0 && stat(right, &right_stat) == 0 &&
+               left_stat.st_dev == right_stat.st_dev &&
+               left_stat.st_ino == right_stat.st_ino;
+    }
+#endif
+}
+
+static FILE *noc__open_unique_output(Noc_Context *context,
+                                     const char *output_path,
+                                     Noc_Buffer *temporary_path,
+                                     Noc_Location location)
+{
+    unsigned long long salt = (unsigned long long)time(NULL) ^
+                              (unsigned long long)clock() ^
+                              (unsigned long long)(uintptr_t)temporary_path;
+    size_t attempt;
+    for (attempt = 0; attempt < 128; ++attempt) {
+        FILE *file;
+        temporary_path->count = 0;
+        if (!noc_buffer_appendf(temporary_path,
+                                "%s.noc-tmp-%llx-%zu",
+                                output_path,
+                                salt,
+                                attempt) ||
+            !noc_buffer_terminate(temporary_path)) {
+            noc__report(context,
+                        NOC_DIAGNOSTIC_ERROR,
+                        location,
+                        "out of memory while creating temporary output path");
+            return NULL;
+        }
+        errno = 0;
+        file = fopen(temporary_path->items, "wbx");
+        if (file) return file;
+        if (errno != EEXIST) {
+            noc__report(context,
+                        NOC_DIAGNOSTIC_ERROR,
+                        location,
+                        "could not create '%s': %s",
+                        temporary_path->items,
+                        strerror(errno));
+            return NULL;
+        }
+    }
+    noc__report(context,
+                NOC_DIAGNOSTIC_ERROR,
+                location,
+                "could not create a unique temporary file for '%s'",
+                output_path);
+    return NULL;
+}
+
+static bool noc__replace_output(const char *temporary_path, const char *output_path)
+{
+#ifdef _WIN32
+    return MoveFileExA(temporary_path,
+                       output_path,
+                       MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) != 0;
+#else
+    return rename(temporary_path, output_path) == 0;
+#endif
+}
+
+NOCDEF bool noc_transform_file(Noc_Context *context,
+                               const char *input_path,
+                               const char *output_path)
+{
+    Noc_Buffer source = {0};
+    Noc_Buffer temporary_path = {0};
+    Noc_Transform_Result result = {0};
+    Noc_Location no_location = {0};
+    FILE *file = NULL;
+    bool ok = false;
+    bool temporary_created = false;
+    if (noc__paths_refer_to_same_file(input_path, output_path)) {
+        noc__report(context,
+                    NOC_DIAGNOSTIC_ERROR,
+                    no_location,
+                    "input and output paths must differ: '%s'",
+                    input_path);
+        goto done;
+    }
+    if (!noc__read_file(context, input_path, &source, no_location)) goto done;
+    if (!noc_transform_source(context,
+                              input_path,
+                              source.items ? source.items : "",
+                              source.count,
+                              &result)) {
+        goto done;
+    }
+    file = noc__open_unique_output(context, output_path, &temporary_path, no_location);
+    if (!file) goto done;
+    temporary_created = true;
+    if (result.output_count > 0 &&
+        fwrite(result.output, 1, result.output_count, file) != result.output_count) {
+        noc__report(context,
+                    NOC_DIAGNOSTIC_ERROR,
+                    no_location,
+                    "could not write '%s': %s",
+                    temporary_path.items,
+                    strerror(errno));
+        goto done;
+    }
+    if (fclose(file) != 0) {
+        file = NULL;
+        noc__report(context,
+                    NOC_DIAGNOSTIC_ERROR,
+                    no_location,
+                    "could not close '%s': %s",
+                    temporary_path.items,
+                    strerror(errno));
+        goto done;
+    }
+    file = NULL;
+    if (!noc__replace_output(temporary_path.items, output_path)) {
+        noc__report(context,
+                    NOC_DIAGNOSTIC_ERROR,
+                    no_location,
+                    "could not rename '%s' to '%s': %s",
+                    temporary_path.items,
+                    output_path,
+                    strerror(errno));
+        goto done;
+    }
+    temporary_created = false;
+    ok = true;
+
+done:
+    if (file) fclose(file);
+    if (temporary_created) (void)remove(temporary_path.items);
+    noc_transform_result_free(&result);
+    noc_buffer_free(&temporary_path);
+    noc_buffer_free(&source);
+    return ok;
+}
+
+static bool noc__path_is_absolute(const char *path)
+{
+    if (!path[0]) return false;
+#ifdef _WIN32
+    if (path[0] == '/' || path[0] == '\\') return true;
+    return isalpha((unsigned char)path[0]) && path[1] == ':' &&
+           (path[2] == '/' || path[2] == '\\');
+#else
+    return path[0] == '/';
+#endif
+}
+
+static bool noc__resolve_path(const char *source_path,
+                              const char *referenced_path,
+                              Noc_Buffer *resolved)
+{
+    const char *slash;
+#ifdef _WIN32
+    const char *backslash;
+#endif
+    const char *separator;
+    if (noc__path_is_absolute(referenced_path)) {
+        return noc_buffer_append_cstr(resolved, referenced_path) &&
+               noc_buffer_terminate(resolved);
+    }
+    slash = strrchr(source_path, '/');
+#ifdef _WIN32
+    backslash = strrchr(source_path, '\\');
+    separator = slash;
+    if (!separator || (backslash && backslash > separator)) separator = backslash;
+#else
+    separator = slash;
+#endif
+    if (separator &&
+        !noc_buffer_append(resolved, source_path, (size_t)(separator - source_path + 1))) {
+        return false;
+    }
+    return noc_buffer_append_cstr(resolved, referenced_path) &&
+           noc_buffer_terminate(resolved);
+}
+
+static bool noc__expand_embed(Noc_Rewriter *rewriter,
+                              const Noc_Rule *rule,
+                              void *user_data)
+{
+    const Noc_Token *path_token;
+    Noc_Buffer decoded_path = {0};
+    Noc_Buffer resolved_path = {0};
+    Noc_Buffer contents = {0};
+    Noc_Token consumed;
+    bool ok = false;
+    (void)rule;
+    (void)user_data;
+    if (!noc_rw_expect_punct(rewriter, "(")) goto done;
+    noc_rw_skip_trivia(rewriter);
+    path_token = noc_rw_peek_raw(rewriter, 0);
+    if (!path_token || path_token->kind != NOC_TOKEN_STRING) {
+        if (path_token) {
+            noc_rw_error_at(rewriter,
+                            path_token->location,
+                            "@%s expects one ordinary string literal path",
+                            rewriter->rule->name);
+        } else {
+            noc_rw_error(rewriter,
+                         "@%s expects one ordinary string literal path",
+                         rewriter->rule->name);
+        }
+        goto done;
+    }
+    if (!noc_decode_string_token(*path_token, &decoded_path) ||
+        !noc_buffer_terminate(&decoded_path) ||
+        memchr(decoded_path.items, '\0', decoded_path.count) != NULL) {
+        noc_rw_error_at(rewriter,
+                        path_token->location,
+                        "@%s path is not a supported C string literal",
+                        rewriter->rule->name);
+        goto done;
+    }
+    (void)noc_rw_take_raw(rewriter, &consumed);
+    if (!noc_rw_expect_punct(rewriter, ")")) goto done;
+    if (!noc__resolve_path(rewriter->path, decoded_path.items, &resolved_path)) {
+        noc_rw_error(rewriter, "out of memory while resolving embedded file path");
+        goto done;
+    }
+    if (!noc__read_file(rewriter->context,
+                        resolved_path.items,
+                        &contents,
+                        path_token->location)) {
+        rewriter->failed = true;
+        goto done;
+    }
+    if (!noc_rw_emit_c_string(rewriter, contents.items, contents.count)) goto done;
+    ok = true;
+
+done:
+    noc_buffer_free(&contents);
+    noc_buffer_free(&resolved_path);
+    noc_buffer_free(&decoded_path);
+    return ok;
+}
+
+NOCDEF bool noc_register_embed_rule(Noc_Context *context, const char *name)
+{
+    Noc_Rule rule;
+    rule.name = name;
+    rule.scope = NOC_RULE_EXPRESSION;
+    rule.syntax = "@<registered-name>(\"path\")";
+    rule.description = "Embed a file as a C string literal; paths are relative to the source file.";
+    rule.expand = noc__expand_embed;
+    rule.user_data = NULL;
+    return noc_register_rule(context, rule);
+}
+
+static void noc__print_usage(FILE *stream, const char *program)
+{
+    fprintf(stream,
+            "Usage:\n"
+            "  %s [options] INPUT.c -o OUTPUT.c\n"
+            "  %s --describe\n\n"
+            "Options:\n"
+            "  -o PATH               Write transformed C to PATH\n"
+            "  --describe            Describe all registered dialect rules\n"
+            "  --no-line-directives  Do not prepend a #line directive\n"
+            "  -h, --help            Show this help\n",
+            program,
+            program);
+}
+
+NOCDEF int noc_run_cli(Noc_Context *context, int argc, char **argv)
+{
+    const char *input = NULL;
+    const char *output = NULL;
+    int i;
+    for (i = 1; i < argc; ++i) {
+        const char *argument = argv[i];
+        if (strcmp(argument, "-h") == 0 || strcmp(argument, "--help") == 0) {
+            noc__print_usage(stdout, argv[0]);
+            return 0;
+        }
+        if (strcmp(argument, "--describe") == 0) {
+            noc_describe(context, stdout);
+            return 0;
+        }
+        if (strcmp(argument, "--no-line-directives") == 0) {
+            context->options.emit_line_directives = false;
+            continue;
+        }
+        if (strcmp(argument, "-o") == 0) {
+            if (i + 1 >= argc) {
+                fprintf(stderr, "noc: error: -o requires a path\n");
+                return 2;
+            }
+            output = argv[++i];
+            continue;
+        }
+        if (argument[0] == '-') {
+            fprintf(stderr, "noc: error: unknown option '%s'\n", argument);
+            return 2;
+        }
+        if (input) {
+            fprintf(stderr, "noc: error: only one input is currently supported\n");
+            return 2;
+        }
+        input = argument;
+    }
+    if (!input || !output) {
+        noc__print_usage(stderr, argv[0]);
+        return 2;
+    }
+    return noc_transform_file(context, input, output) ? 0 : 1;
+}
+
+#endif /* NOC_IMPLEMENTATION_INCLUDED */
+#endif /* NOC_IMPLEMENTATION */
+
+/*
+   This is free and unencumbered software released into the public domain.
+
+   Anyone is free to copy, modify, publish, use, compile, sell, or distribute
+   this software, either in source code form or as a compiled binary, for any
+   purpose, commercial or non-commercial, and by any means.
+
+   THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND.
+*/

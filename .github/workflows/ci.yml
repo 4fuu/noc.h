@@ -1,0 +1,70 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  native:
+    name: ${{ matrix.os }} native toolchain
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure MSVC
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Build and test (Unix)
+        if: runner.os != 'Windows'
+        run: |
+          cc -o nob nob.c
+          ./nob test
+          ./nob describe
+
+      - name: Build and test (Windows)
+        if: runner.os == 'Windows'
+        shell: cmd
+        run: |
+          cl.exe /std:c11 /W4 /WX /nologo /D_CRT_SECURE_NO_WARNINGS /Fe:nob.exe nob.c
+          nob.exe test
+          nob.exe describe
+
+  linux-compilers:
+    name: Linux ${{ matrix.compiler }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        compiler: [gcc, clang]
+
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and test
+        env:
+          CC: ${{ matrix.compiler }}
+        run: |
+          "$CC" -o nob nob.c
+          ./nob clean
+          ./nob test
+
+  sanitizers:
+    name: Linux ASan and UBSan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and run sanitizer suite
+        run: |
+          cc -std=c11 -Wall -Wextra -Wpedantic \
+             -fsanitize=address,undefined -fno-omit-frame-pointer \
+             -I. -o noc-tests-sanitize tests/test_noc.c
+          ASAN_OPTIONS=detect_leaks=1 ./noc-tests-sanitize

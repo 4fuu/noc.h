@@ -1,0 +1,68 @@
+# noc.h roadmap
+
+This file is the long-running implementation checklist. A milestone is checked
+only after its interfaces have tests or examples, the complete local suite
+passes, and the milestone has been committed and pushed.
+
+## Milestone 0 — portable baseline and continuous integration
+
+- [x] Keep dialect inputs on ordinary `.c` and `.h` suffixes.
+- [x] Provide the single-header lexer, rule registry, rewriter, diagnostics, CLI,
+      atomic output, and `@embed` reference module.
+- [x] Add root build/test documentation and regression tests.
+- [x] Add GitHub Actions coverage for Linux, macOS, and Windows.
+- [x] Make the `nob.c` harness build with GCC/Clang-style compilers and MSVC.
+
+## Milestone 1 — public token stream and cursor APIs
+
+- [ ] Add an owning public token stream with tokenize/free operations.
+- [ ] Add reusable raw/significant token cursors independent of rewrite callbacks.
+- [ ] Add token range and source-span helpers.
+- [ ] Add balanced range and comma-separated argument parsing.
+- [ ] Cover every public operation with focused unit tests.
+
+## Milestone 2 — lossless syntax tree
+
+- [ ] Add a generic lossless syntax tree for translation units, tokens, and
+      `()`, `[]`, and `{}` groups.
+- [ ] Preserve trivia and exact source ranges in every node.
+- [ ] Add traversal, parent/child lookup, source extraction, and destruction APIs.
+- [ ] Diagnose unmatched and mismatched delimiters with source locations.
+- [ ] Add tree construction, traversal, malformed-input, and round-trip tests.
+
+## Milestone 3 — reusable C structure analysis
+
+- [ ] Add lightweight top-level declaration/function discovery without claiming
+      to be a complete semantic C frontend.
+- [ ] Expose declaration kind, name token, signature range, body group, and source
+      location where determinable.
+- [ ] Add function parameter and compound-statement helpers.
+- [ ] Test functions, prototypes, variables, typedefs, structs/enums, attributes,
+      nested declarators, and deliberately unsupported ambiguity.
+
+## Milestone 4 — AST-assisted rewriting and composition
+
+- [ ] Let rules consume syntax nodes and token ranges safely.
+- [ ] Add transformed emission for nested rule composition.
+- [ ] Add newline/source-map restoration helpers.
+- [ ] Add dependency reporting so rules such as `@embed` expose build inputs.
+- [ ] Add examples for expression, statement, declaration, and attribute rules.
+
+## Milestone 5 — IDE artifacts (lower priority)
+
+- [ ] Define an IDE-generation options structure and stable public API.
+- [ ] Generate transformed header overlays from dialect `.h` files.
+- [ ] Generate a dialect metadata header containing registered rule names,
+      scopes, syntax, and descriptions for tooling/autocomplete integrations.
+- [ ] Evaluate and document clangd/compile_commands integration using generated
+      `.c` files and `#line` mappings.
+- [ ] Add golden-file tests and an end-to-end IDE-header example.
+
+## Later work
+
+- [ ] Multi-file CLI and mirrored source/output directory trees.
+- [ ] Dependency and compiler-command signature files for exact incremental builds.
+- [ ] Optional inactive-preprocessor-branch handling.
+- [ ] Normalize phase-2 splices inside identifiers and punctuators.
+- [ ] Fuzz lexer, syntax tree, and rewrite cursor APIs.
+- [ ] Versioning, changelog, release packaging, and vendored `nob.h` update policy.
