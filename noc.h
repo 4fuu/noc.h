@@ -29,9 +29,9 @@
 #define NOC_H_INCLUDED
 
 #define NOC_VERSION_MAJOR 0
-#define NOC_VERSION_MINOR 14
+#define NOC_VERSION_MINOR 15
 #define NOC_VERSION_PATCH 0
-#define NOC_VERSION "0.14.0"
+#define NOC_VERSION "0.15.0"
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -345,6 +345,13 @@ NOCDEF bool noc_generate_depfile(Noc_Context *context,
                                  const char *source_path,
                                  const Noc_Transform_Result *result,
                                  Noc_Buffer *output);
+/* Serialize an exact, length-prefixed command signature. Empty arguments are
+   preserved and embedded newlines remain unambiguous. Initialize output to
+   {0}; it is replaced only on success. */
+NOCDEF bool noc_generate_command_signature(Noc_Context *context,
+                                           const char *const *arguments,
+                                           size_t argument_count,
+                                           Noc_Buffer *output);
 
 /* Owning token streams. Initialize the output to {0}. Tokens and their
    text/location pointers remain valid until successful retokenization or
@@ -1652,6 +1659,55 @@ failed:
                 NOC_DIAGNOSTIC_ERROR,
                 no_location,
                 "out of memory while generating depfile");
+    return false;
+}
+
+NOCDEF bool noc_generate_command_signature(Noc_Context *context,
+                                           const char *const *arguments,
+                                           size_t argument_count,
+                                           Noc_Buffer *output)
+{
+    Noc_Buffer generated = {0};
+    Noc_Location no_location = {0};
+    size_t i;
+    if (!context || !output || (argument_count > 0 && !arguments)) return false;
+    for (i = 0; i < argument_count; ++i) {
+        if (!arguments[i]) {
+            noc__report(context,
+                        NOC_DIAGNOSTIC_ERROR,
+                        no_location,
+                        "command signature arguments cannot be NULL");
+            return false;
+        }
+    }
+    if (!noc_buffer_appendf(&generated,
+                            "noc-command-signature 1\n"
+                            "noc-version %zu:%s\n"
+                            "arguments %zu\n",
+                            strlen(NOC_VERSION),
+                            NOC_VERSION,
+                            argument_count)) {
+        goto failed;
+    }
+    for (i = 0; i < argument_count; ++i) {
+        size_t count = strlen(arguments[i]);
+        if (!noc_buffer_appendf(&generated, "argument %zu:", count) ||
+            !noc_buffer_append(&generated, arguments[i], count) ||
+            !noc_buffer_append_cstr(&generated, "\n")) {
+            goto failed;
+        }
+    }
+    if (!noc_buffer_terminate(&generated)) goto failed;
+    noc_buffer_free(output);
+    *output = generated;
+    return true;
+
+failed:
+    noc_buffer_free(&generated);
+    noc__report(context,
+                NOC_DIAGNOSTIC_ERROR,
+                no_location,
+                "out of memory while generating command signature");
     return false;
 }
 
@@ -5046,7 +5102,8 @@ static void noc__print_usage(FILE *stream, const char *program)
             "  %s --batch INPUT_ROOT OUTPUT_ROOT INPUT.[ch]...\n"
             "  %s --batch-depfiles INPUT_ROOT OUTPUT_ROOT INPUT.[ch]...\n"
             "  %s --describe\n"
-            "  %s --ide-metadata OUTPUT.h\n\n"
+            "  %s --ide-metadata OUTPUT.h\n"
+            "  %s --command-signature OUTPUT -- COMMAND [ARG...]\n\n"
             "Options:\n"
             "  -o PATH               Write transformed C source/header to PATH\n"
             "  --depfile PATH        Write Make/Ninja dependencies to PATH\n"
@@ -5055,6 +5112,7 @@ static void noc__print_usage(FILE *stream, const char *program)
             "  --ide-metadata PATH    Write a default IDE metadata header\n"
             "  --no-line-directives  Do not prepend a #line directive\n"
             "  -h, --help            Show this help\n",
+            program,
             program,
             program,
             program,
@@ -5069,6 +5127,42 @@ NOCDEF int noc_run_cli(Noc_Context *context, int argc, char **argv)
     const char *depfile = NULL;
     const char *dep_target = NULL;
     int i;
+    if (argc > 1 && strcmp(argv[1], "--command-signature") == 0) {
+        const char **command_arguments;
+        size_t command_argument_count;
+        Noc_Buffer signature = {0};
+        Noc_Location no_location = {0};
+        bool ok;
+        if (argc < 5 || strcmp(argv[3], "--") != 0) {
+            noc__print_usage(stderr, argv[0]);
+            return 2;
+        }
+        command_argument_count = (size_t)(argc - 4);
+        command_arguments = (const char **)malloc(command_argument_count *
+                                                   sizeof(*command_arguments));
+        if (!command_arguments) {
+            noc__report(context,
+                        NOC_DIAGNOSTIC_ERROR,
+                        no_location,
+                        "out of memory while preparing command signature arguments");
+            return 1;
+        }
+        for (i = 0; i < (int)command_argument_count; ++i) {
+            command_arguments[i] = argv[i + 4];
+        }
+        ok = noc_generate_command_signature(context,
+                                            command_arguments,
+                                            command_argument_count,
+                                            &signature) &&
+             noc__write_output_atomic(context,
+                                      argv[2],
+                                      signature.items,
+                                      signature.count,
+                                      no_location);
+        free(command_arguments);
+        noc_buffer_free(&signature);
+        return ok ? 0 : 1;
+    }
     if (argc > 1 &&
         (strcmp(argv[1], "--batch") == 0 ||
          strcmp(argv[1], "--batch-depfiles") == 0)) {

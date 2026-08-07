@@ -1261,6 +1261,58 @@ static void test_depfile_generation(void)
     noc_context_deinit(&context);
 }
 
+static void test_command_signature(void)
+{
+    const char *arguments[] = {
+        "cc",
+        "-DNAME=a\nb",
+        "",
+        "C:\\Program Files\\cc",
+    };
+    const char *invalid_arguments[] = {"cc", NULL};
+    static const char expected[] =
+        "noc-command-signature 1\n"
+        "noc-version 6:" NOC_VERSION "\n"
+        "arguments 4\n"
+        "argument 2:cc\n"
+        "argument 10:-DNAME=a\nb\n"
+        "argument 0:\n"
+        "argument 19:C:\\Program Files\\cc\n";
+    Noc_Context context;
+    Noc_Buffer output = {0};
+    Noc_Buffer empty = {0};
+    Diagnostic_State diagnostics = {0};
+    char *preserved_items;
+    size_t preserved_count;
+
+    noc_context_init(&context);
+    noc_context_set_diagnostic(&context, count_diagnostics, &diagnostics);
+    CHECK(noc_generate_command_signature(&context,
+                                         arguments,
+                                         sizeof(arguments) / sizeof(arguments[0]),
+                                         &output));
+    CHECK(output.count == sizeof(expected) - 1);
+    CHECK(memcmp(output.items, expected, sizeof(expected) - 1) == 0);
+    CHECK(output.items[output.count] == '\0');
+    CHECK(noc_generate_command_signature(&context, NULL, 0, &empty));
+    CHECK(strstr(empty.items, "arguments 0\n") != NULL);
+
+    preserved_items = output.items;
+    preserved_count = output.count;
+    CHECK(!noc_generate_command_signature(&context,
+                                          invalid_arguments,
+                                          sizeof(invalid_arguments) /
+                                              sizeof(invalid_arguments[0]),
+                                          &output));
+    CHECK(diagnostics.errors == 1);
+    CHECK(strstr(diagnostics.last_message, "cannot be NULL") != NULL);
+    CHECK(output.items == preserved_items && output.count == preserved_count);
+
+    noc_buffer_free(&empty);
+    noc_buffer_free(&output);
+    noc_context_deinit(&context);
+}
+
 static void test_batch_transformation(void)
 {
     const char *inputs[] = {
@@ -2236,6 +2288,7 @@ int main(void)
     test_syntax_edit_set();
     test_ide_metadata_header();
     test_depfile_generation();
+    test_command_signature();
     test_batch_transformation();
     test_transform_dependencies();
     test_rewriter_source_mapping();

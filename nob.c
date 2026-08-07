@@ -250,18 +250,49 @@ static bool generate_ide_metadata(void)
     return nob_cmd_run(&command);
 }
 
+static bool generate_ide_command_signature(void)
+{
+    const char *output = "build/generated/ide/compile.sig";
+    const char *inputs[] = {NOC_RULES_DIALECT, "nob.c"};
+    Nob_Cmd command = {0};
+    int rebuild = output_rebuild_state(output, inputs, NOB_ARRAY_LEN(inputs));
+    if (rebuild < 0) return false;
+    if (rebuild != 0) {
+        nob_cmd_append(&command,
+                       NOC_RULES_DIALECT,
+                       "--command-signature",
+                       output,
+                       "--",
+                       "cc",
+                       "-std=c11",
+                       "-Ibuild/generated/ide",
+                       "-c",
+                       "build/generated/ide/app.c");
+        if (!nob_cmd_run(&command)) return false;
+    }
+    return verify_generated_file(output, "tests/golden/ide_command.sig");
+}
+
 static bool build_ide_example(void)
 {
     const char *output_source = "build/generated/ide/app.c";
     const char *output_header = "build/generated/ide/math.h";
     const char *metadata = "build/generated/ide/rules_metadata.h";
-    const char *inputs[] = {output_source, output_header, metadata, "nob.c"};
+    const char *signature = "build/generated/ide/compile.sig";
+    const char *inputs[] = {
+        output_source,
+        output_header,
+        metadata,
+        signature,
+        "nob.c",
+    };
     Nob_Cmd command = {0};
     int rebuild;
     if (!build_rules_dialect() ||
         !generate_ide_overlays() ||
         !generate_ide_metadata() ||
-        !verify_generated_file(metadata, "tests/golden/rules_metadata.h")) {
+        !verify_generated_file(metadata, "tests/golden/rules_metadata.h") ||
+        !generate_ide_command_signature()) {
         return false;
     }
     rebuild = output_rebuild_state(NOC_IDE_EXAMPLE, inputs, NOB_ARRAY_LEN(inputs));

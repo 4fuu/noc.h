@@ -410,6 +410,37 @@ rules. Rooted drive paths such as `C:/project/src` remain supported. Removing
 these restrictions requires a future end-to-end UTF-16 filesystem backend, not
 only a different string comparison.
 
+## Exact command signatures
+
+Timestamp checks do not notice a changed compiler path, define, include order,
+or flag. `noc_generate_command_signature` serializes the complete argument
+vector with decimal byte lengths rather than a collision-prone ordinary hash:
+
+```c
+const char *command[] = {
+    "cc", "-std=c11", "-Ibuild/generated", "-c", "build/generated/app.c",
+};
+Noc_Buffer signature = {0};
+
+if (!noc_generate_command_signature(&noc, command, 5, &signature)) return 1;
+```
+
+Empty arguments and embedded newlines remain distinct and unambiguous. The
+artifact includes a schema number and `noc.h` version, is NUL-terminated for
+convenience, and replaces the destination only on success. The CLI can atomically
+write it directly:
+
+```console
+$ dialect --command-signature build/generated/compile.sig -- \
+    cc -std=c11 -Ibuild/generated -c build/generated/app.c
+```
+
+Compare the complete signature file with the previous build before deciding to
+reuse compiler output. A command signature complements rather than replaces
+normal dependencies: the dialect executable/source, transformed inputs, emitted
+depfiles, compiler executable, and relevant environment still belong in the
+build graph.
+
 Callbacks can pass a captured slice to `noc_rw_emit_transformed` when nested
 dialect expressions should be expanded before emission. Nested transforms use
 the same registry and source path, merge dependencies into the outer result,

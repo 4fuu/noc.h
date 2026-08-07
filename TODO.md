@@ -63,7 +63,7 @@ passes, and the milestone has been committed and pushed.
 
 - [x] Multi-file API/CLI and mirrored source/output directory trees.
 - [x] Add Make/Ninja depfile API and CLI output.
-- [ ] Add compiler-command signatures for exact incremental builds.
+- [x] Add exact compiler-command signature API and CLI output.
 - [ ] Optional inactive-preprocessor-branch handling.
 - [ ] Normalize phase-2 splices inside identifiers and punctuators.
 - [ ] Fuzz lexer, syntax tree, and rewrite cursor APIs.
