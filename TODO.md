@@ -65,6 +65,7 @@ passes, and the milestone has been committed and pushed.
 - [x] Add Make/Ninja depfile API and CLI output.
 - [x] Add exact compiler-command signature API and CLI output.
 - [ ] Optional inactive-preprocessor-branch handling.
-- [ ] Normalize phase-2 splices inside identifiers and punctuators.
+- [x] Normalize phase-2 splices inside identifiers and punctuators while
+      preserving exact source slices for lossless syntax APIs.
 - [ ] Fuzz lexer, syntax tree, and rewrite cursor APIs.
 - [ ] Versioning, changelog, release packaging, and vendored `nob.h` update policy.

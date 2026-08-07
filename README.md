@@ -472,14 +472,16 @@ system. Rules inside preprocessor directives are left untouched. More
 structured statement and declaration helpers can be added without changing the
 registration model.
 
-The lexer accounts for backslash-newline splicing when recognizing comments and
-preprocessor directives. Splices inside identifiers or multi-character
-punctuators are not normalized for callbacks yet. C trigraphs are rejected
-explicitly. Because `noc.h` does not evaluate preprocessor conditions, a rule in
-an inactive `#if` branch is still visited. Expansion callbacks should preserve
-physical newline counts when exact diagnostics after an expansion matter; the
-rewriter source-mapping helpers make that policy explicit but do not infer it
-automatically.
+The lexer accounts for backslash-newline splicing when recognizing comments,
+preprocessor directives, identifiers, and multi-character punctuators. Raw
+`Noc_Token.text` remains the exact source slice for lossless trees and rewrites;
+`noc_token_is_identifier` and `noc_token_is_punct` compare the phase-2 logical
+spelling, and `noc_token_logical_text` copies that spelling into a transactional
+NUL-terminated buffer. C trigraphs are rejected explicitly. Because `noc.h`
+does not evaluate preprocessor conditions, a rule in an inactive `#if` branch
+is still visited. Expansion callbacks should preserve physical newline counts
+when exact diagnostics after an expansion matter; the rewriter source-mapping
+helpers make that policy explicit but do not infer it automatically.
 
 The staged implementation plan and current milestone status live in
 [`TODO.md`](TODO.md).

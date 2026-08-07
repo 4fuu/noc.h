@@ -29,9 +29,9 @@
 #define NOC_H_INCLUDED
 
 #define NOC_VERSION_MAJOR 0
-#define NOC_VERSION_MINOR 15
+#define NOC_VERSION_MINOR 16
 #define NOC_VERSION_PATCH 0
-#define NOC_VERSION "0.15.0"
+#define NOC_VERSION "0.16.0"
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -302,6 +302,10 @@ NOCDEF const char *noc_token_kind_name(Noc_Token_Kind kind);
 NOCDEF bool noc_token_is_trivia(Noc_Token token);
 NOCDEF bool noc_token_is_punct(Noc_Token token, const char *punctuator);
 NOCDEF bool noc_token_is_identifier(Noc_Token token, const char *identifier);
+/* Copy a token's spelling after C translation phase-2 line-splice deletion.
+   The raw token.text remains an exact source slice. Initialize output to {0};
+   success replaces it with NUL-terminated bytes, while failure preserves it. */
+NOCDEF bool noc_token_logical_text(Noc_Token token, Noc_Buffer *output);
 
 /* Standalone lexer */
 NOCDEF void noc_lexer_init(Noc_Lexer *lexer,
@@ -669,6 +673,46 @@ static bool noc__contains_newline(const char *data, size_t count)
     return false;
 }
 
+static size_t noc__splice_length(const char *source, size_t count, size_t position)
+{
+    if (position + 1 >= count || source[position] != '\\') return 0;
+    if (source[position + 1] == '\n') return 2;
+    if (source[position + 1] == '\r') {
+        return position + 2 < count && source[position + 2] == '\n' ? 3 : 2;
+    }
+    return 0;
+}
+
+static size_t noc__skip_splices(const char *source, size_t count, size_t position)
+{
+    size_t splice;
+    while ((splice = noc__splice_length(source, count, position)) != 0) {
+        position += splice;
+    }
+    return position;
+}
+
+static bool noc__slice_logically_equal_cstr(Noc_Slice slice, const char *text)
+{
+    size_t source_index = 0;
+    size_t text_index = 0;
+    size_t text_count = text ? strlen(text) : 0;
+    if (!slice.data && slice.count != 0) return false;
+    while (source_index < slice.count) {
+        size_t splice = noc__splice_length(slice.data, slice.count, source_index);
+        if (splice != 0) {
+            source_index += splice;
+            continue;
+        }
+        if (text_index >= text_count || slice.data[source_index] != text[text_index]) {
+            return false;
+        }
+        source_index += 1;
+        text_index += 1;
+    }
+    return text_index == text_count;
+}
+
 static void noc__lexer_advance(Noc_Lexer *lexer, size_t end)
 {
     while (lexer->cursor < end) {
@@ -752,13 +796,13 @@ NOCDEF bool noc_token_is_trivia(Noc_Token token)
 NOCDEF bool noc_token_is_punct(Noc_Token token, const char *punctuator)
 {
     return token.kind == NOC_TOKEN_PUNCTUATOR &&
-           noc_slice_equal_cstr(token.text, punctuator);
+           noc__slice_logically_equal_cstr(token.text, punctuator);
 }
 
 NOCDEF bool noc_token_is_identifier(Noc_Token token, const char *identifier)
 {
     return token.kind == NOC_TOKEN_IDENTIFIER &&
-           noc_slice_equal_cstr(token.text, identifier);
+           noc__slice_logically_equal_cstr(token.text, identifier);
 }
 
 NOCDEF void noc_lexer_init(Noc_Lexer *lexer,
@@ -774,25 +818,6 @@ NOCDEF void noc_lexer_init(Noc_Lexer *lexer,
     lexer->column = 1;
     lexer->beginning_of_line = true;
     lexer->continuing_block_comment = false;
-}
-
-static size_t noc__splice_length(const char *source, size_t count, size_t position)
-{
-    if (position + 1 >= count || source[position] != '\\') return 0;
-    if (source[position + 1] == '\n') return 2;
-    if (source[position + 1] == '\r') {
-        return position + 2 < count && source[position + 2] == '\n' ? 3 : 2;
-    }
-    return 0;
-}
-
-static size_t noc__skip_splices(const char *source, size_t count, size_t position)
-{
-    size_t splice;
-    while ((splice = noc__splice_length(source, count, position)) != 0) {
-        position += splice;
-    }
-    return position;
 }
 
 static bool noc__logical_pair(const char *source,
@@ -952,7 +977,24 @@ static size_t noc__scan_preprocessor(Noc_Lexer *lexer, size_t start)
     return i;
 }
 
-static size_t noc__punctuator_length(const char *source, size_t remaining)
+static bool noc__match_logical_punctuator(const char *source,
+                                          size_t count,
+                                          size_t start,
+                                          const char *punctuator,
+                                          size_t *end)
+{
+    size_t position = start;
+    size_t i;
+    for (i = 0; punctuator[i] != '\0'; ++i) {
+        if (i != 0) position = noc__skip_splices(source, count, position);
+        if (position >= count || source[position] != punctuator[i]) return false;
+        position += 1;
+    }
+    *end = position;
+    return true;
+}
+
+static size_t noc__punctuator_end(const char *source, size_t count, size_t start)
 {
     static const char *const punctuators4[] = {
         "%:%:", NULL
@@ -966,22 +1008,29 @@ static size_t noc__punctuator_length(const char *source, size_t remaining)
         "|=", "##", "<:", ":>", "<%", "%>", "%:", NULL
     };
     size_t i;
-    if (remaining >= 4) {
-        for (i = 0; punctuators4[i]; ++i) {
-            if (memcmp(source, punctuators4[i], 4) == 0) return 4;
-        }
+    size_t end;
+    for (i = 0; punctuators4[i]; ++i) {
+        if (noc__match_logical_punctuator(source,
+                                          count,
+                                          start,
+                                          punctuators4[i],
+                                          &end)) return end;
     }
-    if (remaining >= 3) {
-        for (i = 0; punctuators3[i]; ++i) {
-            if (memcmp(source, punctuators3[i], 3) == 0) return 3;
-        }
+    for (i = 0; punctuators3[i]; ++i) {
+        if (noc__match_logical_punctuator(source,
+                                          count,
+                                          start,
+                                          punctuators3[i],
+                                          &end)) return end;
     }
-    if (remaining >= 2) {
-        for (i = 0; punctuators2[i]; ++i) {
-            if (memcmp(source, punctuators2[i], 2) == 0) return 2;
-        }
+    for (i = 0; punctuators2[i]; ++i) {
+        if (noc__match_logical_punctuator(source,
+                                          count,
+                                          start,
+                                          punctuators2[i],
+                                          &end)) return end;
     }
-    return 1;
+    return start + 1;
 }
 
 NOCDEF Noc_Token noc_lexer_next(Noc_Lexer *lexer)
@@ -1035,10 +1084,18 @@ NOCDEF Noc_Token noc_lexer_next(Noc_Lexer *lexer)
                            '%',
                            ':',
                            NULL))) {
-        end = noc__scan_preprocessor(lexer, start);
-        token = noc__make_token(lexer, NOC_TOKEN_PREPROCESSOR, start, end, location);
-        lexer->beginning_of_line = noc__contains_newline(token.text.data, token.text.count);
-        return token;
+        Noc_Slice directive_marker;
+        end = noc__punctuator_end(lexer->source, lexer->source_count, start);
+        directive_marker.data = lexer->source + start;
+        directive_marker.count = end - start;
+        if (noc__slice_logically_equal_cstr(directive_marker, "#") ||
+            noc__slice_logically_equal_cstr(directive_marker, "%:")) {
+            end = noc__scan_preprocessor(lexer, start);
+            token = noc__make_token(lexer, NOC_TOKEN_PREPROCESSOR, start, end, location);
+            lexer->beginning_of_line = noc__contains_newline(token.text.data,
+                                                             token.text.count);
+            return token;
+        }
     }
 
     if (lexer->source[start] == '\r' || lexer->source[start] == '\n') {
@@ -1133,9 +1190,13 @@ NOCDEF Noc_Token noc_lexer_next(Noc_Lexer *lexer)
 
     if (noc__is_identifier_start((unsigned char)lexer->source[start])) {
         end = start + 1;
-        while (end < lexer->source_count &&
-               noc__is_identifier_continue((unsigned char)lexer->source[end])) {
-            end += 1;
+        while (end < lexer->source_count) {
+            size_t next = noc__skip_splices(lexer->source, lexer->source_count, end);
+            if (next >= lexer->source_count ||
+                !noc__is_identifier_continue((unsigned char)lexer->source[next])) {
+                break;
+            }
+            end = next + 1;
         }
         lexer->beginning_of_line = false;
         return noc__make_token(lexer, NOC_TOKEN_IDENTIFIER, start, end, location);
@@ -1161,8 +1222,7 @@ NOCDEF Noc_Token noc_lexer_next(Noc_Lexer *lexer)
         return noc__make_token(lexer, NOC_TOKEN_NUMBER, start, end, location);
     }
 
-    end = start + noc__punctuator_length(lexer->source + start,
-                                         lexer->source_count - start);
+    end = noc__punctuator_end(lexer->source, lexer->source_count, start);
     lexer->beginning_of_line = false;
     return noc__make_token(lexer, NOC_TOKEN_PUNCTUATOR, start, end, location);
 }
@@ -1261,6 +1321,41 @@ NOCDEF bool noc_buffer_terminate(Noc_Buffer *buffer)
     if (!noc_buffer_reserve(buffer, 1)) return false;
     buffer->items[buffer->count] = '\0';
     return true;
+}
+
+NOCDEF bool noc_token_logical_text(Noc_Token token, Noc_Buffer *output)
+{
+    Noc_Buffer generated = {0};
+    size_t position = 0;
+    size_t run_start = 0;
+    if (!output || (!token.text.data && token.text.count != 0)) return false;
+    while (position < token.text.count) {
+        size_t splice = noc__splice_length(token.text.data, token.text.count, position);
+        if (splice == 0) {
+            position += 1;
+            continue;
+        }
+        if (!noc_buffer_append(&generated,
+                               token.text.data + run_start,
+                               position - run_start)) {
+            goto failed;
+        }
+        position += splice;
+        run_start = position;
+    }
+    if (!noc_buffer_append(&generated,
+                           token.text.data ? token.text.data + run_start : NULL,
+                           position - run_start) ||
+        !noc_buffer_terminate(&generated)) {
+        goto failed;
+    }
+    noc_buffer_free(output);
+    *output = generated;
+    return true;
+
+failed:
+    noc_buffer_free(&generated);
+    return false;
 }
 
 static bool noc__buffer_append_c_string(Noc_Buffer *buffer,
@@ -1383,6 +1478,18 @@ NOCDEF const Noc_Rule *noc_find_rule(const Noc_Context *context, Noc_Slice name)
     size_t i;
     for (i = 0; i < context->rules_count; ++i) {
         if (noc_slice_equal_cstr(name, context->rules[i].name)) return &context->rules[i];
+    }
+    return NULL;
+}
+
+static const Noc_Rule *noc__find_rule_token(const Noc_Context *context,
+                                            Noc_Token token)
+{
+    size_t i;
+    for (i = 0; i < context->rules_count; ++i) {
+        if (noc_token_is_identifier(token, context->rules[i].name)) {
+            return &context->rules[i];
+        }
     }
     return NULL;
 }
@@ -4246,7 +4353,7 @@ static bool noc__transform_source(Noc_Context *context,
             }
             if (name_index < tokens.count &&
                 tokens.items[name_index].kind == NOC_TOKEN_IDENTIFIER) {
-                rule = noc_find_rule(context, tokens.items[name_index].text);
+                rule = noc__find_rule_token(context, tokens.items[name_index]);
                 if (rule) {
                     Noc_Rewriter rewriter;
                     size_t expansion_errors = context->error_count;

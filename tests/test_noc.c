@@ -75,6 +75,84 @@ static void test_lexer(void)
     CHECK(noc_token_is_identifier(token, "twice"));
 }
 
+static void test_phase2_splices(void)
+{
+    static const char source[] =
+        "fo\\" "\n" "\\" "\r\n" "\\" "\r" "o "
+        "%\\" "\r\n" ":\\" "\n" "%\\" "\r" ": "
+        ">\\" "\n" "\\" "\r\n" ">\\" "\r" "==";
+    static const char directive_source[] =
+        "#\\" "\n" "#\n"
+        "%\\" "\r\n" ":%\\" "\r" ":\n"
+        "%\\" "\n" ":define VALUE 1\n";
+    Noc_Lexer lexer;
+    Noc_Token token;
+    Noc_Buffer logical = {0};
+    Noc_Buffer preserved = {0};
+    Noc_Token invalid = {0};
+
+    noc_lexer_init(&lexer, "splices.c", source, sizeof(source) - 1);
+    token = noc_lexer_next(&lexer);
+    CHECK(token.kind == NOC_TOKEN_IDENTIFIER);
+    CHECK(slice_equals(token.text,
+                       "fo\\" "\n" "\\" "\r\n" "\\" "\r" "o"));
+    CHECK(noc_token_is_identifier(token, "foo"));
+    CHECK(!noc_token_is_identifier(token, "fo"));
+    CHECK(noc_token_logical_text(token, &logical));
+    CHECK(logical.count == 3 && strcmp(logical.items, "foo") == 0);
+
+    CHECK(noc_lexer_next(&lexer).kind == NOC_TOKEN_WHITESPACE);
+    token = noc_lexer_next(&lexer);
+    CHECK(token.kind == NOC_TOKEN_PUNCTUATOR);
+    CHECK(noc_token_is_punct(token, "%:%:"));
+    CHECK(token.location.line == 4);
+    CHECK(noc_token_logical_text(token, &logical));
+    CHECK(logical.count == 4 && strcmp(logical.items, "%:%:") == 0);
+
+    CHECK(noc_lexer_next(&lexer).kind == NOC_TOKEN_WHITESPACE);
+    token = noc_lexer_next(&lexer);
+    CHECK(noc_token_is_punct(token, ">>="));
+    CHECK(!noc_token_is_punct(token, ">>"));
+    CHECK(token.location.line == 7);
+    CHECK(noc_token_logical_text(token, &logical));
+    CHECK(logical.count == 3 && strcmp(logical.items, ">>=") == 0);
+    token = noc_lexer_next(&lexer);
+    CHECK(noc_token_is_punct(token, "="));
+    CHECK(token.location.line == 10);
+    CHECK(noc_lexer_next(&lexer).kind == NOC_TOKEN_EOF);
+
+    noc_lexer_init(&lexer,
+                   "directive-splices.c",
+                   directive_source,
+                   sizeof(directive_source) - 1);
+    token = noc_lexer_next(&lexer);
+    CHECK(noc_token_is_punct(token, "##"));
+    CHECK(noc_lexer_next(&lexer).kind == NOC_TOKEN_NEWLINE);
+    token = noc_lexer_next(&lexer);
+    CHECK(noc_token_is_punct(token, "%:%:"));
+    CHECK(noc_lexer_next(&lexer).kind == NOC_TOKEN_NEWLINE);
+    token = noc_lexer_next(&lexer);
+    CHECK(token.kind == NOC_TOKEN_PREPROCESSOR);
+    CHECK(token.location.line == 6);
+    CHECK(noc_lexer_next(&lexer).kind == NOC_TOKEN_EOF);
+
+    CHECK(noc_buffer_append_cstr(&preserved, "preserved"));
+    CHECK(noc_buffer_terminate(&preserved));
+    invalid.text.data = NULL;
+    invalid.text.count = 1;
+    CHECK(!noc_token_logical_text(invalid, &preserved));
+    CHECK(preserved.count == 9 && strcmp(preserved.items, "preserved") == 0);
+    token.text = noc_slice_from_cstr("plain");
+    CHECK(noc_token_logical_text(token, &preserved));
+    CHECK(preserved.count == 5 && strcmp(preserved.items, "plain") == 0);
+    token.text.data = NULL;
+    token.text.count = 0;
+    CHECK(noc_token_logical_text(token, &preserved));
+    CHECK(preserved.count == 0 && preserved.items[0] == '\0');
+    noc_buffer_free(&preserved);
+    noc_buffer_free(&logical);
+}
+
 static void test_token_stream_and_cursor(void)
 {
     char source[] = "  call(alpha, nested(1, 2), (Pair){3, 4})  ";
@@ -1991,6 +2069,8 @@ static void test_nested_transformation(void)
 static void test_custom_rule(void)
 {
     static const char source[] = "int answer = @twice(20 + 1);\n";
+    static const char spliced_source[] =
+        "int answer = @tw\\" "\n" "ice(20 + 1);\n";
     static const char expected[] = "int answer = ((20 + 1) + (20 + 1));\n";
     Noc_Context context;
     Noc_Transform_Result result;
@@ -2010,6 +2090,14 @@ static void test_custom_rule(void)
                                "custom.c",
                                source,
                                sizeof(source) - 1,
+                               &result));
+    CHECK(result.output != NULL);
+    CHECK(strcmp(result.output, expected) == 0);
+    noc_transform_result_free(&result);
+    CHECK(noc_transform_source(&context,
+                               "custom-spliced.c",
+                               spliced_source,
+                               sizeof(spliced_source) - 1,
                                &result));
     CHECK(result.output != NULL);
     CHECK(strcmp(result.output, expected) == 0);
@@ -2275,6 +2363,7 @@ static void test_string_codec(void)
 int main(void)
 {
     test_lexer();
+    test_phase2_splices();
     test_token_stream_and_cursor();
     test_argument_and_balance_edges();
     test_tokenize_error();
