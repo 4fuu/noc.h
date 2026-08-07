@@ -78,6 +78,34 @@ static const char message[] = @embed("message.txt");
 Run `dialect --describe` to inspect every enabled rule and its declared scope,
 syntax, and description.
 
+## IDE metadata header
+
+`noc_generate_ide_metadata_header` serializes the same registry into a
+standalone C header for editor extensions, completion generators, and other
+tooling. The output records a schema version, the `noc.h` version, dialect name,
+rule count, and each rule's name, numeric/string scope, syntax, and description:
+
+```c
+Noc_Ide_Metadata_Options options = {
+    .include_guard = "MY_DIALECT_IDE_H",
+    .macro_prefix = "MY_DIALECT_IDE",
+    .dialect_name = "my-project",
+};
+Noc_Buffer header = {0};
+
+if (!noc_generate_ide_metadata_header(&noc, &options, &header)) return 1;
+fwrite(header.items, 1, header.count, stdout);
+noc_buffer_free(&header);
+```
+
+Options may be `NULL` or zero-initialized for deterministic defaults;
+`omit_descriptions` reduces the artifact when descriptions are unnecessary.
+The include guard and macro prefix must be C identifiers, arbitrary metadata is
+escaped as C strings, and generation replaces the destination buffer only on
+success. This metadata enables integrations to discover the dialect, but a
+header alone cannot make an ordinary C parser understand `@name` syntax;
+indexers should consume transformed source/header overlays.
+
 ## Token streams and cursors
 
 `noc_tokenize` creates an owning, lossless token stream. The copied source,
