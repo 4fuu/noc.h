@@ -43,7 +43,8 @@ The suite names are `header-c`, `header-cpp`, `public-header-c`,
 `preprocessing-tokens`, `macro-directives`, `macro-environment`,
 `macro-invocations`, `macro-expansion`, `function-macro-expansion`,
 `variadic-macro-expansion`, `macro-stringification`, `macro-token-paste`,
-`macro-builtins`, `preprocessor-expressions`, `conditional-groups`,
+`macro-builtins`, `configured-builtins`, `preprocessor-expressions`,
+`conditional-groups`,
 `preprocessor`, `lexing`, `syntax`, `c-analysis`, `rewriter`, and `artifacts`, for
 example:
 
@@ -291,7 +292,22 @@ inspection. Run the coverage independently with
 `./nob test macro-expansion`, `./nob test function-macro-expansion`, and
 `./nob test variadic-macro-expansion`, `./nob test macro-stringification`, or
 `./nob test macro-token-paste`; predefined-macro coverage is
-`./nob test macro-builtins`.
+`./nob test macro-builtins`, while explicit translation-input coverage is
+`./nob test configured-builtins`.
+
+`noc_macro_expansion_default_options` starts an options-aware translation with
+the existing deterministic `__FILE__`, `__LINE__`, `__STDC__`, and
+`__STDC_VERSION__` fallbacks. Callers can explicitly select hosted or
+freestanding execution and provide fixed C11 `Mmm dd yyyy` / `hh:mm:ss` values
+for reproducible `__STDC_HOSTED__`, `__DATE__`, and `__TIME__` expansion. Noc
+never reads the compiler host or wall clock. Empty date/time values and an
+unspecified execution environment leave those fallbacks unavailable; this is a
+deliberate analysis/configuration state rather than the behavior of a complete
+conforming C11 implementation, which requires all seven macros. The options are
+threaded through normal expansion, condition expansion, `defined`, direct
+`#ifdef`, and conditional-group analysis. Generated spellings are copied into
+the owning expansion, and `noc_macro_expansion_builtin_is_available` exposes the
+exact configured fallback set to IDE clients without interpreting private bits.
 
 Conditional preprocessing is staged rather than hidden inside a monolithic
 driver. `noc_preprocessor_directive_body_tokens` returns the significant
@@ -333,8 +349,8 @@ validation are separate: the inventory always records a recognized `#define` or
 `#undef`, including when disabled, while
 `noc_preprocessor_unit_validate_macro_policy` emits precise feature-disabled
 diagnostics. This prevents tooling from reporting a policy violation as a parse
-error. Target/time-configured built-in macros, include loading, and broader
-expansion provenance queries remain subsequent preprocessor milestones.
+error. Include loading and broader expansion provenance queries remain
+subsequent preprocessor milestones.
 Run the token and recovery coverage independently with
 `./nob test preprocessing-tokens`, or the directive/policy coverage with
 `./nob test preprocessor`.
@@ -845,12 +861,14 @@ and node references must not escape the callback.
 This version handles explicit token/AST-assisted transformations, a lossless
 delimiter tree, lightweight C structure discovery, and bounded
 object/fixed-arity/C11-variadic macro inspection expansion. It does not provide a
-complete integrated preprocessor, complete built-in macro expansion, a semantic
-C AST, typedef resolution, or a C type system. C11 macro stringification, token
-pasting, deterministic file/line/standard built-ins, and preprocessing integer-
-expression evaluation are supported. Recoverable conditional-group execution
-and active-only macro state are available as an explicit analysis API; include
-traversal, target semantics, and translation-time built-ins are not. Rules
+complete integrated preprocessor, every implementation-specific built-in macro,
+a semantic C AST, typedef resolution, or a C type system. C11 macro
+stringification, token pasting, deterministic file/line/standard built-ins, and
+preprocessing integer-expression evaluation are supported. Recoverable
+conditional-group execution and active-only macro state are available as an
+explicit analysis API;
+translation-configured hosted/date/time built-ins are available without reading
+the host or clock. Include traversal and broader target semantics are not. Rules
 inside preprocessor directives are left untouched. More
 structured statement and declaration helpers can be added without changing the
 registration model.

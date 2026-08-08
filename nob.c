@@ -70,6 +70,7 @@ static const Test_Suite test_suites[] = {
     {"macro-stringification", "tests/test_macro_stringification.c", "build/noc-test-macro-stringification" NOC_EXE, false},
     {"macro-token-paste", "tests/test_macro_token_paste.c", "build/noc-test-macro-token-paste" NOC_EXE, false},
     {"macro-builtins", "tests/test_macro_builtins.c", "build/noc-test-macro-builtins" NOC_EXE, false},
+    {"configured-builtins", "tests/test_configured_builtins.c", "build/noc-test-configured-builtins" NOC_EXE, false},
     {"preprocessor-expressions", "tests/test_preprocessor_expressions.c", "build/noc-test-preprocessor-expressions" NOC_EXE, false},
     {"conditional-groups", "tests/test_conditional_groups.c", "build/noc-test-conditional-groups" NOC_EXE, false},
     {"preprocessor", "tests/test_preprocessor.c", "build/noc-test-preprocessor" NOC_EXE, false},

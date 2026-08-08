@@ -4,7 +4,7 @@ This file is the long-running implementation checklist. A milestone is checked
 only after its interfaces have tests or examples, the complete local suite
 passes, and the milestone has been committed and pushed.
 
-The 0.19 public API remains the compatibility baseline while the 0.35
+The 0.19 public API remains the compatibility baseline while the 0.36
 compiler frontend is built. Dialect inputs continue to use ordinary `.c` and
 `.h` names. Development code may be split into normal C modules, but releases
 must be generated reproducibly as one self-contained `noc.h`.
@@ -91,6 +91,16 @@ must be generated reproducibly as one self-contained `noc.h`.
   presentation order. New macro expansion, include, parser, semantic,
   lowering/emitter, and IDE/index work belongs in separate domain modules with
   separate focused test suites.
+- Public declarations and their comments are the self-contained language/API
+  manual shipped in `release/noc.h`. Every extension must document its accepted
+  syntax, ISO C difference, feature-policy behavior, ownership/lifetime rules,
+  failure/recovery states, and IDE-visible provenance where applicable; release
+  generation must preserve those comments.
+- Existing or third-party dependencies may be reused instead of reimplemented
+  when their license, platform support, failure model, and ownership contract
+  are compatible. Development may stay modular; the release requirement is that
+  required implementation can be embedded or deterministically amalgamated into
+  the final self-contained `noc.h` without external build-time discovery.
 - The first complete language target is ISO C11. ISO C17 and C23 are explicit
   follow-up input/output profiles; GCC, Clang, and MSVC extensions are explicit
   target profiles rather than silently accepted syntax.
@@ -167,7 +177,7 @@ must be generated reproducibly as one self-contained `noc.h`.
         `__STDC_VERSION__` expansion with physical expansion-site context,
         normal rescan, generated spelling ownership, and IDE-visible builtin
         kind.
-  - [ ] Add target/translation-configured built-in macros such as
+  - [x] Add target/translation-configured built-in macros such as
         `__STDC_HOSTED__`, reproducible `__DATE__`, and reproducible `__TIME__`.
 - [ ] Implement includes, include guards/pragma-once behavior, conditionals,
       integer constant evaluation, diagnostics, and target predefined macros.

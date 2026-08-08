@@ -32,9 +32,9 @@
 #define NOC_H_INCLUDED
 
 #define NOC_VERSION_MAJOR 0
-#define NOC_VERSION_MINOR 35
+#define NOC_VERSION_MINOR 36
 #define NOC_VERSION_PATCH 0
-#define NOC_VERSION "0.35.0"
+#define NOC_VERSION "0.36.0"
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -786,12 +786,29 @@ typedef struct {
 } Noc_Preprocessor_Conditional_Groups;
 
 typedef enum {
+    /* No predefined name. This value is never present in an availability set. */
     NOC_MACRO_BUILTIN_NONE = 0,
+    /* Always-available C11 fallbacks in a default Noc expansion. */
     NOC_MACRO_BUILTIN_FILE,
     NOC_MACRO_BUILTIN_LINE,
     NOC_MACRO_BUILTIN_STDC,
     NOC_MACRO_BUILTIN_STDC_VERSION,
+    /* Available only when the corresponding translation input is configured. */
+    NOC_MACRO_BUILTIN_STDC_HOSTED,
+    NOC_MACRO_BUILTIN_DATE,
+    NOC_MACRO_BUILTIN_TIME,
 } Noc_Macro_Builtin_Kind;
+
+/* The C execution-environment choice used to synthesize __STDC_HOSTED__.
+   This describes the output translation, never the machine running Noc. */
+typedef enum {
+    /* Leaves the fallback unavailable rather than guessing from the host. */
+    NOC_EXECUTION_ENVIRONMENT_UNSPECIFIED = 0,
+    /* Expands __STDC_HOSTED__ to 0. */
+    NOC_EXECUTION_ENVIRONMENT_FREESTANDING,
+    /* Expands __STDC_HOSTED__ to 1. */
+    NOC_EXECUTION_ENVIRONMENT_HOSTED,
+} Noc_Execution_Environment;
 
 typedef enum {
     NOC_MACRO_EXPANSION_TOKEN_INPUT = 0,
@@ -810,6 +827,23 @@ typedef struct {
     /* Maximum object/function expansion frames created by one build. */
     size_t max_expansions;
 } Noc_Macro_Expansion_Limits;
+
+/* Per-translation expansion inputs. Start from
+   noc_macro_expansion_default_options rather than zero-initializing: zero
+   limits are invalid. Date is an unquoted "Mmm dd yyyy" C11 value and time is
+   an unquoted "hh:mm:ss" value; validation checks this lexical form, day 1..31,
+   hour 0..23, minute 0..59, and second 0..60, but deliberately does not apply a
+   calendar or timezone. Empty slices leave those predefined fallbacks
+   unavailable. Configured slices are borrowed only for the build call and all
+   emitted spellings are copied into the owning expansion. Reuse the same
+   options throughout one preprocessing translation so every file/condition
+   observes one reproducible translation environment. */
+typedef struct {
+    Noc_Macro_Expansion_Limits limits;
+    Noc_Execution_Environment execution_environment;
+    Noc_Slice translation_date;
+    Noc_Slice translation_time;
+} Noc_Macro_Expansion_Options;
 
 typedef struct {
     Noc_Token token;
@@ -854,6 +888,9 @@ typedef struct {
     Noc_Slice *generated_spellings;
     size_t generated_spelling_count;
     size_t generated_spelling_capacity;
+    /* Private bit representation; query with
+       noc_macro_expansion_builtin_is_available rather than interpreting it. */
+    uint32_t available_builtin_mask;
     size_t generation;
 } Noc_Macro_Expansion;
 
@@ -975,6 +1012,15 @@ NOCDEF Noc_Conditional_Groups_Build_Status noc_preprocessor_conditional_groups_b
     const Noc_Preprocessor_Unit *unit,
     Noc_Macro_Expansion_Limits limits,
     Noc_Preprocessor_Conditional_Groups *output);
+/* As above, with explicit per-translation predefined-macro inputs. Invalid
+   options preserve output just like every other operational failure. */
+NOCDEF Noc_Conditional_Groups_Build_Status
+noc_preprocessor_conditional_groups_build_with_options(
+    const Noc_Macro_Environment *initial_environment,
+    size_t initial_entry_limit,
+    const Noc_Preprocessor_Unit *unit,
+    Noc_Macro_Expansion_Options options,
+    Noc_Preprocessor_Conditional_Groups *output);
 NOCDEF const Noc_Preprocessor_Conditional_Group *
 noc_preprocessor_conditional_group_at(
     const Noc_Preprocessor_Conditional_Groups *groups,
@@ -1006,8 +1052,10 @@ NOCDEF size_t noc_preprocessor_conditional_token_macro_entry_limit(
 NOCDEF const Noc_Macro_Environment *noc_preprocessor_conditional_environment(
     const Noc_Preprocessor_Conditional_Groups *groups);
 NOCDEF const char *noc_macro_builtin_kind_name(Noc_Macro_Builtin_Kind kind);
-/* Classifies phase-2 logical predefined names. NONE is returned for ordinary
-   identifiers and built-ins that require target/translation configuration. */
+/* Classifies phase-2 logical predefined names independently of whether a
+   particular translation configured that predefined fallback. Classification
+   is useful for syntax highlighting; use the expansion availability query for
+   the semantic state of one translation. */
 NOCDEF Noc_Macro_Builtin_Kind noc_macro_builtin_kind_from_name(Noc_Slice name);
 NOCDEF const char *noc_macro_expansion_status_name(
     Noc_Macro_Expansion_Status status);
@@ -1016,8 +1064,14 @@ NOCDEF const char *noc_preprocessor_expression_status_name(
 NOCDEF const char *noc_macro_expansion_token_origin_name(
     Noc_Macro_Expansion_Token_Origin origin);
 NOCDEF Noc_Macro_Expansion_Limits noc_macro_expansion_default_limits(void);
+NOCDEF Noc_Macro_Expansion_Options noc_macro_expansion_default_options(void);
 NOCDEF void noc_macro_expansion_free(Noc_Macro_Expansion *expansion);
 NOCDEF bool noc_macro_expansion_is_valid(const Noc_Macro_Expansion *expansion);
+/* Queries configured predefined fallback availability. This does not inspect
+   explicit #define/#undef precedence and returns false for an invalid result. */
+NOCDEF bool noc_macro_expansion_builtin_is_available(
+    const Noc_Macro_Expansion *expansion,
+    Noc_Macro_Builtin_Kind kind);
 /* Expands object-like, fixed-arity, and strict C11 variadic function-like macros
    using environment entries [0, entry_limit). Arguments are collected from the
    logical token stream, prescanned once, substituted, and rescanned with
@@ -1026,11 +1080,15 @@ NOCDEF bool noc_macro_expansion_is_valid(const Noc_Macro_Expansion *expansion);
    arguments using C11 placemarkers, re-tokenize the result, and rescan it. Noc
    resolves paste chains deterministically from left to right; C11 leaves their
    evaluation order unspecified. __FILE__, __LINE__, __STDC__, and
-   __STDC_VERSION__ expand deterministically; file/line use the nearest physical
-   token or invocation in the expansion input until #line semantics are
-   implemented. An active explicit definition in the selected environment
-   prefix takes precedence over these predefined macros; after an effective
-   #undef, predefined fallback is eligible again. For F(x, ...), F(value) omits
+   __STDC_VERSION__ expand deterministically. Options-aware builds additionally
+   provide configured __STDC_HOSTED__, __DATE__, and __TIME__; defaults never
+   infer these values from the host or wall clock. C11 requires all seven in a
+   conforming implementation, so an unconfigured fallback is a deliberate Noc
+   analysis state, not a complete C11 translation environment. File/line use the
+   nearest physical token or invocation in the expansion input until #line
+   semantics are implemented. An active explicit definition in the selected
+   environment prefix takes precedence over predefined fallback; after an
+   effective #undef, fallback is eligible again. For F(x, ...), F(value) omits
    the required variable argument and is rejected, while F(value,) supplies it
    explicitly as empty; V() is valid for V(...) and supplies one empty variable
    argument.
@@ -1044,6 +1102,15 @@ NOCDEF Noc_Macro_Expansion_Status noc_macro_expansion_build(
     Noc_Token_Range input_tokens,
     Noc_Macro_Expansion_Limits limits,
     Noc_Macro_Expansion *output);
+/* As above, with explicit per-translation predefined-macro inputs. Options are
+   validated before allocation; invalid options preserve an existing output. */
+NOCDEF Noc_Macro_Expansion_Status noc_macro_expansion_build_with_options(
+    const Noc_Macro_Environment *environment,
+    size_t entry_limit,
+    const Noc_Preprocessor_Unit *input_unit,
+    Noc_Token_Range input_tokens,
+    Noc_Macro_Expansion_Options options,
+    Noc_Macro_Expansion *output);
 /* As above, but preserves the defined operator and its identifier operand for
    #if/#elif evaluation while expanding every other eligible macro normally.
    If macro replacement generates defined, it is treated as the operator; this
@@ -1054,6 +1121,14 @@ NOCDEF Noc_Macro_Expansion_Status noc_macro_expansion_build_condition(
     const Noc_Preprocessor_Unit *input_unit,
     Noc_Token_Range input_tokens,
     Noc_Macro_Expansion_Limits limits,
+    Noc_Macro_Expansion *output);
+NOCDEF Noc_Macro_Expansion_Status
+noc_macro_expansion_build_condition_with_options(
+    const Noc_Macro_Environment *environment,
+    size_t entry_limit,
+    const Noc_Preprocessor_Unit *input_unit,
+    Noc_Token_Range input_tokens,
+    Noc_Macro_Expansion_Options options,
     Noc_Macro_Expansion *output);
 NOCDEF const Noc_Macro_Expansion_Token *noc_macro_expansion_token_at(
     const Noc_Macro_Expansion *expansion,
@@ -1523,9 +1598,15 @@ NOC__PRIVATE Noc_Macro_Environment_Status noc__macro_environment_clone_prefix(
     const Noc_Macro_Environment *, size_t, size_t, Noc_Macro_Environment *);
 NOC__PRIVATE bool noc__macro_expansion_limits_are_valid(
     Noc_Macro_Expansion_Limits);
+NOC__PRIVATE bool noc__macro_expansion_options_are_valid(
+    Noc_Macro_Expansion_Options);
+NOC__PRIVATE uint32_t noc__macro_builtin_mask_from_options(
+    Noc_Macro_Expansion_Options);
+NOC__PRIVATE bool noc__macro_builtin_mask_contains(
+    uint32_t, Noc_Macro_Builtin_Kind);
 NOC__PRIVATE Noc_Macro_Expansion_Status noc__macro_expansion_build(
     const Noc_Macro_Environment *, size_t, const Noc_Preprocessor_Unit *,
-    Noc_Token_Range, Noc_Macro_Expansion_Limits, bool, Noc_Macro_Expansion *);
+    Noc_Token_Range, Noc_Macro_Expansion_Options, bool, Noc_Macro_Expansion *);
 NOC__PRIVATE void noc__string_list_free(Noc__String_List *);
 NOC__PRIVATE bool noc__string_list_append_unique(Noc__String_List *, const char *);
 NOC__PRIVATE bool noc__transform_source(Noc_Context *, const char *, const char *, size_t,
@@ -5965,6 +6046,17 @@ NOCDEF const Noc_Macro_Environment_Entry *noc_macro_environment_lookup(
 #define NOC__MACRO_EXPANSION_HARD_MAX_DEPTH 256u
 #define NOC__MACRO_TOKEN_PLACEMARKER 1u
 #define NOC__MACRO_TOKEN_PASTE_OPERATOR 2u
+#define NOC__MACRO_BUILTIN_BIT(kind) (UINT32_C(1) << (unsigned)(kind))
+#define NOC__MACRO_BUILTIN_ALWAYS_MASK                                      \
+    (NOC__MACRO_BUILTIN_BIT(NOC_MACRO_BUILTIN_FILE) |                       \
+     NOC__MACRO_BUILTIN_BIT(NOC_MACRO_BUILTIN_LINE) |                       \
+     NOC__MACRO_BUILTIN_BIT(NOC_MACRO_BUILTIN_STDC) |                       \
+     NOC__MACRO_BUILTIN_BIT(NOC_MACRO_BUILTIN_STDC_VERSION))
+#define NOC__MACRO_BUILTIN_SUPPORTED_MASK                                   \
+    (NOC__MACRO_BUILTIN_ALWAYS_MASK |                                       \
+     NOC__MACRO_BUILTIN_BIT(NOC_MACRO_BUILTIN_STDC_HOSTED) |                \
+     NOC__MACRO_BUILTIN_BIT(NOC_MACRO_BUILTIN_DATE) |                       \
+     NOC__MACRO_BUILTIN_BIT(NOC_MACRO_BUILTIN_TIME))
 
 typedef struct {
     Noc_Macro_Expansion_Token *items;
@@ -5983,6 +6075,8 @@ typedef struct {
     const Noc_Macro_Environment *environment;
     size_t entry_limit;
     Noc_Macro_Expansion_Limits limits;
+    Noc_Macro_Expansion_Options options;
+    uint32_t available_builtin_mask;
     Noc_Macro_Expansion *output;
     Noc__Macro_Hide_Set *hide_sets;
     size_t hide_set_count;
@@ -6045,6 +6139,9 @@ NOCDEF const char *noc_macro_builtin_kind_name(Noc_Macro_Builtin_Kind kind)
     case NOC_MACRO_BUILTIN_LINE: return "line";
     case NOC_MACRO_BUILTIN_STDC: return "stdc";
     case NOC_MACRO_BUILTIN_STDC_VERSION: return "stdc-version";
+    case NOC_MACRO_BUILTIN_STDC_HOSTED: return "stdc-hosted";
+    case NOC_MACRO_BUILTIN_DATE: return "date";
+    case NOC_MACRO_BUILTIN_TIME: return "time";
     }
     return "unknown";
 }
@@ -6064,6 +6161,16 @@ NOCDEF Noc_Macro_Builtin_Kind noc_macro_builtin_kind_from_name(Noc_Slice name)
                                     noc_slice_from_cstr("__STDC_VERSION__"))) {
         return NOC_MACRO_BUILTIN_STDC_VERSION;
     }
+    if (noc__slices_logically_equal(name,
+                                    noc_slice_from_cstr("__STDC_HOSTED__"))) {
+        return NOC_MACRO_BUILTIN_STDC_HOSTED;
+    }
+    if (noc__slices_logically_equal(name, noc_slice_from_cstr("__DATE__"))) {
+        return NOC_MACRO_BUILTIN_DATE;
+    }
+    if (noc__slices_logically_equal(name, noc_slice_from_cstr("__TIME__"))) {
+        return NOC_MACRO_BUILTIN_TIME;
+    }
     return NOC_MACRO_BUILTIN_NONE;
 }
 
@@ -6076,12 +6183,124 @@ NOCDEF Noc_Macro_Expansion_Limits noc_macro_expansion_default_limits(void)
     return limits;
 }
 
+NOCDEF Noc_Macro_Expansion_Options noc_macro_expansion_default_options(void)
+{
+    Noc_Macro_Expansion_Options options;
+    memset(&options, 0, sizeof(options));
+    options.limits = noc_macro_expansion_default_limits();
+    options.execution_environment = NOC_EXECUTION_ENVIRONMENT_UNSPECIFIED;
+    return options;
+}
+
 NOC__PRIVATE bool noc__macro_expansion_limits_are_valid(
     Noc_Macro_Expansion_Limits limits)
 {
     return limits.max_depth > 0 &&
            limits.max_depth <= NOC__MACRO_EXPANSION_HARD_MAX_DEPTH &&
            limits.max_output_tokens > 0 && limits.max_expansions > 0;
+}
+
+static bool noc__macro_translation_date_is_valid(Noc_Slice date)
+{
+    static const char *const months[] = {
+        "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+        "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+    };
+    size_t month;
+    unsigned day;
+    size_t index;
+    if (date.count == 0) return true;
+    if (!date.data || date.count != 11 || date.data[3] != ' ' ||
+        date.data[6] != ' ') {
+        return false;
+    }
+    for (month = 0; month < sizeof(months) / sizeof(months[0]); ++month) {
+        if (memcmp(date.data, months[month], 3) == 0) break;
+    }
+    if (month == sizeof(months) / sizeof(months[0]) ||
+        date.data[5] < '0' || date.data[5] > '9') {
+        return false;
+    }
+    if (date.data[4] == ' ') {
+        day = (unsigned)(date.data[5] - '0');
+        if (day == 0) return false;
+    } else {
+        if (date.data[4] < '1' || date.data[4] > '3') return false;
+        day = (unsigned)(date.data[4] - '0') * 10u +
+              (unsigned)(date.data[5] - '0');
+        if (day < 10u || day > 31u) return false;
+    }
+    for (index = 7; index < 11; ++index) {
+        if (date.data[index] < '0' || date.data[index] > '9') return false;
+    }
+    return true;
+}
+
+static bool noc__macro_translation_time_is_valid(Noc_Slice time)
+{
+    unsigned hour;
+    unsigned minute;
+    unsigned second;
+    size_t index;
+    if (time.count == 0) return true;
+    if (!time.data || time.count != 8 || time.data[2] != ':' ||
+        time.data[5] != ':') {
+        return false;
+    }
+    for (index = 0; index < 8; ++index) {
+        if (index == 2 || index == 5) continue;
+        if (time.data[index] < '0' || time.data[index] > '9') return false;
+    }
+    hour = (unsigned)(time.data[0] - '0') * 10u +
+           (unsigned)(time.data[1] - '0');
+    minute = (unsigned)(time.data[3] - '0') * 10u +
+             (unsigned)(time.data[4] - '0');
+    second = (unsigned)(time.data[6] - '0') * 10u +
+             (unsigned)(time.data[7] - '0');
+    return hour <= 23u && minute <= 59u && second <= 60u;
+}
+
+NOC__PRIVATE bool noc__macro_expansion_options_are_valid(
+    Noc_Macro_Expansion_Options options)
+{
+    if (!noc__macro_expansion_limits_are_valid(options.limits)) return false;
+    switch (options.execution_environment) {
+    case NOC_EXECUTION_ENVIRONMENT_UNSPECIFIED:
+    case NOC_EXECUTION_ENVIRONMENT_FREESTANDING:
+    case NOC_EXECUTION_ENVIRONMENT_HOSTED:
+        break;
+    default:
+        return false;
+    }
+    return noc__macro_translation_date_is_valid(options.translation_date) &&
+           noc__macro_translation_time_is_valid(options.translation_time);
+}
+
+NOC__PRIVATE uint32_t noc__macro_builtin_mask_from_options(
+    Noc_Macro_Expansion_Options options)
+{
+    uint32_t mask = NOC__MACRO_BUILTIN_ALWAYS_MASK;
+    if (options.execution_environment !=
+        NOC_EXECUTION_ENVIRONMENT_UNSPECIFIED) {
+        mask |= NOC__MACRO_BUILTIN_BIT(NOC_MACRO_BUILTIN_STDC_HOSTED);
+    }
+    if (options.translation_date.count != 0) {
+        mask |= NOC__MACRO_BUILTIN_BIT(NOC_MACRO_BUILTIN_DATE);
+    }
+    if (options.translation_time.count != 0) {
+        mask |= NOC__MACRO_BUILTIN_BIT(NOC_MACRO_BUILTIN_TIME);
+    }
+    return mask;
+}
+
+NOC__PRIVATE bool noc__macro_builtin_mask_contains(
+    uint32_t mask,
+    Noc_Macro_Builtin_Kind kind)
+{
+    if (kind < NOC_MACRO_BUILTIN_FILE || kind > NOC_MACRO_BUILTIN_TIME) {
+        return false;
+    }
+    return (mask & NOC__MACRO_BUILTIN_BIT(kind)) != 0;
 }
 
 NOCDEF void noc_macro_expansion_free(Noc_Macro_Expansion *expansion)
@@ -6118,7 +6337,11 @@ NOCDEF bool noc_macro_expansion_is_valid(const Noc_Macro_Expansion *expansion)
         expansion->generated_spelling_count >
             expansion->generated_spelling_capacity ||
         ((expansion->generated_spelling_capacity == 0) !=
-         (expansion->generated_spellings == NULL))) {
+         (expansion->generated_spellings == NULL)) ||
+        (expansion->available_builtin_mask &
+         ~NOC__MACRO_BUILTIN_SUPPORTED_MASK) != 0 ||
+        (expansion->available_builtin_mask & NOC__MACRO_BUILTIN_ALWAYS_MASK) !=
+            NOC__MACRO_BUILTIN_ALWAYS_MASK) {
         return false;
     }
     for (index = 0; index < expansion->count; ++index) {
@@ -6170,19 +6393,25 @@ NOCDEF bool noc_macro_expansion_is_valid(const Noc_Macro_Expansion *expansion)
                     noc_macro_builtin_kind_from_name(source_token.text);
                 switch (token->builtin_kind) {
                 case NOC_MACRO_BUILTIN_FILE:
+                case NOC_MACRO_BUILTIN_DATE:
+                case NOC_MACRO_BUILTIN_TIME:
                     if (token->token.kind != NOC_TOKEN_STRING) return false;
                     break;
                 case NOC_MACRO_BUILTIN_LINE:
                 case NOC_MACRO_BUILTIN_STDC:
                 case NOC_MACRO_BUILTIN_STDC_VERSION:
+                case NOC_MACRO_BUILTIN_STDC_HOSTED:
                     if (token->token.kind != NOC_TOKEN_NUMBER) return false;
                     break;
                 case NOC_MACRO_BUILTIN_NONE:
                 default:
                     return false;
                 }
-                if (token->frame_index == NOC_TOKEN_INDEX_NONE &&
-                    token->unit != expansion->input_unit) {
+                if (!noc__macro_builtin_mask_contains(
+                        expansion->available_builtin_mask,
+                        token->builtin_kind) ||
+                    (token->frame_index == NOC_TOKEN_INDEX_NONE &&
+                     token->unit != expansion->input_unit)) {
                     return false;
                 }
                 if (source_kind != token->builtin_kind &&
@@ -6223,6 +6452,15 @@ NOCDEF bool noc_macro_expansion_is_valid(const Noc_Macro_Expansion *expansion)
         }
     }
     return true;
+}
+
+NOCDEF bool noc_macro_expansion_builtin_is_available(
+    const Noc_Macro_Expansion *expansion,
+    Noc_Macro_Builtin_Kind kind)
+{
+    return noc_macro_expansion_is_valid(expansion) &&
+           noc__macro_builtin_mask_contains(expansion->available_builtin_mask,
+                                            kind);
 }
 
 static void noc__macro_token_sequence_free(Noc__Macro_Token_Sequence *sequence)
@@ -6681,6 +6919,35 @@ static Noc_Macro_Expansion_Status noc__macro_expand_builtin(
     case NOC_MACRO_BUILTIN_STDC_VERSION:
         if (!noc_buffer_append_cstr(&spelling, "201112L")) goto done;
         token.token.kind = NOC_TOKEN_NUMBER;
+        break;
+    case NOC_MACRO_BUILTIN_STDC_HOSTED:
+        if (!noc_buffer_append_cstr(
+                &spelling,
+                builder->options.execution_environment ==
+                        NOC_EXECUTION_ENVIRONMENT_HOSTED ?
+                    "1" :
+                    "0")) {
+            goto done;
+        }
+        token.token.kind = NOC_TOKEN_NUMBER;
+        break;
+    case NOC_MACRO_BUILTIN_DATE:
+        if (!noc__buffer_append_c_string(
+                &spelling,
+                builder->options.translation_date.data,
+                builder->options.translation_date.count)) {
+            goto done;
+        }
+        token.token.kind = NOC_TOKEN_STRING;
+        break;
+    case NOC_MACRO_BUILTIN_TIME:
+        if (!noc__buffer_append_c_string(
+                &spelling,
+                builder->options.translation_time.data,
+                builder->options.translation_time.count)) {
+            goto done;
+        }
+        token.token.kind = NOC_TOKEN_STRING;
         break;
     case NOC_MACRO_BUILTIN_NONE:
         status = NOC_MACRO_EXPANSION_INVALID_ARGUMENT;
@@ -7550,6 +7817,11 @@ static Noc_Macro_Expansion_Status noc__macro_expand_sequence(
             directive = noc__macro_environment_entry_directive(entry);
         } else if (token->token.kind == NOC_TOKEN_IDENTIFIER) {
             builtin_kind = noc_macro_builtin_kind_from_name(token->token.text);
+            if (!noc__macro_builtin_mask_contains(
+                    builder->available_builtin_mask,
+                    builtin_kind)) {
+                builtin_kind = NOC_MACRO_BUILTIN_NONE;
+            }
         }
         if (!directive) {
             if (builtin_kind != NOC_MACRO_BUILTIN_NONE) {
@@ -7622,7 +7894,7 @@ NOC__PRIVATE Noc_Macro_Expansion_Status noc__macro_expansion_build(
     size_t entry_limit,
     const Noc_Preprocessor_Unit *input_unit,
     Noc_Token_Range input_tokens,
-    Noc_Macro_Expansion_Limits limits,
+    Noc_Macro_Expansion_Options options,
     bool preserve_defined_operands,
     Noc_Macro_Expansion *output)
 {
@@ -7635,7 +7907,7 @@ NOC__PRIVATE Noc_Macro_Expansion_Status noc__macro_expansion_build(
     if (!environment || !input_unit || !output ||
         entry_limit > environment->count ||
         input_tokens.begin > input_tokens.end ||
-        !noc__macro_expansion_limits_are_valid(limits)) {
+        !noc__macro_expansion_options_are_valid(options)) {
         return NOC_MACRO_EXPANSION_INVALID_ARGUMENT;
     }
     if (!noc_macro_environment_is_valid(environment) ||
@@ -7655,10 +7927,14 @@ NOC__PRIVATE Noc_Macro_Expansion_Status noc__macro_expansion_build(
     parsed.environment_entry_limit = entry_limit;
     parsed.input_unit = input_unit;
     parsed.input_unit_stream_generation = input_unit->stream.generation;
+    parsed.available_builtin_mask =
+        noc__macro_builtin_mask_from_options(options);
     memset(&builder, 0, sizeof(builder));
     builder.environment = environment;
     builder.entry_limit = entry_limit;
-    builder.limits = limits;
+    builder.limits = options.limits;
+    builder.options = options;
+    builder.available_builtin_mask = parsed.available_builtin_mask;
     builder.output = &parsed;
     builder.preserve_defined_operands = preserve_defined_operands;
     for (token_index = input_tokens.begin;
@@ -7707,11 +7983,29 @@ NOCDEF Noc_Macro_Expansion_Status noc_macro_expansion_build(
     Noc_Macro_Expansion_Limits limits,
     Noc_Macro_Expansion *output)
 {
+    Noc_Macro_Expansion_Options options = noc_macro_expansion_default_options();
+    options.limits = limits;
+    return noc_macro_expansion_build_with_options(environment,
+                                                  entry_limit,
+                                                  input_unit,
+                                                  input_tokens,
+                                                  options,
+                                                  output);
+}
+
+NOCDEF Noc_Macro_Expansion_Status noc_macro_expansion_build_with_options(
+    const Noc_Macro_Environment *environment,
+    size_t entry_limit,
+    const Noc_Preprocessor_Unit *input_unit,
+    Noc_Token_Range input_tokens,
+    Noc_Macro_Expansion_Options options,
+    Noc_Macro_Expansion *output)
+{
     return noc__macro_expansion_build(environment,
                                       entry_limit,
                                       input_unit,
                                       input_tokens,
-                                      limits,
+                                      options,
                                       false,
                                       output);
 }
@@ -7724,11 +8018,30 @@ NOCDEF Noc_Macro_Expansion_Status noc_macro_expansion_build_condition(
     Noc_Macro_Expansion_Limits limits,
     Noc_Macro_Expansion *output)
 {
+    Noc_Macro_Expansion_Options options = noc_macro_expansion_default_options();
+    options.limits = limits;
+    return noc_macro_expansion_build_condition_with_options(environment,
+                                                            entry_limit,
+                                                            input_unit,
+                                                            input_tokens,
+                                                            options,
+                                                            output);
+}
+
+NOCDEF Noc_Macro_Expansion_Status
+noc_macro_expansion_build_condition_with_options(
+    const Noc_Macro_Environment *environment,
+    size_t entry_limit,
+    const Noc_Preprocessor_Unit *input_unit,
+    Noc_Token_Range input_tokens,
+    Noc_Macro_Expansion_Options options,
+    Noc_Macro_Expansion *output)
+{
     return noc__macro_expansion_build(environment,
                                       entry_limit,
                                       input_unit,
                                       input_tokens,
-                                      limits,
+                                      options,
                                       true,
                                       output);
 }
@@ -7778,6 +8091,9 @@ NOCDEF bool noc_macro_expansion_render(const Noc_Macro_Expansion *expansion,
 #undef NOC__MACRO_EXPANSION_HARD_MAX_DEPTH
 #undef NOC__MACRO_TOKEN_PLACEMARKER
 #undef NOC__MACRO_TOKEN_PASTE_OPERATOR
+#undef NOC__MACRO_BUILTIN_SUPPORTED_MASK
+#undef NOC__MACRO_BUILTIN_ALWAYS_MASK
+#undef NOC__MACRO_BUILTIN_BIT
 
 #endif /* NOC_MACRO_EXPANSION_IMPLEMENTATION_INCLUDED */
 #endif /* NOC_IMPLEMENTATION || NOC__INDIVIDUAL_SOURCE */
@@ -8144,8 +8460,9 @@ static Noc__Preprocessor_Value noc__preprocessor_parse_unary(
                              parser->expansion->environment,
                              name,
                              parser->expansion->environment_entry_limit) != NULL ||
-                         noc_macro_builtin_kind_from_name(name) !=
-                             NOC_MACRO_BUILTIN_NONE;
+                         noc__macro_builtin_mask_contains(
+                             parser->expansion->available_builtin_mask,
+                             noc_macro_builtin_kind_from_name(name));
         }
         if (parenthesized &&
             !noc__preprocessor_expression_take_punct(parser, ")", NULL)) {
@@ -9091,7 +9408,7 @@ static void noc__conditional_set_expansion_problem(
 static Noc_Conditional_Groups_Build_Status noc__conditional_evaluate_expression(
     Noc_Preprocessor_Conditional_Groups *result,
     Noc_Preprocessor_Conditional_Branch *branch,
-    Noc_Macro_Expansion_Limits limits)
+    Noc_Macro_Expansion_Options options)
 {
     Noc_Macro_Expansion expansion = {0};
     Noc_Macro_Expansion_Status expansion_status;
@@ -9099,12 +9416,12 @@ static Noc_Conditional_Groups_Build_Status noc__conditional_evaluate_expression(
     bool value = false;
     size_t problem_token_index = NOC_TOKEN_INDEX_NONE;
 
-    expansion_status = noc_macro_expansion_build_condition(
+    expansion_status = noc_macro_expansion_build_condition_with_options(
         &result->environment,
         branch->condition_environment_entry_limit,
         result->unit,
         branch->condition_tokens,
-        limits,
+        options,
         &expansion);
     branch->expansion_status = expansion_status;
     if (expansion_status != NOC_MACRO_EXPANSION_OK) {
@@ -9164,6 +9481,7 @@ static Noc_Conditional_Groups_Build_Status noc__conditional_evaluate_expression(
 static void noc__conditional_evaluate_defined(
     Noc_Preprocessor_Conditional_Groups *result,
     Noc_Preprocessor_Conditional_Branch *branch,
+    uint32_t available_builtin_mask,
     bool negate)
 {
     Noc_Token_Range body = branch->condition_tokens;
@@ -9196,9 +9514,11 @@ static void noc__conditional_evaluate_defined(
                   &result->environment,
                   result->unit->preprocessing_tokens[identifier_index].token.text,
                   branch->condition_environment_entry_limit) != NULL ||
-              noc_macro_builtin_kind_from_name(
-                  result->unit->preprocessing_tokens[identifier_index].token.text) !=
-                  NOC_MACRO_BUILTIN_NONE;
+              noc__macro_builtin_mask_contains(
+                  available_builtin_mask,
+                  noc_macro_builtin_kind_from_name(
+                      result->unit->preprocessing_tokens[
+                          identifier_index].token.text));
     branch->condition_status = NOC_CONDITIONAL_CONDITION_EVALUATED;
     branch->condition_activity = defined != negate ?
                                      NOC_PREPROCESSOR_ACTIVITY_ACTIVE :
@@ -9465,6 +9785,24 @@ noc_preprocessor_conditional_groups_build(
     Noc_Macro_Expansion_Limits limits,
     Noc_Preprocessor_Conditional_Groups *output)
 {
+    Noc_Macro_Expansion_Options options = noc_macro_expansion_default_options();
+    options.limits = limits;
+    return noc_preprocessor_conditional_groups_build_with_options(
+        initial_environment,
+        initial_entry_limit,
+        unit,
+        options,
+        output);
+}
+
+NOCDEF Noc_Conditional_Groups_Build_Status
+noc_preprocessor_conditional_groups_build_with_options(
+    const Noc_Macro_Environment *initial_environment,
+    size_t initial_entry_limit,
+    const Noc_Preprocessor_Unit *unit,
+    Noc_Macro_Expansion_Options options,
+    Noc_Preprocessor_Conditional_Groups *output)
+{
     Noc_Preprocessor_Conditional_Groups parsed = {0};
     Noc__Conditional_Frame *stack = NULL;
     size_t stack_count = 0;
@@ -9477,16 +9815,18 @@ noc_preprocessor_conditional_groups_build(
     bool macro_state_complete = true;
     Noc_Macro_Environment_Status clone_status;
     Noc_Conditional_Groups_Build_Status status = NOC_CONDITIONAL_GROUPS_OK;
+    uint32_t available_builtin_mask;
 
     if (!initial_environment || !unit || !output ||
         initial_entry_limit > initial_environment->count ||
-        !noc__macro_expansion_limits_are_valid(limits)) {
+        !noc__macro_expansion_options_are_valid(options)) {
         return NOC_CONDITIONAL_GROUPS_INVALID_ARGUMENT;
     }
     if (!noc_macro_environment_is_valid(initial_environment) ||
         !noc_preprocessor_unit_is_valid(unit)) {
         return NOC_CONDITIONAL_GROUPS_STALE;
     }
+    available_builtin_mask = noc__macro_builtin_mask_from_options(options);
     epoch = output->generation > output->environment.generation ?
                 output->generation :
                 output->environment.generation;
@@ -9615,13 +9955,14 @@ noc_preprocessor_conditional_groups_build(
                     } else {
                         status = noc__conditional_evaluate_expression(&parsed,
                                                                       &branch,
-                                                                      limits);
+                                                                      options);
                         if (status != NOC_CONDITIONAL_GROUPS_OK) goto failed;
                     }
                 } else {
                     noc__conditional_evaluate_defined(
                         &parsed,
                         &branch,
+                        available_builtin_mask,
                         directive->kind == NOC_PREPROCESSOR_DIRECTIVE_IFNDEF);
                 }
             }
@@ -9771,7 +10112,7 @@ noc_preprocessor_conditional_groups_build(
                 } else {
                     status = noc__conditional_evaluate_expression(&parsed,
                                                                   &branch,
-                                                                  limits);
+                                                                  options);
                     if (status != NOC_CONDITIONAL_GROUPS_OK) goto failed;
                 }
             }

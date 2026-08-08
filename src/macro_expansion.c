@@ -9,6 +9,17 @@
 #define NOC__MACRO_EXPANSION_HARD_MAX_DEPTH 256u
 #define NOC__MACRO_TOKEN_PLACEMARKER 1u
 #define NOC__MACRO_TOKEN_PASTE_OPERATOR 2u
+#define NOC__MACRO_BUILTIN_BIT(kind) (UINT32_C(1) << (unsigned)(kind))
+#define NOC__MACRO_BUILTIN_ALWAYS_MASK                                      \
+    (NOC__MACRO_BUILTIN_BIT(NOC_MACRO_BUILTIN_FILE) |                       \
+     NOC__MACRO_BUILTIN_BIT(NOC_MACRO_BUILTIN_LINE) |                       \
+     NOC__MACRO_BUILTIN_BIT(NOC_MACRO_BUILTIN_STDC) |                       \
+     NOC__MACRO_BUILTIN_BIT(NOC_MACRO_BUILTIN_STDC_VERSION))
+#define NOC__MACRO_BUILTIN_SUPPORTED_MASK                                   \
+    (NOC__MACRO_BUILTIN_ALWAYS_MASK |                                       \
+     NOC__MACRO_BUILTIN_BIT(NOC_MACRO_BUILTIN_STDC_HOSTED) |                \
+     NOC__MACRO_BUILTIN_BIT(NOC_MACRO_BUILTIN_DATE) |                       \
+     NOC__MACRO_BUILTIN_BIT(NOC_MACRO_BUILTIN_TIME))
 
 typedef struct {
     Noc_Macro_Expansion_Token *items;
@@ -27,6 +38,8 @@ typedef struct {
     const Noc_Macro_Environment *environment;
     size_t entry_limit;
     Noc_Macro_Expansion_Limits limits;
+    Noc_Macro_Expansion_Options options;
+    uint32_t available_builtin_mask;
     Noc_Macro_Expansion *output;
     Noc__Macro_Hide_Set *hide_sets;
     size_t hide_set_count;
@@ -89,6 +102,9 @@ NOCDEF const char *noc_macro_builtin_kind_name(Noc_Macro_Builtin_Kind kind)
     case NOC_MACRO_BUILTIN_LINE: return "line";
     case NOC_MACRO_BUILTIN_STDC: return "stdc";
     case NOC_MACRO_BUILTIN_STDC_VERSION: return "stdc-version";
+    case NOC_MACRO_BUILTIN_STDC_HOSTED: return "stdc-hosted";
+    case NOC_MACRO_BUILTIN_DATE: return "date";
+    case NOC_MACRO_BUILTIN_TIME: return "time";
     }
     return "unknown";
 }
@@ -108,6 +124,16 @@ NOCDEF Noc_Macro_Builtin_Kind noc_macro_builtin_kind_from_name(Noc_Slice name)
                                     noc_slice_from_cstr("__STDC_VERSION__"))) {
         return NOC_MACRO_BUILTIN_STDC_VERSION;
     }
+    if (noc__slices_logically_equal(name,
+                                    noc_slice_from_cstr("__STDC_HOSTED__"))) {
+        return NOC_MACRO_BUILTIN_STDC_HOSTED;
+    }
+    if (noc__slices_logically_equal(name, noc_slice_from_cstr("__DATE__"))) {
+        return NOC_MACRO_BUILTIN_DATE;
+    }
+    if (noc__slices_logically_equal(name, noc_slice_from_cstr("__TIME__"))) {
+        return NOC_MACRO_BUILTIN_TIME;
+    }
     return NOC_MACRO_BUILTIN_NONE;
 }
 
@@ -120,12 +146,124 @@ NOCDEF Noc_Macro_Expansion_Limits noc_macro_expansion_default_limits(void)
     return limits;
 }
 
+NOCDEF Noc_Macro_Expansion_Options noc_macro_expansion_default_options(void)
+{
+    Noc_Macro_Expansion_Options options;
+    memset(&options, 0, sizeof(options));
+    options.limits = noc_macro_expansion_default_limits();
+    options.execution_environment = NOC_EXECUTION_ENVIRONMENT_UNSPECIFIED;
+    return options;
+}
+
 NOC__PRIVATE bool noc__macro_expansion_limits_are_valid(
     Noc_Macro_Expansion_Limits limits)
 {
     return limits.max_depth > 0 &&
            limits.max_depth <= NOC__MACRO_EXPANSION_HARD_MAX_DEPTH &&
            limits.max_output_tokens > 0 && limits.max_expansions > 0;
+}
+
+static bool noc__macro_translation_date_is_valid(Noc_Slice date)
+{
+    static const char *const months[] = {
+        "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+        "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+    };
+    size_t month;
+    unsigned day;
+    size_t index;
+    if (date.count == 0) return true;
+    if (!date.data || date.count != 11 || date.data[3] != ' ' ||
+        date.data[6] != ' ') {
+        return false;
+    }
+    for (month = 0; month < sizeof(months) / sizeof(months[0]); ++month) {
+        if (memcmp(date.data, months[month], 3) == 0) break;
+    }
+    if (month == sizeof(months) / sizeof(months[0]) ||
+        date.data[5] < '0' || date.data[5] > '9') {
+        return false;
+    }
+    if (date.data[4] == ' ') {
+        day = (unsigned)(date.data[5] - '0');
+        if (day == 0) return false;
+    } else {
+        if (date.data[4] < '1' || date.data[4] > '3') return false;
+        day = (unsigned)(date.data[4] - '0') * 10u +
+              (unsigned)(date.data[5] - '0');
+        if (day < 10u || day > 31u) return false;
+    }
+    for (index = 7; index < 11; ++index) {
+        if (date.data[index] < '0' || date.data[index] > '9') return false;
+    }
+    return true;
+}
+
+static bool noc__macro_translation_time_is_valid(Noc_Slice time)
+{
+    unsigned hour;
+    unsigned minute;
+    unsigned second;
+    size_t index;
+    if (time.count == 0) return true;
+    if (!time.data || time.count != 8 || time.data[2] != ':' ||
+        time.data[5] != ':') {
+        return false;
+    }
+    for (index = 0; index < 8; ++index) {
+        if (index == 2 || index == 5) continue;
+        if (time.data[index] < '0' || time.data[index] > '9') return false;
+    }
+    hour = (unsigned)(time.data[0] - '0') * 10u +
+           (unsigned)(time.data[1] - '0');
+    minute = (unsigned)(time.data[3] - '0') * 10u +
+             (unsigned)(time.data[4] - '0');
+    second = (unsigned)(time.data[6] - '0') * 10u +
+             (unsigned)(time.data[7] - '0');
+    return hour <= 23u && minute <= 59u && second <= 60u;
+}
+
+NOC__PRIVATE bool noc__macro_expansion_options_are_valid(
+    Noc_Macro_Expansion_Options options)
+{
+    if (!noc__macro_expansion_limits_are_valid(options.limits)) return false;
+    switch (options.execution_environment) {
+    case NOC_EXECUTION_ENVIRONMENT_UNSPECIFIED:
+    case NOC_EXECUTION_ENVIRONMENT_FREESTANDING:
+    case NOC_EXECUTION_ENVIRONMENT_HOSTED:
+        break;
+    default:
+        return false;
+    }
+    return noc__macro_translation_date_is_valid(options.translation_date) &&
+           noc__macro_translation_time_is_valid(options.translation_time);
+}
+
+NOC__PRIVATE uint32_t noc__macro_builtin_mask_from_options(
+    Noc_Macro_Expansion_Options options)
+{
+    uint32_t mask = NOC__MACRO_BUILTIN_ALWAYS_MASK;
+    if (options.execution_environment !=
+        NOC_EXECUTION_ENVIRONMENT_UNSPECIFIED) {
+        mask |= NOC__MACRO_BUILTIN_BIT(NOC_MACRO_BUILTIN_STDC_HOSTED);
+    }
+    if (options.translation_date.count != 0) {
+        mask |= NOC__MACRO_BUILTIN_BIT(NOC_MACRO_BUILTIN_DATE);
+    }
+    if (options.translation_time.count != 0) {
+        mask |= NOC__MACRO_BUILTIN_BIT(NOC_MACRO_BUILTIN_TIME);
+    }
+    return mask;
+}
+
+NOC__PRIVATE bool noc__macro_builtin_mask_contains(
+    uint32_t mask,
+    Noc_Macro_Builtin_Kind kind)
+{
+    if (kind < NOC_MACRO_BUILTIN_FILE || kind > NOC_MACRO_BUILTIN_TIME) {
+        return false;
+    }
+    return (mask & NOC__MACRO_BUILTIN_BIT(kind)) != 0;
 }
 
 NOCDEF void noc_macro_expansion_free(Noc_Macro_Expansion *expansion)
@@ -162,7 +300,11 @@ NOCDEF bool noc_macro_expansion_is_valid(const Noc_Macro_Expansion *expansion)
         expansion->generated_spelling_count >
             expansion->generated_spelling_capacity ||
         ((expansion->generated_spelling_capacity == 0) !=
-         (expansion->generated_spellings == NULL))) {
+         (expansion->generated_spellings == NULL)) ||
+        (expansion->available_builtin_mask &
+         ~NOC__MACRO_BUILTIN_SUPPORTED_MASK) != 0 ||
+        (expansion->available_builtin_mask & NOC__MACRO_BUILTIN_ALWAYS_MASK) !=
+            NOC__MACRO_BUILTIN_ALWAYS_MASK) {
         return false;
     }
     for (index = 0; index < expansion->count; ++index) {
@@ -214,19 +356,25 @@ NOCDEF bool noc_macro_expansion_is_valid(const Noc_Macro_Expansion *expansion)
                     noc_macro_builtin_kind_from_name(source_token.text);
                 switch (token->builtin_kind) {
                 case NOC_MACRO_BUILTIN_FILE:
+                case NOC_MACRO_BUILTIN_DATE:
+                case NOC_MACRO_BUILTIN_TIME:
                     if (token->token.kind != NOC_TOKEN_STRING) return false;
                     break;
                 case NOC_MACRO_BUILTIN_LINE:
                 case NOC_MACRO_BUILTIN_STDC:
                 case NOC_MACRO_BUILTIN_STDC_VERSION:
+                case NOC_MACRO_BUILTIN_STDC_HOSTED:
                     if (token->token.kind != NOC_TOKEN_NUMBER) return false;
                     break;
                 case NOC_MACRO_BUILTIN_NONE:
                 default:
                     return false;
                 }
-                if (token->frame_index == NOC_TOKEN_INDEX_NONE &&
-                    token->unit != expansion->input_unit) {
+                if (!noc__macro_builtin_mask_contains(
+                        expansion->available_builtin_mask,
+                        token->builtin_kind) ||
+                    (token->frame_index == NOC_TOKEN_INDEX_NONE &&
+                     token->unit != expansion->input_unit)) {
                     return false;
                 }
                 if (source_kind != token->builtin_kind &&
@@ -267,6 +415,15 @@ NOCDEF bool noc_macro_expansion_is_valid(const Noc_Macro_Expansion *expansion)
         }
     }
     return true;
+}
+
+NOCDEF bool noc_macro_expansion_builtin_is_available(
+    const Noc_Macro_Expansion *expansion,
+    Noc_Macro_Builtin_Kind kind)
+{
+    return noc_macro_expansion_is_valid(expansion) &&
+           noc__macro_builtin_mask_contains(expansion->available_builtin_mask,
+                                            kind);
 }
 
 static void noc__macro_token_sequence_free(Noc__Macro_Token_Sequence *sequence)
@@ -725,6 +882,35 @@ static Noc_Macro_Expansion_Status noc__macro_expand_builtin(
     case NOC_MACRO_BUILTIN_STDC_VERSION:
         if (!noc_buffer_append_cstr(&spelling, "201112L")) goto done;
         token.token.kind = NOC_TOKEN_NUMBER;
+        break;
+    case NOC_MACRO_BUILTIN_STDC_HOSTED:
+        if (!noc_buffer_append_cstr(
+                &spelling,
+                builder->options.execution_environment ==
+                        NOC_EXECUTION_ENVIRONMENT_HOSTED ?
+                    "1" :
+                    "0")) {
+            goto done;
+        }
+        token.token.kind = NOC_TOKEN_NUMBER;
+        break;
+    case NOC_MACRO_BUILTIN_DATE:
+        if (!noc__buffer_append_c_string(
+                &spelling,
+                builder->options.translation_date.data,
+                builder->options.translation_date.count)) {
+            goto done;
+        }
+        token.token.kind = NOC_TOKEN_STRING;
+        break;
+    case NOC_MACRO_BUILTIN_TIME:
+        if (!noc__buffer_append_c_string(
+                &spelling,
+                builder->options.translation_time.data,
+                builder->options.translation_time.count)) {
+            goto done;
+        }
+        token.token.kind = NOC_TOKEN_STRING;
         break;
     case NOC_MACRO_BUILTIN_NONE:
         status = NOC_MACRO_EXPANSION_INVALID_ARGUMENT;
@@ -1594,6 +1780,11 @@ static Noc_Macro_Expansion_Status noc__macro_expand_sequence(
             directive = noc__macro_environment_entry_directive(entry);
         } else if (token->token.kind == NOC_TOKEN_IDENTIFIER) {
             builtin_kind = noc_macro_builtin_kind_from_name(token->token.text);
+            if (!noc__macro_builtin_mask_contains(
+                    builder->available_builtin_mask,
+                    builtin_kind)) {
+                builtin_kind = NOC_MACRO_BUILTIN_NONE;
+            }
         }
         if (!directive) {
             if (builtin_kind != NOC_MACRO_BUILTIN_NONE) {
@@ -1666,7 +1857,7 @@ NOC__PRIVATE Noc_Macro_Expansion_Status noc__macro_expansion_build(
     size_t entry_limit,
     const Noc_Preprocessor_Unit *input_unit,
     Noc_Token_Range input_tokens,
-    Noc_Macro_Expansion_Limits limits,
+    Noc_Macro_Expansion_Options options,
     bool preserve_defined_operands,
     Noc_Macro_Expansion *output)
 {
@@ -1679,7 +1870,7 @@ NOC__PRIVATE Noc_Macro_Expansion_Status noc__macro_expansion_build(
     if (!environment || !input_unit || !output ||
         entry_limit > environment->count ||
         input_tokens.begin > input_tokens.end ||
-        !noc__macro_expansion_limits_are_valid(limits)) {
+        !noc__macro_expansion_options_are_valid(options)) {
         return NOC_MACRO_EXPANSION_INVALID_ARGUMENT;
     }
     if (!noc_macro_environment_is_valid(environment) ||
@@ -1699,10 +1890,14 @@ NOC__PRIVATE Noc_Macro_Expansion_Status noc__macro_expansion_build(
     parsed.environment_entry_limit = entry_limit;
     parsed.input_unit = input_unit;
     parsed.input_unit_stream_generation = input_unit->stream.generation;
+    parsed.available_builtin_mask =
+        noc__macro_builtin_mask_from_options(options);
     memset(&builder, 0, sizeof(builder));
     builder.environment = environment;
     builder.entry_limit = entry_limit;
-    builder.limits = limits;
+    builder.limits = options.limits;
+    builder.options = options;
+    builder.available_builtin_mask = parsed.available_builtin_mask;
     builder.output = &parsed;
     builder.preserve_defined_operands = preserve_defined_operands;
     for (token_index = input_tokens.begin;
@@ -1751,11 +1946,29 @@ NOCDEF Noc_Macro_Expansion_Status noc_macro_expansion_build(
     Noc_Macro_Expansion_Limits limits,
     Noc_Macro_Expansion *output)
 {
+    Noc_Macro_Expansion_Options options = noc_macro_expansion_default_options();
+    options.limits = limits;
+    return noc_macro_expansion_build_with_options(environment,
+                                                  entry_limit,
+                                                  input_unit,
+                                                  input_tokens,
+                                                  options,
+                                                  output);
+}
+
+NOCDEF Noc_Macro_Expansion_Status noc_macro_expansion_build_with_options(
+    const Noc_Macro_Environment *environment,
+    size_t entry_limit,
+    const Noc_Preprocessor_Unit *input_unit,
+    Noc_Token_Range input_tokens,
+    Noc_Macro_Expansion_Options options,
+    Noc_Macro_Expansion *output)
+{
     return noc__macro_expansion_build(environment,
                                       entry_limit,
                                       input_unit,
                                       input_tokens,
-                                      limits,
+                                      options,
                                       false,
                                       output);
 }
@@ -1768,11 +1981,30 @@ NOCDEF Noc_Macro_Expansion_Status noc_macro_expansion_build_condition(
     Noc_Macro_Expansion_Limits limits,
     Noc_Macro_Expansion *output)
 {
+    Noc_Macro_Expansion_Options options = noc_macro_expansion_default_options();
+    options.limits = limits;
+    return noc_macro_expansion_build_condition_with_options(environment,
+                                                            entry_limit,
+                                                            input_unit,
+                                                            input_tokens,
+                                                            options,
+                                                            output);
+}
+
+NOCDEF Noc_Macro_Expansion_Status
+noc_macro_expansion_build_condition_with_options(
+    const Noc_Macro_Environment *environment,
+    size_t entry_limit,
+    const Noc_Preprocessor_Unit *input_unit,
+    Noc_Token_Range input_tokens,
+    Noc_Macro_Expansion_Options options,
+    Noc_Macro_Expansion *output)
+{
     return noc__macro_expansion_build(environment,
                                       entry_limit,
                                       input_unit,
                                       input_tokens,
-                                      limits,
+                                      options,
                                       true,
                                       output);
 }
@@ -1822,6 +2054,9 @@ NOCDEF bool noc_macro_expansion_render(const Noc_Macro_Expansion *expansion,
 #undef NOC__MACRO_EXPANSION_HARD_MAX_DEPTH
 #undef NOC__MACRO_TOKEN_PLACEMARKER
 #undef NOC__MACRO_TOKEN_PASTE_OPERATOR
+#undef NOC__MACRO_BUILTIN_SUPPORTED_MASK
+#undef NOC__MACRO_BUILTIN_ALWAYS_MASK
+#undef NOC__MACRO_BUILTIN_BIT
 
 #endif /* NOC_MACRO_EXPANSION_IMPLEMENTATION_INCLUDED */
 #endif /* NOC_IMPLEMENTATION || NOC__INDIVIDUAL_SOURCE */

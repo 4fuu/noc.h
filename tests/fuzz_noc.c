@@ -375,18 +375,32 @@ static void fuzz_preprocessor(Noc_Context *context,
                 FUZZ_CHECK(macro->status == NOC_MACRO_DIRECTIVE_STATUS_VALID);
             }
             {
-                Noc_Macro_Expansion_Limits limits =
-                    noc_macro_expansion_default_limits();
+                Noc_Macro_Expansion_Options options =
+                    noc_macro_expansion_default_options();
                 Noc_Macro_Expansion_Status status;
-                limits.max_depth = 16;
-                limits.max_output_tokens = 4096;
-                limits.max_expansions = 1024;
-                status = noc_macro_expansion_build(
+                options.limits.max_depth = 16;
+                options.limits.max_output_tokens = 4096;
+                options.limits.max_expansions = 1024;
+                if ((selector & 1u) != 0) {
+                    options.execution_environment =
+                        (selector & 2u) != 0 ?
+                            NOC_EXECUTION_ENVIRONMENT_HOSTED :
+                            NOC_EXECUTION_ENVIRONMENT_FREESTANDING;
+                }
+                if ((selector & 4u) != 0) {
+                    options.translation_date =
+                        noc_slice_from_cstr("Aug  8 2026");
+                }
+                if ((selector & 8u) != 0) {
+                    options.translation_time =
+                        noc_slice_from_cstr("12:34:56");
+                }
+                status = noc_macro_expansion_build_with_options(
                     &environment,
                     environment.count,
                     &unit,
                     (Noc_Token_Range){0, unit.preprocessing_token_count},
-                    limits,
+                    options,
                     &expansion);
                 FUZZ_CHECK(status == NOC_MACRO_EXPANSION_OK ||
                            status == NOC_MACRO_EXPANSION_INCOMPLETE_INVOCATION ||
@@ -407,7 +421,28 @@ static void fuzz_preprocessor(Noc_Context *context,
                         FUZZ_CHECK(token != NULL);
                         FUZZ_CHECK(token->preprocessing_token_index <
                                    token->unit->preprocessing_token_count);
+                        if (token->origin ==
+                            NOC_MACRO_EXPANSION_TOKEN_BUILTIN) {
+                            FUZZ_CHECK(noc_macro_expansion_builtin_is_available(
+                                &expansion,
+                                token->builtin_kind));
+                        }
                     }
+                    FUZZ_CHECK(noc_macro_expansion_builtin_is_available(
+                        &expansion, NOC_MACRO_BUILTIN_FILE));
+                    FUZZ_CHECK(noc_macro_expansion_builtin_is_available(
+                        &expansion, NOC_MACRO_BUILTIN_STDC_VERSION));
+                    FUZZ_CHECK(noc_macro_expansion_builtin_is_available(
+                                   &expansion,
+                                   NOC_MACRO_BUILTIN_STDC_HOSTED) ==
+                               (options.execution_environment !=
+                                NOC_EXECUTION_ENVIRONMENT_UNSPECIFIED));
+                    FUZZ_CHECK(noc_macro_expansion_builtin_is_available(
+                                   &expansion, NOC_MACRO_BUILTIN_DATE) ==
+                               (options.translation_date.count != 0));
+                    FUZZ_CHECK(noc_macro_expansion_builtin_is_available(
+                                   &expansion, NOC_MACRO_BUILTIN_TIME) ==
+                               (options.translation_time.count != 0));
                 }
                 for (index = 0; index < unit.count; ++index) {
                     const Noc_Preprocessor_Directive *directive =
@@ -425,12 +460,12 @@ static void fuzz_preprocessor(Noc_Context *context,
                         directive->kind == NOC_PREPROCESSOR_DIRECTIVE_ELIF) {
                         bool value = false;
                         size_t problem = NOC_TOKEN_INDEX_NONE;
-                        status = noc_macro_expansion_build_condition(
+                        status = noc_macro_expansion_build_condition_with_options(
                             &environment,
                             environment.count,
                             &unit,
                             body,
-                            limits,
+                            options,
                             &expansion);
                         if (status == NOC_MACRO_EXPANSION_OK) {
                             Noc_Preprocessor_Expression_Status expression_status =
@@ -451,10 +486,28 @@ static void fuzz_preprocessor(Noc_Context *context,
         (void)noc_preprocessor_unit_validate_macro_policy(context, &unit);
         (void)noc_preprocessor_unit_validate_macro_directives(context, &unit);
         {
+            Noc_Macro_Expansion_Options options =
+                noc_macro_expansion_default_options();
+            options.limits.max_depth = 16;
+            options.limits.max_output_tokens = 4096;
+            options.limits.max_expansions = 1024;
+            if ((selector & 1u) != 0) {
+                options.execution_environment =
+                    (selector & 2u) != 0 ?
+                        NOC_EXECUTION_ENVIRONMENT_HOSTED :
+                        NOC_EXECUTION_ENVIRONMENT_FREESTANDING;
+            }
+            if ((selector & 4u) != 0) {
+                options.translation_date =
+                    noc_slice_from_cstr("Aug  8 2026");
+            }
+            if ((selector & 8u) != 0) {
+                options.translation_time =
+                    noc_slice_from_cstr("12:34:56");
+            }
             Noc_Conditional_Groups_Build_Status status =
-                noc_preprocessor_conditional_groups_build(
-                    &conditional_initial, 0, &unit,
-                    noc_macro_expansion_default_limits(), &groups);
+                noc_preprocessor_conditional_groups_build_with_options(
+                    &conditional_initial, 0, &unit, options, &groups);
             FUZZ_CHECK(status >= NOC_CONDITIONAL_GROUPS_OK &&
                        status <= NOC_CONDITIONAL_GROUPS_OUT_OF_MEMORY);
             if (status == NOC_CONDITIONAL_GROUPS_OK) {

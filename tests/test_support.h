@@ -4,6 +4,13 @@
 #define NOC_IMPLEMENTATION
 #include "noc.h"
 
+/* Implementation-only amalgamation helpers must not leak into a consumer TU. */
+#if defined(NOC__MACRO_BUILTIN_BIT) || \
+    defined(NOC__MACRO_BUILTIN_ALWAYS_MASK) || \
+    defined(NOC__MACRO_BUILTIN_SUPPORTED_MASK)
+#error "noc.h leaked an internal predefined-macro helper"
+#endif
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>

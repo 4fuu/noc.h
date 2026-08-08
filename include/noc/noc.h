@@ -29,9 +29,9 @@
 #define NOC_H_INCLUDED
 
 #define NOC_VERSION_MAJOR 0
-#define NOC_VERSION_MINOR 35
+#define NOC_VERSION_MINOR 36
 #define NOC_VERSION_PATCH 0
-#define NOC_VERSION "0.35.0"
+#define NOC_VERSION "0.36.0"
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -783,12 +783,29 @@ typedef struct {
 } Noc_Preprocessor_Conditional_Groups;
 
 typedef enum {
+    /* No predefined name. This value is never present in an availability set. */
     NOC_MACRO_BUILTIN_NONE = 0,
+    /* Always-available C11 fallbacks in a default Noc expansion. */
     NOC_MACRO_BUILTIN_FILE,
     NOC_MACRO_BUILTIN_LINE,
     NOC_MACRO_BUILTIN_STDC,
     NOC_MACRO_BUILTIN_STDC_VERSION,
+    /* Available only when the corresponding translation input is configured. */
+    NOC_MACRO_BUILTIN_STDC_HOSTED,
+    NOC_MACRO_BUILTIN_DATE,
+    NOC_MACRO_BUILTIN_TIME,
 } Noc_Macro_Builtin_Kind;
+
+/* The C execution-environment choice used to synthesize __STDC_HOSTED__.
+   This describes the output translation, never the machine running Noc. */
+typedef enum {
+    /* Leaves the fallback unavailable rather than guessing from the host. */
+    NOC_EXECUTION_ENVIRONMENT_UNSPECIFIED = 0,
+    /* Expands __STDC_HOSTED__ to 0. */
+    NOC_EXECUTION_ENVIRONMENT_FREESTANDING,
+    /* Expands __STDC_HOSTED__ to 1. */
+    NOC_EXECUTION_ENVIRONMENT_HOSTED,
+} Noc_Execution_Environment;
 
 typedef enum {
     NOC_MACRO_EXPANSION_TOKEN_INPUT = 0,
@@ -807,6 +824,23 @@ typedef struct {
     /* Maximum object/function expansion frames created by one build. */
     size_t max_expansions;
 } Noc_Macro_Expansion_Limits;
+
+/* Per-translation expansion inputs. Start from
+   noc_macro_expansion_default_options rather than zero-initializing: zero
+   limits are invalid. Date is an unquoted "Mmm dd yyyy" C11 value and time is
+   an unquoted "hh:mm:ss" value; validation checks this lexical form, day 1..31,
+   hour 0..23, minute 0..59, and second 0..60, but deliberately does not apply a
+   calendar or timezone. Empty slices leave those predefined fallbacks
+   unavailable. Configured slices are borrowed only for the build call and all
+   emitted spellings are copied into the owning expansion. Reuse the same
+   options throughout one preprocessing translation so every file/condition
+   observes one reproducible translation environment. */
+typedef struct {
+    Noc_Macro_Expansion_Limits limits;
+    Noc_Execution_Environment execution_environment;
+    Noc_Slice translation_date;
+    Noc_Slice translation_time;
+} Noc_Macro_Expansion_Options;
 
 typedef struct {
     Noc_Token token;
@@ -851,6 +885,9 @@ typedef struct {
     Noc_Slice *generated_spellings;
     size_t generated_spelling_count;
     size_t generated_spelling_capacity;
+    /* Private bit representation; query with
+       noc_macro_expansion_builtin_is_available rather than interpreting it. */
+    uint32_t available_builtin_mask;
     size_t generation;
 } Noc_Macro_Expansion;
 
@@ -972,6 +1009,15 @@ NOCDEF Noc_Conditional_Groups_Build_Status noc_preprocessor_conditional_groups_b
     const Noc_Preprocessor_Unit *unit,
     Noc_Macro_Expansion_Limits limits,
     Noc_Preprocessor_Conditional_Groups *output);
+/* As above, with explicit per-translation predefined-macro inputs. Invalid
+   options preserve output just like every other operational failure. */
+NOCDEF Noc_Conditional_Groups_Build_Status
+noc_preprocessor_conditional_groups_build_with_options(
+    const Noc_Macro_Environment *initial_environment,
+    size_t initial_entry_limit,
+    const Noc_Preprocessor_Unit *unit,
+    Noc_Macro_Expansion_Options options,
+    Noc_Preprocessor_Conditional_Groups *output);
 NOCDEF const Noc_Preprocessor_Conditional_Group *
 noc_preprocessor_conditional_group_at(
     const Noc_Preprocessor_Conditional_Groups *groups,
@@ -1003,8 +1049,10 @@ NOCDEF size_t noc_preprocessor_conditional_token_macro_entry_limit(
 NOCDEF const Noc_Macro_Environment *noc_preprocessor_conditional_environment(
     const Noc_Preprocessor_Conditional_Groups *groups);
 NOCDEF const char *noc_macro_builtin_kind_name(Noc_Macro_Builtin_Kind kind);
-/* Classifies phase-2 logical predefined names. NONE is returned for ordinary
-   identifiers and built-ins that require target/translation configuration. */
+/* Classifies phase-2 logical predefined names independently of whether a
+   particular translation configured that predefined fallback. Classification
+   is useful for syntax highlighting; use the expansion availability query for
+   the semantic state of one translation. */
 NOCDEF Noc_Macro_Builtin_Kind noc_macro_builtin_kind_from_name(Noc_Slice name);
 NOCDEF const char *noc_macro_expansion_status_name(
     Noc_Macro_Expansion_Status status);
@@ -1013,8 +1061,14 @@ NOCDEF const char *noc_preprocessor_expression_status_name(
 NOCDEF const char *noc_macro_expansion_token_origin_name(
     Noc_Macro_Expansion_Token_Origin origin);
 NOCDEF Noc_Macro_Expansion_Limits noc_macro_expansion_default_limits(void);
+NOCDEF Noc_Macro_Expansion_Options noc_macro_expansion_default_options(void);
 NOCDEF void noc_macro_expansion_free(Noc_Macro_Expansion *expansion);
 NOCDEF bool noc_macro_expansion_is_valid(const Noc_Macro_Expansion *expansion);
+/* Queries configured predefined fallback availability. This does not inspect
+   explicit #define/#undef precedence and returns false for an invalid result. */
+NOCDEF bool noc_macro_expansion_builtin_is_available(
+    const Noc_Macro_Expansion *expansion,
+    Noc_Macro_Builtin_Kind kind);
 /* Expands object-like, fixed-arity, and strict C11 variadic function-like macros
    using environment entries [0, entry_limit). Arguments are collected from the
    logical token stream, prescanned once, substituted, and rescanned with
@@ -1023,11 +1077,15 @@ NOCDEF bool noc_macro_expansion_is_valid(const Noc_Macro_Expansion *expansion);
    arguments using C11 placemarkers, re-tokenize the result, and rescan it. Noc
    resolves paste chains deterministically from left to right; C11 leaves their
    evaluation order unspecified. __FILE__, __LINE__, __STDC__, and
-   __STDC_VERSION__ expand deterministically; file/line use the nearest physical
-   token or invocation in the expansion input until #line semantics are
-   implemented. An active explicit definition in the selected environment
-   prefix takes precedence over these predefined macros; after an effective
-   #undef, predefined fallback is eligible again. For F(x, ...), F(value) omits
+   __STDC_VERSION__ expand deterministically. Options-aware builds additionally
+   provide configured __STDC_HOSTED__, __DATE__, and __TIME__; defaults never
+   infer these values from the host or wall clock. C11 requires all seven in a
+   conforming implementation, so an unconfigured fallback is a deliberate Noc
+   analysis state, not a complete C11 translation environment. File/line use the
+   nearest physical token or invocation in the expansion input until #line
+   semantics are implemented. An active explicit definition in the selected
+   environment prefix takes precedence over predefined fallback; after an
+   effective #undef, fallback is eligible again. For F(x, ...), F(value) omits
    the required variable argument and is rejected, while F(value,) supplies it
    explicitly as empty; V() is valid for V(...) and supplies one empty variable
    argument.
@@ -1041,6 +1099,15 @@ NOCDEF Noc_Macro_Expansion_Status noc_macro_expansion_build(
     Noc_Token_Range input_tokens,
     Noc_Macro_Expansion_Limits limits,
     Noc_Macro_Expansion *output);
+/* As above, with explicit per-translation predefined-macro inputs. Options are
+   validated before allocation; invalid options preserve an existing output. */
+NOCDEF Noc_Macro_Expansion_Status noc_macro_expansion_build_with_options(
+    const Noc_Macro_Environment *environment,
+    size_t entry_limit,
+    const Noc_Preprocessor_Unit *input_unit,
+    Noc_Token_Range input_tokens,
+    Noc_Macro_Expansion_Options options,
+    Noc_Macro_Expansion *output);
 /* As above, but preserves the defined operator and its identifier operand for
    #if/#elif evaluation while expanding every other eligible macro normally.
    If macro replacement generates defined, it is treated as the operator; this
@@ -1051,6 +1118,14 @@ NOCDEF Noc_Macro_Expansion_Status noc_macro_expansion_build_condition(
     const Noc_Preprocessor_Unit *input_unit,
     Noc_Token_Range input_tokens,
     Noc_Macro_Expansion_Limits limits,
+    Noc_Macro_Expansion *output);
+NOCDEF Noc_Macro_Expansion_Status
+noc_macro_expansion_build_condition_with_options(
+    const Noc_Macro_Environment *environment,
+    size_t entry_limit,
+    const Noc_Preprocessor_Unit *input_unit,
+    Noc_Token_Range input_tokens,
+    Noc_Macro_Expansion_Options options,
     Noc_Macro_Expansion *output);
 NOCDEF const Noc_Macro_Expansion_Token *noc_macro_expansion_token_at(
     const Noc_Macro_Expansion *expansion,

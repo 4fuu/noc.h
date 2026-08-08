@@ -361,8 +361,9 @@ static Noc__Preprocessor_Value noc__preprocessor_parse_unary(
                              parser->expansion->environment,
                              name,
                              parser->expansion->environment_entry_limit) != NULL ||
-                         noc_macro_builtin_kind_from_name(name) !=
-                             NOC_MACRO_BUILTIN_NONE;
+                         noc__macro_builtin_mask_contains(
+                             parser->expansion->available_builtin_mask,
+                             noc_macro_builtin_kind_from_name(name));
         }
         if (parenthesized &&
             !noc__preprocessor_expression_take_punct(parser, ")", NULL)) {

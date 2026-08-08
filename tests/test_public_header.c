@@ -9,7 +9,7 @@ int main(void)
     return version.count == strlen(NOC_VERSION) &&
                    empty.begin == empty.end &&
                    NOC_VERSION_MAJOR == 0 &&
-                   NOC_VERSION_MINOR == 35 &&
+                   NOC_VERSION_MINOR == 36 &&
                    NOC_VERSION_PATCH == 0
                ? 0
                : 1;

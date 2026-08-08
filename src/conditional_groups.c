@@ -286,7 +286,7 @@ static void noc__conditional_set_expansion_problem(
 static Noc_Conditional_Groups_Build_Status noc__conditional_evaluate_expression(
     Noc_Preprocessor_Conditional_Groups *result,
     Noc_Preprocessor_Conditional_Branch *branch,
-    Noc_Macro_Expansion_Limits limits)
+    Noc_Macro_Expansion_Options options)
 {
     Noc_Macro_Expansion expansion = {0};
     Noc_Macro_Expansion_Status expansion_status;
@@ -294,12 +294,12 @@ static Noc_Conditional_Groups_Build_Status noc__conditional_evaluate_expression(
     bool value = false;
     size_t problem_token_index = NOC_TOKEN_INDEX_NONE;
 
-    expansion_status = noc_macro_expansion_build_condition(
+    expansion_status = noc_macro_expansion_build_condition_with_options(
         &result->environment,
         branch->condition_environment_entry_limit,
         result->unit,
         branch->condition_tokens,
-        limits,
+        options,
         &expansion);
     branch->expansion_status = expansion_status;
     if (expansion_status != NOC_MACRO_EXPANSION_OK) {
@@ -359,6 +359,7 @@ static Noc_Conditional_Groups_Build_Status noc__conditional_evaluate_expression(
 static void noc__conditional_evaluate_defined(
     Noc_Preprocessor_Conditional_Groups *result,
     Noc_Preprocessor_Conditional_Branch *branch,
+    uint32_t available_builtin_mask,
     bool negate)
 {
     Noc_Token_Range body = branch->condition_tokens;
@@ -391,9 +392,11 @@ static void noc__conditional_evaluate_defined(
                   &result->environment,
                   result->unit->preprocessing_tokens[identifier_index].token.text,
                   branch->condition_environment_entry_limit) != NULL ||
-              noc_macro_builtin_kind_from_name(
-                  result->unit->preprocessing_tokens[identifier_index].token.text) !=
-                  NOC_MACRO_BUILTIN_NONE;
+              noc__macro_builtin_mask_contains(
+                  available_builtin_mask,
+                  noc_macro_builtin_kind_from_name(
+                      result->unit->preprocessing_tokens[
+                          identifier_index].token.text));
     branch->condition_status = NOC_CONDITIONAL_CONDITION_EVALUATED;
     branch->condition_activity = defined != negate ?
                                      NOC_PREPROCESSOR_ACTIVITY_ACTIVE :
@@ -660,6 +663,24 @@ noc_preprocessor_conditional_groups_build(
     Noc_Macro_Expansion_Limits limits,
     Noc_Preprocessor_Conditional_Groups *output)
 {
+    Noc_Macro_Expansion_Options options = noc_macro_expansion_default_options();
+    options.limits = limits;
+    return noc_preprocessor_conditional_groups_build_with_options(
+        initial_environment,
+        initial_entry_limit,
+        unit,
+        options,
+        output);
+}
+
+NOCDEF Noc_Conditional_Groups_Build_Status
+noc_preprocessor_conditional_groups_build_with_options(
+    const Noc_Macro_Environment *initial_environment,
+    size_t initial_entry_limit,
+    const Noc_Preprocessor_Unit *unit,
+    Noc_Macro_Expansion_Options options,
+    Noc_Preprocessor_Conditional_Groups *output)
+{
     Noc_Preprocessor_Conditional_Groups parsed = {0};
     Noc__Conditional_Frame *stack = NULL;
     size_t stack_count = 0;
@@ -672,16 +693,18 @@ noc_preprocessor_conditional_groups_build(
     bool macro_state_complete = true;
     Noc_Macro_Environment_Status clone_status;
     Noc_Conditional_Groups_Build_Status status = NOC_CONDITIONAL_GROUPS_OK;
+    uint32_t available_builtin_mask;
 
     if (!initial_environment || !unit || !output ||
         initial_entry_limit > initial_environment->count ||
-        !noc__macro_expansion_limits_are_valid(limits)) {
+        !noc__macro_expansion_options_are_valid(options)) {
         return NOC_CONDITIONAL_GROUPS_INVALID_ARGUMENT;
     }
     if (!noc_macro_environment_is_valid(initial_environment) ||
         !noc_preprocessor_unit_is_valid(unit)) {
         return NOC_CONDITIONAL_GROUPS_STALE;
     }
+    available_builtin_mask = noc__macro_builtin_mask_from_options(options);
     epoch = output->generation > output->environment.generation ?
                 output->generation :
                 output->environment.generation;
@@ -810,13 +833,14 @@ noc_preprocessor_conditional_groups_build(
                     } else {
                         status = noc__conditional_evaluate_expression(&parsed,
                                                                       &branch,
-                                                                      limits);
+                                                                      options);
                         if (status != NOC_CONDITIONAL_GROUPS_OK) goto failed;
                     }
                 } else {
                     noc__conditional_evaluate_defined(
                         &parsed,
                         &branch,
+                        available_builtin_mask,
                         directive->kind == NOC_PREPROCESSOR_DIRECTIVE_IFNDEF);
                 }
             }
@@ -966,7 +990,7 @@ noc_preprocessor_conditional_groups_build(
                 } else {
                     status = noc__conditional_evaluate_expression(&parsed,
                                                                   &branch,
-                                                                  limits);
+                                                                  options);
                     if (status != NOC_CONDITIONAL_GROUPS_OK) goto failed;
                 }
             }

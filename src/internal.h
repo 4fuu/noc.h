@@ -104,9 +104,15 @@ NOC__PRIVATE Noc_Macro_Environment_Status noc__macro_environment_clone_prefix(
     const Noc_Macro_Environment *, size_t, size_t, Noc_Macro_Environment *);
 NOC__PRIVATE bool noc__macro_expansion_limits_are_valid(
     Noc_Macro_Expansion_Limits);
+NOC__PRIVATE bool noc__macro_expansion_options_are_valid(
+    Noc_Macro_Expansion_Options);
+NOC__PRIVATE uint32_t noc__macro_builtin_mask_from_options(
+    Noc_Macro_Expansion_Options);
+NOC__PRIVATE bool noc__macro_builtin_mask_contains(
+    uint32_t, Noc_Macro_Builtin_Kind);
 NOC__PRIVATE Noc_Macro_Expansion_Status noc__macro_expansion_build(
     const Noc_Macro_Environment *, size_t, const Noc_Preprocessor_Unit *,
-    Noc_Token_Range, Noc_Macro_Expansion_Limits, bool, Noc_Macro_Expansion *);
+    Noc_Token_Range, Noc_Macro_Expansion_Options, bool, Noc_Macro_Expansion *);
 NOC__PRIVATE void noc__string_list_free(Noc__String_List *);
 NOC__PRIVATE bool noc__string_list_append_unique(Noc__String_List *, const char *);
 NOC__PRIVATE bool noc__transform_source(Noc_Context *, const char *, const char *, size_t,

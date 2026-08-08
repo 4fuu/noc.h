@@ -14,6 +14,12 @@ static void test_builtin_names_and_logical_classification(void)
                  "stdc") == 0);
     CHECK(strcmp(noc_macro_builtin_kind_name(NOC_MACRO_BUILTIN_STDC_VERSION),
                  "stdc-version") == 0);
+    CHECK(strcmp(noc_macro_builtin_kind_name(NOC_MACRO_BUILTIN_STDC_HOSTED),
+                 "stdc-hosted") == 0);
+    CHECK(strcmp(noc_macro_builtin_kind_name(NOC_MACRO_BUILTIN_DATE),
+                 "date") == 0);
+    CHECK(strcmp(noc_macro_builtin_kind_name(NOC_MACRO_BUILTIN_TIME),
+                 "time") == 0);
     CHECK(strcmp(noc_macro_builtin_kind_name((Noc_Macro_Builtin_Kind)99),
                  "unknown") == 0);
     CHECK(noc_macro_builtin_kind_from_name(noc_slice_from_cstr("__FILE__")) ==
@@ -29,7 +35,12 @@ static void test_builtin_names_and_logical_classification(void)
               noc_slice_from_cstr("__STDC_VERSION__")) ==
           NOC_MACRO_BUILTIN_STDC_VERSION);
     CHECK(noc_macro_builtin_kind_from_name(noc_slice_from_cstr("__DATE__")) ==
-          NOC_MACRO_BUILTIN_NONE);
+          NOC_MACRO_BUILTIN_DATE);
+    CHECK(noc_macro_builtin_kind_from_name(noc_slice_from_cstr("__TIME__")) ==
+          NOC_MACRO_BUILTIN_TIME);
+    CHECK(noc_macro_builtin_kind_from_name(
+              noc_slice_from_cstr("__STDC_HOSTED__")) ==
+          NOC_MACRO_BUILTIN_STDC_HOSTED);
     CHECK(noc_macro_builtin_kind_from_name(noc_slice_from_cstr("ordinary")) ==
           NOC_MACRO_BUILTIN_NONE);
     CHECK(strcmp(noc_macro_expansion_token_origin_name(
