@@ -67,6 +67,7 @@ static const Test_Suite test_suites[] = {
     {"variadic-macro-expansion", "tests/test_variadic_macro_expansion.c", "build/noc-test-variadic-macro-expansion" NOC_EXE, false},
     {"macro-stringification", "tests/test_macro_stringification.c", "build/noc-test-macro-stringification" NOC_EXE, false},
     {"macro-token-paste", "tests/test_macro_token_paste.c", "build/noc-test-macro-token-paste" NOC_EXE, false},
+    {"macro-builtins", "tests/test_macro_builtins.c", "build/noc-test-macro-builtins" NOC_EXE, false},
     {"preprocessor", "tests/test_preprocessor.c", "build/noc-test-preprocessor" NOC_EXE, false},
     {"lexing", "tests/test_lexing.c", "build/noc-test-lexing" NOC_EXE, false},
     {"syntax", "tests/test_syntax.c", "build/noc-test-syntax" NOC_EXE, false},

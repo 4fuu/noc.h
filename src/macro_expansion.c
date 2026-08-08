@@ -75,8 +75,39 @@ NOCDEF const char *noc_macro_expansion_token_origin_name(
     case NOC_MACRO_EXPANSION_TOKEN_REPLACEMENT: return "replacement";
     case NOC_MACRO_EXPANSION_TOKEN_STRINGIFICATION: return "stringification";
     case NOC_MACRO_EXPANSION_TOKEN_PASTE: return "paste";
+    case NOC_MACRO_EXPANSION_TOKEN_BUILTIN: return "builtin";
     }
     return "unknown";
+}
+
+NOCDEF const char *noc_macro_builtin_kind_name(Noc_Macro_Builtin_Kind kind)
+{
+    switch (kind) {
+    case NOC_MACRO_BUILTIN_NONE: return "none";
+    case NOC_MACRO_BUILTIN_FILE: return "file";
+    case NOC_MACRO_BUILTIN_LINE: return "line";
+    case NOC_MACRO_BUILTIN_STDC: return "stdc";
+    case NOC_MACRO_BUILTIN_STDC_VERSION: return "stdc-version";
+    }
+    return "unknown";
+}
+
+NOCDEF Noc_Macro_Builtin_Kind noc_macro_builtin_kind_from_name(Noc_Slice name)
+{
+    if (noc__slices_logically_equal(name, noc_slice_from_cstr("__FILE__"))) {
+        return NOC_MACRO_BUILTIN_FILE;
+    }
+    if (noc__slices_logically_equal(name, noc_slice_from_cstr("__LINE__"))) {
+        return NOC_MACRO_BUILTIN_LINE;
+    }
+    if (noc__slices_logically_equal(name, noc_slice_from_cstr("__STDC__"))) {
+        return NOC_MACRO_BUILTIN_STDC;
+    }
+    if (noc__slices_logically_equal(name,
+                                    noc_slice_from_cstr("__STDC_VERSION__"))) {
+        return NOC_MACRO_BUILTIN_STDC_VERSION;
+    }
+    return NOC_MACRO_BUILTIN_NONE;
 }
 
 NOCDEF Noc_Macro_Expansion_Limits noc_macro_expansion_default_limits(void)
@@ -134,9 +165,15 @@ NOCDEF bool noc_macro_expansion_is_valid(const Noc_Macro_Expansion *expansion)
             return false;
         }
         if (token->origin == NOC_MACRO_EXPANSION_TOKEN_STRINGIFICATION ||
-            token->origin == NOC_MACRO_EXPANSION_TOKEN_PASTE) {
+            token->origin == NOC_MACRO_EXPANSION_TOKEN_PASTE ||
+            token->origin == NOC_MACRO_EXPANSION_TOKEN_BUILTIN) {
             const Noc_Slice *spelling;
-            if (token->frame_index >= expansion->frame_count ||
+            if ((token->frame_index != NOC_TOKEN_INDEX_NONE &&
+                 token->frame_index >= expansion->frame_count) ||
+                (token->origin != NOC_MACRO_EXPANSION_TOKEN_BUILTIN &&
+                 token->frame_index == NOC_TOKEN_INDEX_NONE) ||
+                (token->origin != NOC_MACRO_EXPANSION_TOKEN_BUILTIN &&
+                 token->builtin_kind != NOC_MACRO_BUILTIN_NONE) ||
                 token->generated_spelling_index >=
                     expansion->generated_spelling_count) {
                 return false;
@@ -149,7 +186,7 @@ NOCDEF bool noc_macro_expansion_is_valid(const Noc_Macro_Expansion *expansion)
                      !noc_token_is_punct(operator_token, "%:"))) {
                     return false;
                 }
-            } else {
+            } else if (token->origin == NOC_MACRO_EXPANSION_TOKEN_PASTE) {
                 Noc_Token operator_token = token->unit->preprocessing_tokens[
                     token->preprocessing_token_index].token;
                 if ((!noc_token_is_punct(operator_token, "##") &&
@@ -161,14 +198,43 @@ NOCDEF bool noc_macro_expansion_is_valid(const Noc_Macro_Expansion *expansion)
                     noc_token_is_trivia(token->token)) {
                     return false;
                 }
+            } else {
+                Noc_Token source_token = token->unit->preprocessing_tokens[
+                    token->preprocessing_token_index].token;
+                Noc_Macro_Builtin_Kind source_kind =
+                    noc_macro_builtin_kind_from_name(source_token.text);
+                switch (token->builtin_kind) {
+                case NOC_MACRO_BUILTIN_FILE:
+                    if (token->token.kind != NOC_TOKEN_STRING) return false;
+                    break;
+                case NOC_MACRO_BUILTIN_LINE:
+                case NOC_MACRO_BUILTIN_STDC:
+                case NOC_MACRO_BUILTIN_STDC_VERSION:
+                    if (token->token.kind != NOC_TOKEN_NUMBER) return false;
+                    break;
+                case NOC_MACRO_BUILTIN_NONE:
+                default:
+                    return false;
+                }
+                if (token->frame_index == NOC_TOKEN_INDEX_NONE &&
+                    token->unit != expansion->input_unit) {
+                    return false;
+                }
+                if (source_kind != token->builtin_kind &&
+                    !noc_token_is_punct(source_token, "##") &&
+                    !noc_token_is_punct(source_token, "%:%:")) {
+                    return false;
+                }
             }
             spelling = &expansion->generated_spellings[
                 token->generated_spelling_index];
-            if (token->token.text.data != spelling->data ||
+            if (!spelling->data || spelling->count == 0 ||
+                token->token.text.data != spelling->data ||
                 token->token.text.count != spelling->count) {
                 return false;
             }
-        } else if (token->generated_spelling_index != NOC_TOKEN_INDEX_NONE) {
+        } else if (token->generated_spelling_index != NOC_TOKEN_INDEX_NONE ||
+                   token->builtin_kind != NOC_MACRO_BUILTIN_NONE) {
             return false;
         } else if (token->frame_index == NOC_TOKEN_INDEX_NONE) {
             if (token->origin != NOC_MACRO_EXPANSION_TOKEN_INPUT) return false;
@@ -374,6 +440,7 @@ static Noc_Macro_Expansion_Token noc__macro_expansion_token(
     result.preprocessing_token_index = token_index;
     result.frame_index = frame_index;
     result.generated_spelling_index = NOC_TOKEN_INDEX_NONE;
+    result.builtin_kind = NOC_MACRO_BUILTIN_NONE;
     result.origin = origin;
     return result;
 }
@@ -583,6 +650,91 @@ static Noc_Macro_Expansion_Status noc__macro_generated_spelling_append(
     builder->output->generated_spellings[*spelling_index].count = spelling->count;
     memset(spelling, 0, sizeof(*spelling));
     return NOC_MACRO_EXPANSION_OK;
+}
+
+static void noc__macro_builtin_context(
+    const Noc_Macro_Expansion *output,
+    const Noc_Macro_Expansion_Token *token,
+    const Noc_Preprocessor_Unit **unit,
+    size_t *token_index)
+{
+    size_t frame_index = token->frame_index;
+    *unit = token->unit;
+    *token_index = token->preprocessing_token_index;
+    if (token->unit == output->input_unit) return;
+    while (frame_index != NOC_TOKEN_INDEX_NONE) {
+        const Noc_Macro_Expansion_Frame *frame = &output->frames[frame_index];
+        if (frame->invocation_unit == output->input_unit) {
+            *unit = frame->invocation_unit;
+            *token_index = frame->invocation_token_index;
+            return;
+        }
+        frame_index = frame->parent_frame_index;
+    }
+}
+
+static Noc_Macro_Expansion_Status noc__macro_expand_builtin(
+    Noc__Macro_Expansion_Builder *builder,
+    Noc__Macro_Token_Sequence *sequence,
+    size_t cursor,
+    Noc_Macro_Builtin_Kind kind)
+{
+    const Noc_Preprocessor_Unit *context_unit;
+    size_t context_token_index;
+    Noc_Buffer spelling = {0};
+    Noc_Macro_Expansion_Token token = sequence->items[cursor];
+    Noc_Macro_Expansion_Status status = NOC_MACRO_EXPANSION_OUT_OF_MEMORY;
+    size_t generated_spelling_index;
+    noc__macro_builtin_context(builder->output,
+                               &token,
+                               &context_unit,
+                               &context_token_index);
+    switch (kind) {
+    case NOC_MACRO_BUILTIN_FILE:
+        if (!noc__buffer_append_c_string(
+                &spelling,
+                context_unit->stream.path,
+                strlen(context_unit->stream.path))) {
+            goto done;
+        }
+        token.token.kind = NOC_TOKEN_STRING;
+        break;
+    case NOC_MACRO_BUILTIN_LINE:
+        if (!noc_buffer_appendf(
+                &spelling,
+                "%zu",
+                context_unit->preprocessing_tokens[
+                    context_token_index].token.location.line)) {
+            goto done;
+        }
+        token.token.kind = NOC_TOKEN_NUMBER;
+        break;
+    case NOC_MACRO_BUILTIN_STDC:
+        if (!noc_buffer_append_cstr(&spelling, "1")) goto done;
+        token.token.kind = NOC_TOKEN_NUMBER;
+        break;
+    case NOC_MACRO_BUILTIN_STDC_VERSION:
+        if (!noc_buffer_append_cstr(&spelling, "201112L")) goto done;
+        token.token.kind = NOC_TOKEN_NUMBER;
+        break;
+    case NOC_MACRO_BUILTIN_NONE:
+        status = NOC_MACRO_EXPANSION_INVALID_ARGUMENT;
+        goto done;
+    }
+    status = noc__macro_generated_spelling_append(builder,
+                                                  &spelling,
+                                                  &generated_spelling_index);
+    if (status != NOC_MACRO_EXPANSION_OK) goto done;
+    token.token.text = builder->output->generated_spellings[
+        generated_spelling_index];
+    token.generated_spelling_index = generated_spelling_index;
+    token.builtin_kind = kind;
+    token.origin = NOC_MACRO_EXPANSION_TOKEN_BUILTIN;
+    sequence->items[cursor] = token;
+
+done:
+    noc_buffer_free(&spelling);
+    return status;
 }
 
 static bool noc__macro_token_is_paste_operator(Noc_Token token)
@@ -1401,6 +1553,7 @@ static Noc_Macro_Expansion_Status noc__macro_expand_sequence(
         Noc_Macro_Expansion_Token *token = &sequence->items[cursor];
         const Noc_Macro_Environment_Entry *entry = NULL;
         const Noc_Macro_Directive *directive = NULL;
+        Noc_Macro_Builtin_Kind builtin_kind = NOC_MACRO_BUILTIN_NONE;
         size_t environment_entry_index = NOC_TOKEN_INDEX_NONE;
         Noc_Macro_Expansion_Status status;
         if (token->token.kind == NOC_TOKEN_IDENTIFIER) {
@@ -1412,9 +1565,21 @@ static Noc_Macro_Expansion_Status noc__macro_expand_sequence(
             environment_entry_index =
                 (size_t)(entry - builder->environment->items);
             directive = noc__macro_environment_entry_directive(entry);
+        } else if (token->token.kind == NOC_TOKEN_IDENTIFIER) {
+            builtin_kind = noc_macro_builtin_kind_from_name(token->token.text);
         }
-        if (!directive ||
-            noc__macro_hide_set_contains(builder,
+        if (!directive) {
+            if (builtin_kind != NOC_MACRO_BUILTIN_NONE) {
+                status = noc__macro_expand_builtin(builder,
+                                                   sequence,
+                                                   cursor,
+                                                   builtin_kind);
+                if (status != NOC_MACRO_EXPANSION_OK) return status;
+            }
+            cursor += 1;
+            continue;
+        }
+        if (noc__macro_hide_set_contains(builder,
                                          sequence->hide_sets[cursor],
                                          environment_entry_index)) {
             cursor += 1;

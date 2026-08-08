@@ -29,9 +29,9 @@
 #define NOC_H_INCLUDED
 
 #define NOC_VERSION_MAJOR 0
-#define NOC_VERSION_MINOR 32
+#define NOC_VERSION_MINOR 33
 #define NOC_VERSION_PATCH 0
-#define NOC_VERSION "0.32.0"
+#define NOC_VERSION "0.33.0"
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -639,6 +639,14 @@ typedef struct {
 } Noc_Macro_Environment;
 
 typedef enum {
+    NOC_MACRO_BUILTIN_NONE = 0,
+    NOC_MACRO_BUILTIN_FILE,
+    NOC_MACRO_BUILTIN_LINE,
+    NOC_MACRO_BUILTIN_STDC,
+    NOC_MACRO_BUILTIN_STDC_VERSION,
+} Noc_Macro_Builtin_Kind;
+
+typedef enum {
     NOC_MACRO_EXPANSION_OK = 0,
     NOC_MACRO_EXPANSION_INVALID_ARGUMENT,
     NOC_MACRO_EXPANSION_STALE,
@@ -662,6 +670,7 @@ typedef enum {
     NOC_MACRO_EXPANSION_TOKEN_REPLACEMENT,
     NOC_MACRO_EXPANSION_TOKEN_STRINGIFICATION,
     NOC_MACRO_EXPANSION_TOKEN_PASTE,
+    NOC_MACRO_EXPANSION_TOKEN_BUILTIN,
 } Noc_Macro_Expansion_Token_Origin;
 
 typedef struct {
@@ -681,6 +690,8 @@ typedef struct {
     size_t frame_index;
     /* Index in expansion.generated_spellings for synthesized tokens, or NONE. */
     size_t generated_spelling_index;
+    /* Non-NONE only when origin is BUILTIN. */
+    Noc_Macro_Builtin_Kind builtin_kind;
     Noc_Macro_Expansion_Token_Origin origin;
 } Noc_Macro_Expansion_Token;
 
@@ -804,6 +815,10 @@ NOCDEF const Noc_Macro_Environment_Entry *noc_macro_environment_lookup_before(
 NOCDEF const Noc_Macro_Environment_Entry *noc_macro_environment_lookup(
     const Noc_Macro_Environment *environment,
     Noc_Slice logical_name);
+NOCDEF const char *noc_macro_builtin_kind_name(Noc_Macro_Builtin_Kind kind);
+/* Classifies phase-2 logical predefined names. NONE is returned for ordinary
+   identifiers and built-ins that require target/translation configuration. */
+NOCDEF Noc_Macro_Builtin_Kind noc_macro_builtin_kind_from_name(Noc_Slice name);
 NOCDEF const char *noc_macro_expansion_status_name(
     Noc_Macro_Expansion_Status status);
 NOCDEF const char *noc_macro_expansion_token_origin_name(
@@ -818,9 +833,15 @@ NOCDEF bool noc_macro_expansion_is_valid(const Noc_Macro_Expansion *expansion);
    C11 whitespace and literal-escaping rules. ## and %:%: paste raw adjacent
    arguments using C11 placemarkers, re-tokenize the result, and rescan it. Noc
    resolves paste chains deterministically from left to right; C11 leaves their
-   evaluation order unspecified. For F(x, ...), F(value) omits the required
-   variable argument and is rejected, while F(value,) supplies it explicitly as
-   empty; V() is valid for V(...) and supplies one empty variable argument.
+   evaluation order unspecified. __FILE__, __LINE__, __STDC__, and
+   __STDC_VERSION__ expand deterministically; file/line use the nearest physical
+   token or invocation in the expansion input until #line semantics are
+   implemented. An active explicit definition in the selected environment
+   prefix takes precedence over these predefined macros; after an effective
+   #undef, predefined fallback is eligible again. For F(x, ...), F(value) omits
+   the required variable argument and is rejected, while F(value,) supplies it
+   explicitly as empty; V() is valid for V(...) and supplies one empty variable
+   argument.
    The token limit bounds every live logical sequence, including raw input and
    argument-prescan sequences, rather than only the final rendered result.
    Success replaces output; every failure preserves the prior expansion. */

@@ -4,7 +4,7 @@ This file is the long-running implementation checklist. A milestone is checked
 only after its interfaces have tests or examples, the complete local suite
 passes, and the milestone has been committed and pushed.
 
-The 0.19 public API remains the compatibility baseline while the 0.32
+The 0.19 public API remains the compatibility baseline while the 0.33
 compiler frontend is built. Dialect inputs continue to use ordinary `.c` and
 `.h` names. Development code may be split into normal C modules, but releases
 must be generated reproducibly as one self-contained `noc.h`.
@@ -163,7 +163,12 @@ must be generated reproducibly as one self-contained `noc.h`.
   - [x] Add C11 `##`/`%:%:` token pasting with raw arguments, placemarkers,
         exact-one-token re-lexing, deterministic chain policy, hide-set rescan,
         generated spelling ownership, and immediate operator provenance.
-  - [ ] Add built-in macros.
+  - [x] Add deterministic `__FILE__`, `__LINE__`, `__STDC__`, and
+        `__STDC_VERSION__` expansion with physical expansion-site context,
+        normal rescan, generated spelling ownership, and IDE-visible builtin
+        kind.
+  - [ ] Add target/translation-configured built-in macros such as
+        `__STDC_HOSTED__`, reproducible `__DATE__`, and reproducible `__TIME__`.
 - [ ] Implement includes, include guards/pragma-once behavior, conditionals,
       integer constant evaluation, diagnostics, and target predefined macros.
 - [ ] Implement disabled, trusted-only, project, and full macro policies without

@@ -43,8 +43,8 @@ The suite names are `header-c`, `header-cpp`, `public-header-c`,
 `preprocessing-tokens`, `macro-directives`, `macro-environment`,
 `macro-invocations`, `macro-expansion`, `function-macro-expansion`,
 `variadic-macro-expansion`, `macro-stringification`, `macro-token-paste`,
-`preprocessor`, `lexing`, `syntax`, `c-analysis`, `rewriter`, and `artifacts`,
-for example:
+`macro-builtins`, `preprocessor`, `lexing`, `syntax`, `c-analysis`, `rewriter`,
+and `artifacts`, for example:
 
 ```console
 $ ./nob test c-analysis
@@ -263,11 +263,19 @@ normal rescan. C11 `##` and `%:%:` paste raw adjacent arguments, model empty
 arguments with placemarkers, re-tokenize to exactly one preprocessing token, and
 rescan the result. Noc resolves paste chains left-to-right for reproducibility;
 portable source must not depend on that order because C11 leaves it unspecified.
+The deterministic predefined macros `__FILE__`, `__LINE__`, `__STDC__`, and
+`__STDC_VERSION__` also participate in normal argument prescan and replacement
+rescan. File and line values follow the nearest physical token or invocation in
+the expansion input until `#line` mapping is implemented. Active explicit
+definitions in the selected macro-environment prefix take precedence over these
+predefined macros; after an effective `#undef`, predefined fallback is eligible
+again.
 
 Every result token records its physical source unit, preprocessing-token index,
-input/argument/replacement/stringification/paste origin, and expansion frame. Frames
-link nested expansions to both their invocation token and environment definition,
-providing the provenance needed by later diagnostics and IDE expansion previews.
+input/argument/replacement/stringification/paste/builtin origin, and expansion
+frame. Frames link nested expansions to both their invocation token and
+environment definition, providing the provenance needed by later diagnostics
+and IDE expansion previews.
 Stringified tokens use stable generated spellings owned by the expansion and
 retain the physical `#` operator as provenance; pasted tokens likewise retain the
 immediately generating `##` operator. The generated spelling arena may also own
@@ -280,7 +288,8 @@ concatenates each result token's stored physical or generated spelling for
 inspection. Run the coverage independently with
 `./nob test macro-expansion`, `./nob test function-macro-expansion`, and
 `./nob test variadic-macro-expansion`, `./nob test macro-stringification`, or
-`./nob test macro-token-paste`.
+`./nob test macro-token-paste`; predefined-macro coverage is
+`./nob test macro-builtins`.
 
 Macro definition permission is explicit:
 
@@ -294,8 +303,9 @@ validation are separate: the inventory always records a recognized `#define` or
 `#undef`, including when disabled, while
 `noc_preprocessor_unit_validate_macro_policy` emits precise feature-disabled
 diagnostics. This prevents tooling from reporting a policy violation as a parse
-error. Conditional policy application, built-in macros, include loading, and
-broader expansion provenance queries remain subsequent preprocessor milestones.
+error. Conditional policy application, target/time-configured built-in macros,
+include loading, and broader expansion provenance queries remain subsequent
+preprocessor milestones.
 Run the token and recovery coverage independently with
 `./nob test preprocessing-tokens`, or the directive/policy coverage with
 `./nob test preprocessor`.
@@ -806,9 +816,11 @@ and node references must not escape the callback.
 This version handles explicit token/AST-assisted transformations, a lossless
 delimiter tree, lightweight C structure discovery, and bounded
 object/fixed-arity/C11-variadic macro inspection expansion. It does not provide a
-complete integrated preprocessor, built-in macro expansion, a semantic C AST,
-typedef resolution, or a C type system. C11 macro stringification and token
-pasting are supported. Rules inside preprocessor directives are left untouched. More
+complete integrated preprocessor, complete built-in macro expansion, a semantic
+C AST, typedef resolution, or a C type system. C11 macro stringification and token
+pasting plus deterministic file/line/standard built-ins are supported; target
+and translation-time built-ins are not. Rules inside preprocessor directives are
+left untouched. More
 structured statement and declaration helpers can be added without changing the
 registration model.
 
