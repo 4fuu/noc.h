@@ -34,6 +34,7 @@ static const char *amalgamation_sources[] = {
     "src/macro_expansion.c",
     "src/conditional.c",
     "src/conditional_groups.c",
+    "src/include_control.c",
     "src/include_resolver.c",
     "src/include_expansion.c",
     "src/include_graph.c",
@@ -47,8 +48,9 @@ static const char *implementation_modules[] = {
     "src/lexer.c", "src/source.c", "src/features.c", "src/macro_directives.c",
     "src/preprocessor.c", "src/macro_invocations.c", "src/macro_environment.c",
     "src/macro_expansion.c", "src/conditional.c", "src/conditional_groups.c",
-    "src/include_resolver.c", "src/include_expansion.c", "src/include_graph.c",
-    "src/parser.c", "src/ast.c", "src/lower.c", "src/emit_c.c",
+    "src/include_control.c", "src/include_resolver.c", "src/include_expansion.c",
+    "src/include_graph.c", "src/parser.c", "src/ast.c", "src/lower.c",
+    "src/emit_c.c",
 };
 
 typedef struct {
@@ -77,6 +79,9 @@ static const Test_Suite test_suites[] = {
     {"configured-builtins", "tests/test_configured_builtins.c", "build/noc-test-configured-builtins" NOC_EXE, false},
     {"preprocessor-expressions", "tests/test_preprocessor_expressions.c", "build/noc-test-preprocessor-expressions" NOC_EXE, false},
     {"conditional-groups", "tests/test_conditional_groups.c", "build/noc-test-conditional-groups" NOC_EXE, false},
+    {"pragma-once", "tests/test_pragma_once.c", "build/noc-test-pragma-once" NOC_EXE, false},
+    {"include-guard", "tests/test_include_guard.c", "build/noc-test-include-guard" NOC_EXE, false},
+    {"include-control-queries", "tests/test_include_control_queries.c", "build/noc-test-include-control-queries" NOC_EXE, false},
     {"include-operands", "tests/test_include_operands.c", "build/noc-test-include-operands" NOC_EXE, false},
     {"include-resolver", "tests/test_include_resolver.c", "build/noc-test-include-resolver" NOC_EXE, false},
     {"include-expansion", "tests/test_include_expansion.c", "build/noc-test-include-expansion" NOC_EXE, false},
@@ -255,6 +260,7 @@ static bool build_test_suite(const Test_Suite *suite)
         "tests/include_test_support.h",
         "tests/include_expansion_test_support.h",
         "tests/include_graph_test_support.h",
+        "tests/include_control_test_support.h",
         NOC_GENERATED_HEADER,
         "nob.c",
     };

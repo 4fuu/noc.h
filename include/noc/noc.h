@@ -29,9 +29,9 @@
 #define NOC_H_INCLUDED
 
 #define NOC_VERSION_MAJOR 0
-#define NOC_VERSION_MINOR 39
+#define NOC_VERSION_MINOR 40
 #define NOC_VERSION_PATCH 0
-#define NOC_VERSION "0.39.0"
+#define NOC_VERSION "0.40.0"
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -896,6 +896,102 @@ typedef struct {
     bool macro_state_complete;
 } Noc_Preprocessor_Conditional_Groups;
 
+/* Include-control recognition is a read-only IDE/preprocessing phase. It does
+   not suppress an include, mutate a macro environment, or access a filesystem.
+   Initialize each output to {0}. Results own no allocation and need no free;
+   they borrow one immutable preprocessing unit (and, for include guards, its
+   matching conditional analysis). Shallow copies are safe but become stale if
+   either owner is rebuilt or freed. Every token index/range addresses
+   unit.preprocessing_tokens, and every range is half-open [begin,end).
+
+   #pragma once is a widespread non-ISO extension. Noc recognizes only a direct,
+   case-sensitive `once` identifier with no other significant body token;
+   comments and phase-2 splices remain accepted through normal preprocessing
+   tokenization. VALID identifies that exact spelling, OTHER is a nonempty valid
+   pragma body owned by another extension, MISSING has no significant body,
+   MALFORMED has a direct `once` followed by another significant token, and
+   INCOMPLETE contains an invalid preprocessing token. Recognition alone never
+   grants pragma semantics or records that a file was previously included. */
+typedef enum {
+    NOC_PRAGMA_ONCE_VALID = 0,
+    NOC_PRAGMA_ONCE_OTHER,
+    NOC_PRAGMA_ONCE_MISSING,
+    NOC_PRAGMA_ONCE_MALFORMED,
+    NOC_PRAGMA_ONCE_INCOMPLETE,
+} Noc_Pragma_Once_Status;
+
+typedef struct {
+    const Noc_Preprocessor_Unit *unit;
+    size_t unit_stream_generation;
+    size_t directive_index;
+    Noc_Token_Range body_tokens;
+    size_t once_token_index;
+    size_t problem_token_index;
+    Noc_Pragma_Once_Status status;
+    size_t generation;
+} Noc_Pragma_Once;
+
+/* A canonical macro guard is the structural convention
+
+       #ifndef NAME
+       #define NAME [replacement]
+       ...
+       #endif
+
+   with comments/trivia allowed around directives, the object-like #define as
+   the first significant construct inside the group, no peer #elif/#else branch,
+   and no significant source outside the outer group. Equivalent forms such as
+   `#if !defined(NAME)`, function-like definitions, delayed definitions, and
+   nested lookalikes are deliberately not canonical. NAME is a borrowed raw
+   identifier slice whose logical spelling applies phase-2 splice deletion. The
+   #define may have any object-like replacement; definition_allowed reports
+   whether the unit's configured macro policy permits that event.
+
+   CANONICAL describes syntax only: callers must not suppress a file when
+   definition_allowed is false, and recognition does not prove the guard is
+   currently defined. NONE means the first significant file token does not start
+   the strict form. Other statuses retain guard-shaped incomplete or malformed
+   editor input without presenting it as a usable include guard. The referenced
+   conditional analysis supplies balanced nesting and must have been built from
+   the same unchanged unit. */
+typedef enum {
+    NOC_INCLUDE_GUARD_NONE = 0,
+    NOC_INCLUDE_GUARD_CANONICAL,
+    NOC_INCLUDE_GUARD_INCOMPLETE,
+    NOC_INCLUDE_GUARD_MALFORMED,
+    NOC_INCLUDE_GUARD_MISSING_DEFINE,
+    NOC_INCLUDE_GUARD_NAME_MISMATCH,
+    NOC_INCLUDE_GUARD_HAS_PEER_BRANCH,
+    NOC_INCLUDE_GUARD_NOT_FILE_ENCLOSING,
+} Noc_Include_Guard_Status;
+
+typedef struct {
+    const Noc_Preprocessor_Unit *unit;
+    size_t unit_stream_generation;
+    const Noc_Preprocessor_Conditional_Groups *groups;
+    size_t groups_generation;
+    size_t group_index;
+    size_t branch_index;
+    size_t opener_directive_index;
+    size_t define_directive_index;
+    size_t closer_directive_index;
+    size_t guard_name_token_index;
+    size_t problem_directive_index;
+    size_t problem_token_index;
+    Noc_Token_Range preprocessing_tokens;
+    Noc_Slice guard_name;
+    Noc_Include_Guard_Status status;
+    size_t generation;
+    bool definition_allowed;
+} Noc_Include_Guard;
+
+typedef enum {
+    NOC_INCLUDE_CONTROL_BUILD_OK = 0,
+    NOC_INCLUDE_CONTROL_BUILD_INVALID_ARGUMENT,
+    NOC_INCLUDE_CONTROL_BUILD_STALE,
+    NOC_INCLUDE_CONTROL_BUILD_GENERATION_EXHAUSTED,
+} Noc_Include_Control_Build_Status;
+
 typedef enum {
     /* No predefined name. This value is never present in an availability set. */
     NOC_MACRO_BUILTIN_NONE = 0,
@@ -1450,6 +1546,26 @@ NOCDEF size_t noc_preprocessor_conditional_token_macro_entry_limit(
 /* Read-only: mutating this environment invalidates the enclosing result. */
 NOCDEF const Noc_Macro_Environment *noc_preprocessor_conditional_environment(
     const Noc_Preprocessor_Conditional_Groups *groups);
+NOCDEF const char *noc_pragma_once_status_name(Noc_Pragma_Once_Status status);
+NOCDEF const char *noc_include_guard_status_name(Noc_Include_Guard_Status status);
+NOCDEF const char *noc_include_control_build_status_name(
+    Noc_Include_Control_Build_Status status);
+NOCDEF bool noc_pragma_once_is_valid(const Noc_Pragma_Once *pragma_once);
+/* Classify one #pragma directive. Success, including OTHER/recovery syntax,
+   transactionally replaces output; operational failure preserves it. */
+NOCDEF Noc_Include_Control_Build_Status noc_pragma_once_build(
+    const Noc_Preprocessor_Unit *unit,
+    size_t directive_index,
+    Noc_Pragma_Once *output);
+NOCDEF bool noc_include_guard_is_valid(const Noc_Include_Guard *guard);
+/* Inspect the first significant file token and, only when it starts #ifndef,
+   publish canonical or recoverable guard structure. The conditional analysis
+   must belong to unit. Success transactionally replaces output; operational
+   failure preserves it. */
+NOCDEF Noc_Include_Control_Build_Status noc_include_guard_build(
+    const Noc_Preprocessor_Unit *unit,
+    const Noc_Preprocessor_Conditional_Groups *groups,
+    Noc_Include_Guard *output);
 NOCDEF const char *noc_macro_builtin_kind_name(Noc_Macro_Builtin_Kind kind);
 /* Classifies phase-2 logical predefined names independently of whether a
    particular translation configured that predefined fallback. Classification

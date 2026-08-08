@@ -573,7 +573,8 @@ NOCDEF bool noc_preprocessor_conditional_groups_is_valid(
             (branch->previous_branch_index != NOC_TOKEN_INDEX_NONE &&
              branch->previous_branch_index >= index) ||
             (branch->next_branch_index != NOC_TOKEN_INDEX_NONE &&
-             branch->next_branch_index <= index) ||
+             (branch->next_branch_index <= index ||
+              branch->next_branch_index >= groups->branch_count)) ||
             branch->directive_index >= groups->directive_count ||
             !noc__conditional_range_is_valid(
                 groups->preprocessing_token_count,
@@ -590,6 +591,28 @@ NOCDEF bool noc_preprocessor_conditional_groups_is_valid(
             !noc__conditional_activity_is_valid(branch->content_activity) ||
             !noc__conditional_condition_status_is_valid(
                 branch->condition_status)) {
+            return false;
+        }
+        if (branch->previous_branch_index != NOC_TOKEN_INDEX_NONE) {
+            const Noc_Preprocessor_Conditional_Branch *previous =
+                &groups->branches[branch->previous_branch_index];
+            if (previous->group_index != branch->group_index ||
+                previous->next_branch_index != index) {
+                return false;
+            }
+        } else if (groups->groups[branch->group_index].first_branch_index !=
+                   index) {
+            return false;
+        }
+        if (branch->next_branch_index != NOC_TOKEN_INDEX_NONE) {
+            const Noc_Preprocessor_Conditional_Branch *next =
+                &groups->branches[branch->next_branch_index];
+            if (next->group_index != branch->group_index ||
+                next->previous_branch_index != index) {
+                return false;
+            }
+        } else if (groups->groups[branch->group_index].last_branch_index !=
+                   index) {
             return false;
         }
         if (branch->problem_unit) {

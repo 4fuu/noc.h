@@ -111,6 +111,7 @@ be declared by `src/internal.h`; module-local helpers remain static. Current own
 | `src/macro_invocations.c` | Lossless, recoverable function-like invocation/argument syntax |
 | `src/macro_environment.c`, `src/macro_expansion.c` | Effective macro state and bounded expansion |
 | `src/conditional.c`, `src/conditional_groups.c` | C11 condition evaluation and recoverable balanced conditional analysis |
+| `src/include_control.c` | Read-only pragma-once and strict canonical include-guard recognition |
 | `src/include_resolver.c`, `src/include_expansion.c` | Physical/expanded include operands and host-configurable snapshot resolution |
 | `src/include_graph.c` | Bounded conditional include discovery, recursion, cycles, and stable IDE queries |
 | `src/parser.c`, `src/ast.c` | Token cursors/arguments and syntax/C structure analysis |
@@ -372,8 +373,20 @@ back into the parent, later affected edges are explicitly
 the host resolver owns search and overlays. Exercise traversal, bounds and
 transactionality, or query/provenance independently with `./nob test
 include-graph`, `./nob test include-graph-limits`, and `./nob test
-include-graph-queries`. Include guards, `#pragma once`, and exact cross-file
-macro execution remain later preprocessing stages.
+include-graph-queries`.
+
+`noc_pragma_once_build` and `noc_include_guard_build` provide a separate,
+read-only include-control recognition layer for preprocessing tools and IDE/LSP
+clients. Pragma recognition accepts only direct, case-sensitive `#pragma once`;
+guard recognition deliberately accepts only a file-enclosing `#ifndef NAME`
+whose first significant guarded construct is an object-like `#define NAME`, with
+no peer branch. Both retain exact half-open preprocessing-token ranges, recovery
+states, splice-aware names, macro-policy visibility, and owner generations.
+They neither suppress duplicate includes nor mutate macro state. Exercise syntax
+and recovery, or query lifetime/transactionality independently with `./nob test
+pragma-once`, `./nob test include-guard`, and `./nob test
+include-control-queries`. Duplicate suppression and exact cross-file macro
+execution remain later preprocessing stages.
 
 Macro definition permission is explicit:
 

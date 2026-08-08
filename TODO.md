@@ -4,7 +4,7 @@ This file is the long-running implementation checklist. A milestone is checked
 only after its interfaces have tests or examples, the complete local suite
 passes, and the milestone has been committed and pushed.
 
-The 0.19 public API remains the compatibility baseline while the 0.39
+The 0.19 public API remains the compatibility baseline while the 0.40
 compiler frontend is built. Dialect inputs continue to use ordinary `.c` and
 `.h` names. Development code may be split into normal C modules, but releases
 must be generated reproducibly as one self-contained `noc.h`.
@@ -188,8 +188,11 @@ must be generated reproducibly as one self-contained `noc.h`.
   - [x] Add bounded recursive include graphs with deterministic traversal,
         ancestor cycles, conditional edge state, stable IDE queries, limits,
         cancellation, and conservative cross-file macro-state recovery.
-  - [ ] Add include guards, pragma-once behavior, and exact cross-file macro
-        execution without weakening graph provenance or bounded recovery.
+  - [x] Add read-only `#pragma once` and strict canonical include-guard
+        recognition with exact ranges, recovery states, macro-policy visibility,
+        and independently stale IDE views.
+  - [ ] Execute duplicate-include suppression and exact cross-file macro effects
+        without weakening graph provenance or bounded recovery.
   - [x] Publish significant directive-body token ranges and add condition-mode
         macro expansion that preserves `defined` operands with full provenance.
   - [x] Add a bounded C11 preprocessing integer-expression evaluator with

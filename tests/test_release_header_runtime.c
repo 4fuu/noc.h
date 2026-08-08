@@ -30,12 +30,24 @@ int main(void)
 {
     static const char source[] =
         "#define CLOSE >\n"
-        "#include <closed.h CLOSE\n";
+        "#include <closed.h CLOSE\n"
+        "#pragma once\n";
+    static const char guard_source[] =
+        "#ifndef RELEASE_RUNTIME_H\n"
+        "#define RELEASE_RUNTIME_H\n"
+        "int release_runtime;\n"
+        "#endif\n";
     Noc_Context context;
     Noc_Workspace workspace = {0};
     Noc_Document_Snapshot snapshot = {0};
+    Noc_Document_Snapshot guard_snapshot = {0};
     Noc_Preprocessor_Unit unit = {0};
+    Noc_Preprocessor_Unit guard_unit = {0};
     Noc_Macro_Environment environment = {0};
+    Noc_Macro_Environment guard_environment = {0};
+    Noc_Preprocessor_Conditional_Groups guard_groups = {0};
+    Noc_Pragma_Once pragma_once = {0};
+    Noc_Include_Guard guard = {0};
     Noc_Include_Operand operand = {0};
     Noc_Include_Expansion expansion = {0};
     Noc_Include_Graph graph = {0};
@@ -55,8 +67,12 @@ int main(void)
                                         &snapshot,
                                         NOC_MACROS_FULL,
                                         &unit));
-    REQUIRE(unit.count == 2);
+    REQUIRE(unit.count == 3);
     REQUIRE(unit.macro_directive_count == 1);
+    REQUIRE(noc_pragma_once_build(&unit, 2, &pragma_once) ==
+            NOC_INCLUDE_CONTROL_BUILD_OK);
+    REQUIRE(noc_pragma_once_is_valid(&pragma_once));
+    REQUIRE(pragma_once.status == NOC_PRAGMA_ONCE_VALID);
     REQUIRE(noc_macro_environment_apply(&environment, &unit, 0) ==
             NOC_MACRO_ENVIRONMENT_OK);
     REQUIRE(noc_include_operand_build(&unit, 1, &operand) ==
@@ -90,6 +106,37 @@ int main(void)
     REQUIRE(noc_include_graph_edge_at(&graph, 0)->status ==
             NOC_INCLUDE_GRAPH_EDGE_NOT_FOUND);
 
+    REQUIRE(noc_workspace_open_document(&workspace,
+                                        "release-runtime.h",
+                                        guard_source,
+                                        sizeof(guard_source) - 1,
+                                        NOC_SOURCE_CLASS_PROJECT,
+                                        &guard_snapshot) == NOC_WORKSPACE_OK);
+    REQUIRE(noc_preprocessor_unit_build(&context,
+                                        &guard_snapshot,
+                                        NOC_MACROS_FULL,
+                                        &guard_unit));
+    REQUIRE(noc_preprocessor_conditional_groups_build(
+                &guard_environment,
+                0,
+                &guard_unit,
+                noc_macro_expansion_default_limits(),
+                &guard_groups) == NOC_CONDITIONAL_GROUPS_OK);
+    REQUIRE(noc_include_guard_build(&guard_unit, &guard_groups, &guard) ==
+            NOC_INCLUDE_CONTROL_BUILD_OK);
+    REQUIRE(noc_include_guard_is_valid(&guard));
+    REQUIRE(guard.status == NOC_INCLUDE_GUARD_CANONICAL);
+    REQUIRE(guard.definition_allowed);
+    REQUIRE(guard.guard_name.count == sizeof("RELEASE_RUNTIME_H") - 1);
+    REQUIRE(guard.guard_name.data != NULL &&
+            memcmp(guard.guard_name.data,
+                   "RELEASE_RUNTIME_H",
+                   sizeof("RELEASE_RUNTIME_H") - 1) == 0);
+
+    noc_preprocessor_conditional_groups_free(&guard_groups);
+    noc_macro_environment_free(&guard_environment);
+    noc_preprocessor_unit_free(&guard_unit);
+    noc_document_snapshot_free(&guard_snapshot);
     noc_include_graph_free(&graph);
     noc_include_expansion_free(&expansion);
     noc_include_operand_free(&operand);
