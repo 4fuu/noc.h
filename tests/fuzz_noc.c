@@ -167,6 +167,7 @@ static void fuzz_preprocessor(Noc_Context *context,
     Noc_Preprocessor_Unit unit = {0};
     Noc_Macro_Environment environment = {0};
     Noc_Macro_Expansion expansion = {0};
+    Noc_Macro_Invocation invocation = {0};
     size_t index;
     noc_workspace_init(&workspace);
     FUZZ_CHECK(noc_workspace_open_document(
@@ -218,6 +219,42 @@ static void fuzz_preprocessor(Noc_Context *context,
         FUZZ_CHECK(unit.preprocessing_tokens[
                        unit.preprocessing_token_count - 1].directive_index ==
                    NOC_TOKEN_INDEX_NONE);
+        if (unit.preprocessing_token_count > 1) {
+            size_t candidate = selector % (unit.preprocessing_token_count - 1);
+            size_t visited;
+            for (visited = 0;
+                 visited < unit.preprocessing_token_count - 1;
+                 ++visited) {
+                Noc_Macro_Invocation_Build_Status status;
+                size_t limit;
+                index = (candidate + visited) %
+                        (unit.preprocessing_token_count - 1);
+                if (unit.preprocessing_tokens[index].token.kind !=
+                    NOC_TOKEN_IDENTIFIER) {
+                    continue;
+                }
+                limit = index + 1 +
+                        selector % (unit.preprocessing_token_count - index);
+                status = noc_macro_invocation_parse(&unit,
+                                                    index,
+                                                    limit,
+                                                    &invocation);
+                FUZZ_CHECK(status == NOC_MACRO_INVOCATION_BUILD_OK ||
+                           status == NOC_MACRO_INVOCATION_BUILD_OUT_OF_MEMORY);
+                if (status == NOC_MACRO_INVOCATION_BUILD_OK) {
+                    size_t argument_index;
+                    FUZZ_CHECK(noc_macro_invocation_is_valid(&invocation));
+                    for (argument_index = 0;
+                         argument_index < invocation.argument_count;
+                         ++argument_index) {
+                        FUZZ_CHECK(noc_macro_invocation_argument_at(
+                                       &invocation,
+                                       argument_index) != NULL);
+                    }
+                }
+                break;
+            }
+        }
         for (index = 0; index < unit.count; ++index) {
             const Noc_Preprocessor_Directive *directive =
                 noc_preprocessor_directive_at(&unit, index);
@@ -370,6 +407,7 @@ static void fuzz_preprocessor(Noc_Context *context,
         (void)noc_preprocessor_unit_validate_macro_policy(context, &unit);
         (void)noc_preprocessor_unit_validate_macro_directives(context, &unit);
     }
+    noc_macro_invocation_free(&invocation);
     noc_macro_expansion_free(&expansion);
     noc_macro_environment_free(&environment);
     noc_preprocessor_unit_free(&unit);
@@ -506,6 +544,7 @@ int main(void)
         "/* comment */ // line\\\ncontinued\n",
         "#if 0\n@missing\n#elif 1\n@fuzz(42)\n#endif\n",
         "#if FLAG\n@fuzz(\n#endif\n42\n#if FLAG\n)\n#endif\n",
+        "F(a, (b, c),) G(unterminated\n",
         "([{}]) <::> %:%: /\\\n* block *\\\n/",
         "\"string\\n\\x41\" '\\123' 0x1p+2",
     };

@@ -29,6 +29,7 @@ static const char *amalgamation_sources[] = {
     "src/features.c",
     "src/macro_directives.c",
     "src/preprocessor.c",
+    "src/macro_invocations.c",
     "src/macro_environment.c",
     "src/macro_expansion.c",
     "src/parser.c",
@@ -39,8 +40,9 @@ static const char *amalgamation_sources[] = {
 
 static const char *implementation_modules[] = {
     "src/lexer.c", "src/source.c", "src/features.c", "src/macro_directives.c",
-    "src/preprocessor.c", "src/macro_environment.c", "src/macro_expansion.c",
-    "src/parser.c", "src/ast.c", "src/lower.c", "src/emit_c.c",
+    "src/preprocessor.c", "src/macro_invocations.c", "src/macro_environment.c",
+    "src/macro_expansion.c", "src/parser.c", "src/ast.c", "src/lower.c",
+    "src/emit_c.c",
 };
 
 typedef struct {
@@ -58,6 +60,7 @@ static const Test_Suite test_suites[] = {
     {"workspace", "tests/test_workspace.c", "build/noc-test-workspace" NOC_EXE, false},
     {"preprocessing-tokens", "tests/test_preprocessing_tokens.c", "build/noc-test-preprocessing-tokens" NOC_EXE, false},
     {"macro-directives", "tests/test_macro_directives.c", "build/noc-test-macro-directives" NOC_EXE, false},
+    {"macro-invocations", "tests/test_macro_invocations.c", "build/noc-test-macro-invocations" NOC_EXE, false},
     {"macro-environment", "tests/test_macro_environment.c", "build/noc-test-macro-environment" NOC_EXE, false},
     {"macro-expansion", "tests/test_macro_expansion.c", "build/noc-test-macro-expansion" NOC_EXE, false},
     {"preprocessor", "tests/test_preprocessor.c", "build/noc-test-preprocessor" NOC_EXE, false},

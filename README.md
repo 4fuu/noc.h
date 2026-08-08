@@ -41,8 +41,8 @@ Run one independently buildable suite on demand with `./nob test <suite>`.
 The suite names are `header-c`, `header-cpp`, `public-header-c`,
 `public-header-cpp`, `modules`, `workspace`,
 `preprocessing-tokens`, `macro-directives`, `macro-environment`,
-`macro-expansion`, `preprocessor`, `lexing`, `syntax`, `c-analysis`, `rewriter`,
-and `artifacts`, for example:
+`macro-invocations`, `macro-expansion`, `preprocessor`, `lexing`, `syntax`,
+`c-analysis`, `rewriter`, and `artifacts`, for example:
 
 ```console
 $ ./nob test c-analysis
@@ -101,6 +101,7 @@ be declared by `src/internal.h`; module-local helpers remain static. Current own
 | `src/lexer.c` | Slices, lexer, buffers, and shared lexical primitives |
 | `src/preprocessor.c` | Token streams, activity, policy, directive inventory, and PP units |
 | `src/macro_directives.c` | Recoverable `#define`/`#undef` grammar and queries |
+| `src/macro_invocations.c` | Lossless, recoverable function-like invocation/argument syntax |
 | `src/macro_environment.c`, `src/macro_expansion.c` | Effective macro state and bounded expansion |
 | `src/parser.c`, `src/ast.c` | Token cursors/arguments and syntax/C structure analysis |
 | `src/features.c` | Context, rules, feature controls, and metadata interfaces |
@@ -207,6 +208,22 @@ partial record. Batch callers may invoke
 This is structural parsing only: expansion, duplicate-parameter constraints,
 replacement `#`/`##` validation, hide sets, and built-ins remain later work. Run
 this coverage independently with `./nob test macro-directives`.
+
+`noc_macro_invocation_parse` is the corresponding physical-source syntax query.
+Given an identifier and an exclusive token bound, it recognizes a following `(`
+across trivia, balances nested parentheses, and publishes exact argument token ranges.
+Empty parentheses have zero syntactic arguments; the future substitution layer
+will interpret that spelling against the selected macro definition. Missing `)`
+is a successful `INCOMPLETE` editor result with partial arguments, not a fabricated
+complete invocation. The owning result borrows its preprocessing unit, rejects a
+rebuilt/stale owner, and is replaced only on successful parsing. Run this layer
+independently with `./nob test macro-invocations`.
+
+The caller must bound a query to its containing source/directive range; this API
+does not infer that boundary. It also deliberately does not represent invocations
+assembled during macro rescan, where a name, `(`, and argument tokens may have
+different provenance owners. Function expansion will use a logical-token
+collector and retain per-token provenance while applying the same balancing rules.
 
 `Noc_Macro_Environment` is the separate state layer used by future conditional,
 include, and expansion processing. A caller applies valid, policy-enabled macro

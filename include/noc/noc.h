@@ -29,9 +29,9 @@
 #define NOC_H_INCLUDED
 
 #define NOC_VERSION_MAJOR 0
-#define NOC_VERSION_MINOR 27
+#define NOC_VERSION_MINOR 28
 #define NOC_VERSION_PATCH 0
-#define NOC_VERSION "0.27.0"
+#define NOC_VERSION "0.28.0"
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -540,6 +540,26 @@ typedef struct {
     bool macro_definition_allowed;
 } Noc_Preprocessor_Directive;
 
+typedef enum {
+    NOC_MACRO_INVOCATION_NOT_INVOKED = 0,
+    NOC_MACRO_INVOCATION_COMPLETE,
+    NOC_MACRO_INVOCATION_INCOMPLETE,
+} Noc_Macro_Invocation_Status;
+
+typedef enum {
+    NOC_MACRO_INVOCATION_BUILD_OK = 0,
+    NOC_MACRO_INVOCATION_BUILD_INVALID_ARGUMENT,
+    NOC_MACRO_INVOCATION_BUILD_STALE,
+    NOC_MACRO_INVOCATION_BUILD_GENERATION_EXHAUSTED,
+    NOC_MACRO_INVOCATION_BUILD_OUT_OF_MEMORY,
+} Noc_Macro_Invocation_Build_Status;
+
+typedef struct {
+    /* Exact half-open token range between a top-level separator and the
+       invocation parentheses. Leading/trailing trivia is intentionally kept. */
+    Noc_Token_Range tokens;
+} Noc_Macro_Argument;
+
 /* Owning handle: initialize to {0}, do not shallow-copy, and release with
    noc_preprocessor_unit_free. Successful rebuild invalidates pointers and
    derived views borrowed from the old unit; failed rebuild preserves them. */
@@ -565,6 +585,27 @@ typedef struct {
     size_t disabled_macro_definition_count;
     size_t invalid_macro_directive_count;
 } Noc_Preprocessor_Unit;
+
+/* Owning, lossless physical-source function-like invocation syntax. Initialize
+   to {0}, do not shallow-copy, and release with noc_macro_invocation_free. The
+   source unit must remain alive and unchanged. Complete and incomplete editor
+   input are both successful query results; operational failures preserve the
+   previous result. Expanded invocations assembled from multiple provenance
+   owners require a logical-token representation rather than this source range. */
+typedef struct {
+    const Noc_Preprocessor_Unit *unit;
+    size_t unit_stream_generation;
+    size_t name_token_index;
+    size_t open_token_index;
+    size_t close_token_index;
+    Noc_Token_Range tokens;
+    Noc_Macro_Argument *arguments;
+    size_t argument_count;
+    size_t argument_capacity;
+    size_t problem_token_index;
+    Noc_Macro_Invocation_Status status;
+    size_t generation;
+} Noc_Macro_Invocation;
 
 typedef enum {
     NOC_MACRO_ENVIRONMENT_OK = 0,
@@ -685,6 +726,28 @@ NOCDEF const Noc_Macro_Directive *noc_macro_directive_at(
 NOCDEF const Noc_Macro_Parameter *noc_macro_parameter_at(
     const Noc_Preprocessor_Unit *unit,
     const Noc_Macro_Directive *directive,
+    size_t index);
+NOCDEF const char *noc_macro_invocation_status_name(
+    Noc_Macro_Invocation_Status status);
+NOCDEF const char *noc_macro_invocation_build_status_name(
+    Noc_Macro_Invocation_Build_Status status);
+NOCDEF void noc_macro_invocation_free(Noc_Macro_Invocation *invocation);
+NOCDEF bool noc_macro_invocation_is_valid(
+    const Noc_Macro_Invocation *invocation);
+/* Tests whether the identifier at name_token_index is followed (after trivia)
+   by a function-like invocation and, if so, collects comma-separated arguments
+   while balancing nested parentheses. token_limit is an exclusive caller-owned
+   boundary and may include the terminal EOF token; this function does not infer
+   directive or replacement-list boundaries. Empty parentheses produce zero
+   arguments; expansion later interprets that syntax against the selected macro
+   definition. NOC_TOKEN_INVALID or a missing close produces INCOMPLETE syntax. */
+NOCDEF Noc_Macro_Invocation_Build_Status noc_macro_invocation_parse(
+    const Noc_Preprocessor_Unit *unit,
+    size_t name_token_index,
+    size_t token_limit,
+    Noc_Macro_Invocation *output);
+NOCDEF const Noc_Macro_Argument *noc_macro_invocation_argument_at(
+    const Noc_Macro_Invocation *invocation,
     size_t index);
 /* Reports every disabled #define/#undef through context but leaves unit valid. */
 NOCDEF bool noc_preprocessor_unit_validate_macro_policy(

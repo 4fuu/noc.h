@@ -148,7 +148,11 @@ must be generated reproducibly as one self-contained `noc.h`.
         history, policy filtering, stale generation checks, and lookup-before.
   - [x] Add bounded object-like substitution/rescan, direct and indirect
         recursion suppression, and invocation/definition provenance frames.
-  - [ ] Add function-like argument collection, prescan, and substitution.
+  - [x] Add a generation-aware function-like invocation query with balanced,
+        lossless argument collection and incomplete editor-input representation.
+  - [ ] Add function-like argument prescan, substitution, and cross-boundary
+        rescan using a shared logical-token collector without weakening hide-set
+        semantics or collapsing per-token provenance into physical source ranges.
   - [ ] Add stringification, token pasting, variadic substitution, and built-ins.
 - [ ] Implement includes, include guards/pragma-once behavior, conditionals,
       integer constant evaluation, diagnostics, and target predefined macros.
