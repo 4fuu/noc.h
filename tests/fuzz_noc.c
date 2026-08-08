@@ -171,6 +171,7 @@ static void fuzz_preprocessor(Noc_Context *context,
     Noc_Macro_Invocation invocation = {0};
     Noc_Preprocessor_Conditional_Groups groups = {0};
     Noc_Include_Operand include_operand = {0};
+    Noc_Include_Expansion include_expansion = {0};
     size_t index;
     noc_workspace_init(&workspace);
     FUZZ_CHECK(noc_workspace_open_document(
@@ -398,6 +399,67 @@ static void fuzz_preprocessor(Noc_Context *context,
                            entry->previous_entry_index < index);
                 FUZZ_CHECK(macro->status == NOC_MACRO_DIRECTIVE_STATUS_VALID);
             }
+            for (index = 0; index < unit.count; ++index) {
+                Noc_Macro_Expansion_Status include_expansion_status;
+                Noc_Macro_Expansion_Options include_options =
+                    noc_macro_expansion_default_options();
+                if (unit.items[index].kind !=
+                    NOC_PREPROCESSOR_DIRECTIVE_INCLUDE) {
+                    continue;
+                }
+                FUZZ_CHECK(noc_include_operand_build(&unit,
+                                                     index,
+                                                     &include_operand) ==
+                           NOC_INCLUDE_OPERAND_BUILD_OK);
+                if (include_operand.status !=
+                    NOC_INCLUDE_OPERAND_EXPANSION_REQUIRED) {
+                    continue;
+                }
+                include_options.limits.max_depth = 16;
+                include_options.limits.max_output_tokens = 4096;
+                include_options.limits.max_expansions = 1024;
+                include_expansion_status =
+                    noc_include_expansion_build_with_options(
+                        &environment,
+                        environment.count,
+                        &include_operand,
+                        include_options,
+                        &include_expansion);
+                FUZZ_CHECK(
+                    include_expansion_status == NOC_MACRO_EXPANSION_OK ||
+                    include_expansion_status ==
+                        NOC_MACRO_EXPANSION_INCOMPLETE_INVOCATION ||
+                    include_expansion_status ==
+                        NOC_MACRO_EXPANSION_ARGUMENT_COUNT_MISMATCH ||
+                    include_expansion_status ==
+                        NOC_MACRO_EXPANSION_INVALID_DEFINITION ||
+                    include_expansion_status == NOC_MACRO_EXPANSION_DEPTH_LIMIT ||
+                    include_expansion_status == NOC_MACRO_EXPANSION_OUTPUT_LIMIT ||
+                    include_expansion_status == NOC_MACRO_EXPANSION_COUNT_LIMIT ||
+                    include_expansion_status ==
+                        NOC_MACRO_EXPANSION_UNSUPPORTED_OPERATOR ||
+                    include_expansion_status ==
+                        NOC_MACRO_EXPANSION_UNSUPPORTED_VARIADIC ||
+                    include_expansion_status == NOC_MACRO_EXPANSION_INVALID_PASTE ||
+                    include_expansion_status == NOC_MACRO_EXPANSION_OUT_OF_MEMORY);
+                if (include_expansion_status == NOC_MACRO_EXPANSION_OK) {
+                    FUZZ_CHECK(noc_include_expansion_is_valid(
+                        &include_expansion));
+                    FUZZ_CHECK(include_expansion.directive_index == index);
+                    FUZZ_CHECK(include_expansion.status ==
+                                   NOC_INCLUDE_OPERAND_DIRECT ||
+                               include_expansion.status ==
+                                   NOC_INCLUDE_OPERAND_EMPTY ||
+                               include_expansion.status ==
+                                   NOC_INCLUDE_OPERAND_MALFORMED ||
+                               include_expansion.status ==
+                                   NOC_INCLUDE_OPERAND_INCOMPLETE);
+                    FUZZ_CHECK(include_expansion.header_tokens.begin ==
+                                   NOC_TOKEN_INDEX_NONE ||
+                               include_expansion.header_tokens.end <=
+                                   include_expansion.macro_expansion.count);
+                }
+            }
             {
                 Noc_Macro_Expansion_Options options =
                     noc_macro_expansion_default_options();
@@ -593,7 +655,9 @@ static void fuzz_preprocessor(Noc_Context *context,
     noc_macro_expansion_free(&expansion);
     noc_macro_environment_free(&environment);
     noc_preprocessor_unit_free(&unit);
+    FUZZ_CHECK(!noc_include_expansion_is_valid(&include_expansion));
     FUZZ_CHECK(!noc_include_operand_is_valid(&include_operand));
+    noc_include_expansion_free(&include_expansion);
     noc_include_operand_free(&include_operand);
     noc_document_snapshot_free(&snapshot);
     noc_workspace_deinit(&workspace);

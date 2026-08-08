@@ -125,9 +125,9 @@ NOCDEF bool noc_include_operand_is_valid(const Noc_Include_Operand *operand)
 }
 
 /* 1 is decoded, 0 is an allocation failure, and -1 is malformed input. */
-static int noc__include_decode_header(Noc_Token token,
-                                      Noc_Include_Form *form,
-                                      Noc_Slice *name)
+NOC__PRIVATE int noc__include_decode_header(Noc_Token token,
+                                            Noc_Include_Form *form,
+                                            Noc_Slice *name)
 {
     Noc_Buffer logical = {0};
     size_t name_count;
@@ -263,14 +263,46 @@ NOCDEF Noc_Include_Operand_Build_Status noc_include_operand_build(
     return NOC_INCLUDE_OPERAND_BUILD_OK;
 }
 
+NOC__PRIVATE Noc_Include_Resolve_Status noc__include_resolve_request(
+    Noc_Include_Resolver resolver,
+    const Noc_Include_Request *request,
+    Noc_Document_Snapshot *resolved_snapshot)
+{
+    Noc_Document_Snapshot resolved = {0};
+    Noc_Include_Resolve_Status status;
+    if (!resolver.resolve || !request || !resolved_snapshot) {
+        return NOC_INCLUDE_RESOLVE_INVALID_ARGUMENT;
+    }
+    status = resolver.resolve(resolver.user_data, request, &resolved);
+    if (status == NOC_INCLUDE_RESOLVE_FOUND) {
+        if (!noc_document_snapshot_is_valid(&resolved)) {
+            return NOC_INCLUDE_RESOLVE_INVALID_RESULT;
+        }
+        noc_document_snapshot_free(resolved_snapshot);
+        *resolved_snapshot = resolved;
+        return NOC_INCLUDE_RESOLVE_FOUND;
+    }
+    if (noc_document_snapshot_is_valid(&resolved)) {
+        noc_document_snapshot_free(&resolved);
+        return NOC_INCLUDE_RESOLVE_INVALID_RESULT;
+    }
+    if (status == NOC_INCLUDE_RESOLVE_NOT_FOUND ||
+        status == NOC_INCLUDE_RESOLVE_AMBIGUOUS ||
+        status == NOC_INCLUDE_RESOLVE_DENIED ||
+        status == NOC_INCLUDE_RESOLVE_CANCELLED ||
+        status == NOC_INCLUDE_RESOLVE_FAILED ||
+        status == NOC_INCLUDE_RESOLVE_OUT_OF_MEMORY) {
+        return status;
+    }
+    return NOC_INCLUDE_RESOLVE_INVALID_RESULT;
+}
+
 NOCDEF Noc_Include_Resolve_Status noc_include_resolve(
     Noc_Include_Resolver resolver,
     const Noc_Include_Operand *operand,
     Noc_Document_Snapshot *resolved_snapshot)
 {
-    Noc_Document_Snapshot resolved = {0};
     Noc_Include_Request request;
-    Noc_Include_Resolve_Status status;
     const Noc_Preprocessor_Directive *directive;
     if (!resolver.resolve || !operand || !resolved_snapshot) {
         return NOC_INCLUDE_RESOLVE_INVALID_ARGUMENT;
@@ -297,28 +329,7 @@ NOCDEF Noc_Include_Resolve_Status noc_include_resolve(
     request.directive_location = directive->location;
     request.form = operand->form;
     request.logical_name = operand->logical_name;
-    status = resolver.resolve(resolver.user_data, &request, &resolved);
-    if (status == NOC_INCLUDE_RESOLVE_FOUND) {
-        if (!noc_document_snapshot_is_valid(&resolved)) {
-            return NOC_INCLUDE_RESOLVE_INVALID_RESULT;
-        }
-        noc_document_snapshot_free(resolved_snapshot);
-        *resolved_snapshot = resolved;
-        return NOC_INCLUDE_RESOLVE_FOUND;
-    }
-    if (noc_document_snapshot_is_valid(&resolved)) {
-        noc_document_snapshot_free(&resolved);
-        return NOC_INCLUDE_RESOLVE_INVALID_RESULT;
-    }
-    if (status == NOC_INCLUDE_RESOLVE_NOT_FOUND ||
-        status == NOC_INCLUDE_RESOLVE_AMBIGUOUS ||
-        status == NOC_INCLUDE_RESOLVE_DENIED ||
-        status == NOC_INCLUDE_RESOLVE_CANCELLED ||
-        status == NOC_INCLUDE_RESOLVE_FAILED ||
-        status == NOC_INCLUDE_RESOLVE_OUT_OF_MEMORY) {
-        return status;
-    }
-    return NOC_INCLUDE_RESOLVE_INVALID_RESULT;
+    return noc__include_resolve_request(resolver, &request, resolved_snapshot);
 }
 
 #endif /* NOC_INCLUDE_RESOLVER_IMPLEMENTATION_INCLUDED */

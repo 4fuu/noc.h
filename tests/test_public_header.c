@@ -17,15 +17,18 @@ int main(void)
 {
     Noc_Slice version = {NOC_VERSION, sizeof(NOC_VERSION) - 1};
     Noc_Token_Range empty = {0, 0};
+    Noc_Include_Expansion expansion;
     Noc_Include_Resolver resolver;
+    memset(&expansion, 0, sizeof(expansion));
     resolver.resolve = public_header_resolver;
     resolver.user_data = NULL;
     return version.count == strlen(NOC_VERSION) &&
                    empty.begin == empty.end &&
+                   expansion.generation == 0 &&
                    resolver.resolve != NULL &&
                    NOC_INCLUDE_FORM_QUOTED != NOC_INCLUDE_FORM_ANGLED &&
                    NOC_VERSION_MAJOR == 0 &&
-                   NOC_VERSION_MINOR == 37 &&
+                   NOC_VERSION_MINOR == 38 &&
                    NOC_VERSION_PATCH == 0
                ? 0
                : 1;

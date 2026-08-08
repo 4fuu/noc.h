@@ -35,6 +35,7 @@ static const char *amalgamation_sources[] = {
     "src/conditional.c",
     "src/conditional_groups.c",
     "src/include_resolver.c",
+    "src/include_expansion.c",
     "src/parser.c",
     "src/ast.c",
     "src/lower.c",
@@ -45,7 +46,7 @@ static const char *implementation_modules[] = {
     "src/lexer.c", "src/source.c", "src/features.c", "src/macro_directives.c",
     "src/preprocessor.c", "src/macro_invocations.c", "src/macro_environment.c",
     "src/macro_expansion.c", "src/conditional.c", "src/conditional_groups.c",
-    "src/include_resolver.c",
+    "src/include_resolver.c", "src/include_expansion.c",
     "src/parser.c", "src/ast.c", "src/lower.c", "src/emit_c.c",
 };
 
@@ -77,6 +78,9 @@ static const Test_Suite test_suites[] = {
     {"conditional-groups", "tests/test_conditional_groups.c", "build/noc-test-conditional-groups" NOC_EXE, false},
     {"include-operands", "tests/test_include_operands.c", "build/noc-test-include-operands" NOC_EXE, false},
     {"include-resolver", "tests/test_include_resolver.c", "build/noc-test-include-resolver" NOC_EXE, false},
+    {"include-expansion", "tests/test_include_expansion.c", "build/noc-test-include-expansion" NOC_EXE, false},
+    {"include-expansion-resolver", "tests/test_include_expansion_resolver.c", "build/noc-test-include-expansion-resolver" NOC_EXE, false},
+    {"release-header-runtime", "tests/test_release_header_runtime.c", "build/noc-test-release-header-runtime" NOC_EXE, false},
     {"preprocessor", "tests/test_preprocessor.c", "build/noc-test-preprocessor" NOC_EXE, false},
     {"lexing", "tests/test_lexing.c", "build/noc-test-lexing" NOC_EXE, false},
     {"syntax", "tests/test_syntax.c", "build/noc-test-syntax" NOC_EXE, false},
@@ -245,6 +249,7 @@ static bool build_test_suite(const Test_Suite *suite)
         "tests/test_support.h",
         "tests/macro_expansion_test_support.h",
         "tests/include_test_support.h",
+        "tests/include_expansion_test_support.h",
         NOC_GENERATED_HEADER,
         "nob.c",
     };

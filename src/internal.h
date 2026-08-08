@@ -113,6 +113,13 @@ NOC__PRIVATE bool noc__macro_builtin_mask_contains(
 NOC__PRIVATE Noc_Macro_Expansion_Status noc__macro_expansion_build(
     const Noc_Macro_Environment *, size_t, const Noc_Preprocessor_Unit *,
     Noc_Token_Range, Noc_Macro_Expansion_Options, bool, Noc_Macro_Expansion *);
+NOC__PRIVATE int noc__include_decode_header(Noc_Token,
+                                           Noc_Include_Form *,
+                                           Noc_Slice *);
+NOC__PRIVATE Noc_Include_Resolve_Status noc__include_resolve_request(
+    Noc_Include_Resolver,
+    const Noc_Include_Request *,
+    Noc_Document_Snapshot *);
 NOC__PRIVATE void noc__string_list_free(Noc__String_List *);
 NOC__PRIVATE bool noc__string_list_append_unique(Noc__String_List *, const char *);
 NOC__PRIVATE bool noc__transform_source(Noc_Context *, const char *, const char *, size_t,

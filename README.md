@@ -45,6 +45,8 @@ The suite names are `header-c`, `header-cpp`, `public-header-c`,
 `variadic-macro-expansion`, `macro-stringification`, `macro-token-paste`,
 `macro-builtins`, `configured-builtins`, `preprocessor-expressions`,
 `conditional-groups`, `include-operands`, `include-resolver`,
+`include-expansion`, `include-expansion-resolver`,
+`release-header-runtime`,
 `preprocessor`, `lexing`, `syntax`, `c-analysis`, `rewriter`, and `artifacts`, for
 example:
 
@@ -108,7 +110,7 @@ be declared by `src/internal.h`; module-local helpers remain static. Current own
 | `src/macro_invocations.c` | Lossless, recoverable function-like invocation/argument syntax |
 | `src/macro_environment.c`, `src/macro_expansion.c` | Effective macro state and bounded expansion |
 | `src/conditional.c`, `src/conditional_groups.c` | C11 condition evaluation and recoverable balanced conditional analysis |
-| `src/include_resolver.c` | Recoverable include operands and host-configurable snapshot resolution |
+| `src/include_resolver.c`, `src/include_expansion.c` | Physical/expanded include operands and host-configurable snapshot resolution |
 | `src/parser.c`, `src/ast.c` | Token cursors/arguments and syntax/C structure analysis |
 | `src/features.c` | Context, rules, feature controls, and metadata interfaces |
 | `src/lower.c`, `src/emit_c.c` | Rewrite/edit lowering and transformation/artifact/CLI emission |
@@ -348,8 +350,13 @@ to a host callback. The host owns search order, path canonicalization, unsaved
 overlays, virtual filesystems, and source classification; Noc performs no hidden
 filesystem access and validates the returned owning snapshot transactionally.
 Run these layers independently with `./nob test include-operands` and
-`./nob test include-resolver`. Macro-expanded include names, recursive include
-graphs, cycle handling, and guards remain later preprocessing stages.
+`./nob test include-resolver`. `noc_include_expansion_build` performs bounded
+normal macro expansion when physical classification requires it, then publishes
+an owning logical name with expansion-relative ranges and full token provenance;
+`noc_include_expansion_resolve` sends only a valid final name to the same host
+policy. Its focused suites are `include-expansion` and
+`include-expansion-resolver`. Recursive include graphs, conditional traversal,
+cycle handling, and guards remain later preprocessing stages.
 
 Macro definition permission is explicit:
 

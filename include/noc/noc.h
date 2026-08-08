@@ -29,9 +29,9 @@
 #define NOC_H_INCLUDED
 
 #define NOC_VERSION_MAJOR 0
-#define NOC_VERSION_MINOR 37
+#define NOC_VERSION_MINOR 38
 #define NOC_VERSION_PATCH 0
-#define NOC_VERSION "0.37.0"
+#define NOC_VERSION "0.38.0"
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -1005,6 +1005,44 @@ typedef struct {
     size_t generation;
 } Noc_Macro_Expansion;
 
+/* Owning result of applying normal C11 macro replacement to one physical
+   EXPANSION_REQUIRED #include operand and then interpreting the complete token
+   sequence as a header name. Initialize to {0}, do not shallow-copy, treat all
+   fields as read-only, and release with noc_include_expansion_free.
+
+   macro_expansion owns synthesized token spellings and retains per-token macro
+   definition/invocation provenance. body_tokens indexes the original physical
+   macro_expansion.input_unit->preprocessing_tokens; header_tokens and
+   problem_token_index index macro_expansion.items. All ranges are half-open.
+   logical_name is separately owned, stable until rebuild/free, phase-2-splice
+   normalized, excludes delimiters, and is not path-normalized or escape-decoded;
+   callers must honor its count rather than rely on NUL termination.
+
+   During angle reconstruction, a contiguous input-trivia run between two
+   surviving input tokens becomes one space; input trivia bordering or mixed
+   with macro-produced output is omitted. Replacement/argument whitespace is
+   retained, and every retained comment becomes one space. This deterministic
+   preprocessing policy is separate from filesystem normalization.
+
+   A successful build publishes DIRECT, EMPTY, MALFORMED, or INCOMPLETE. EMPTY
+   may have no delimiters when expansion produces no significant tokens.
+   MALFORMED means the final expansion cannot be one header name; INCOMPLETE
+   means it contains an invalid token or an unmatched opening '<'. Problem and
+   header indices are expansion-relative. The environment object, input unit,
+   and definition units referenced by the environment must remain alive and
+   unchanged; rebuilding any of them makes this result stale. */
+typedef struct {
+    Noc_Macro_Expansion macro_expansion;
+    Noc_Token_Range body_tokens;
+    Noc_Token_Range header_tokens;
+    size_t directive_index;
+    size_t problem_token_index;
+    Noc_Slice logical_name;
+    Noc_Include_Operand_Status status;
+    Noc_Include_Form form;
+    size_t generation;
+} Noc_Include_Expansion;
+
 NOCDEF const char *noc_source_class_name(Noc_Source_Class source_class);
 NOCDEF const char *noc_macro_policy_name(Noc_Macro_Policy policy);
 NOCDEF const char *noc_preprocessor_directive_kind_name(
@@ -1057,6 +1095,36 @@ NOCDEF Noc_Include_Operand_Build_Status noc_include_operand_build(
 NOCDEF Noc_Include_Resolve_Status noc_include_resolve(
     Noc_Include_Resolver resolver,
     const Noc_Include_Operand *operand,
+    Noc_Document_Snapshot *resolved_snapshot);
+NOCDEF void noc_include_expansion_free(Noc_Include_Expansion *expansion);
+NOCDEF bool noc_include_expansion_is_valid(
+    const Noc_Include_Expansion *expansion);
+/* Expand one valid physical EXPANSION_REQUIRED operand with environment entries
+   [0,entry_limit), then classify the final include spelling. The limits wrapper
+   uses otherwise-default translation inputs; the options wrapper accepts the
+   same reproducible predefined inputs as normal macro expansion. Both return
+   Noc_Macro_Expansion_Status so expansion failures retain their exact cause.
+   Success, including recoverable final syntax, transactionally replaces output;
+   every failure preserves it. Physical DIRECT operands intentionally use
+   noc_include_resolve without a redundant expansion. */
+NOCDEF Noc_Macro_Expansion_Status noc_include_expansion_build(
+    const Noc_Macro_Environment *environment,
+    size_t entry_limit,
+    const Noc_Include_Operand *operand,
+    Noc_Macro_Expansion_Limits limits,
+    Noc_Include_Expansion *output);
+NOCDEF Noc_Macro_Expansion_Status noc_include_expansion_build_with_options(
+    const Noc_Macro_Environment *environment,
+    size_t entry_limit,
+    const Noc_Include_Operand *operand,
+    Noc_Macro_Expansion_Options options,
+    Noc_Include_Expansion *output);
+/* Resolve one valid expanded DIRECT result through the same host policy and
+   transactional snapshot contract as noc_include_resolve. No filesystem access,
+   recursive traversal, conditional-activity decision, or guard handling occurs. */
+NOCDEF Noc_Include_Resolve_Status noc_include_expansion_resolve(
+    Noc_Include_Resolver resolver,
+    const Noc_Include_Expansion *expansion,
     Noc_Document_Snapshot *resolved_snapshot);
 NOCDEF const Noc_Macro_Directive *noc_macro_directive_at(
     const Noc_Preprocessor_Unit *unit,
