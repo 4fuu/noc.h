@@ -29,9 +29,9 @@
 #define NOC_H_INCLUDED
 
 #define NOC_VERSION_MAJOR 0
-#define NOC_VERSION_MINOR 20
+#define NOC_VERSION_MINOR 21
 #define NOC_VERSION_PATCH 0
-#define NOC_VERSION "0.20.0"
+#define NOC_VERSION "0.21.0"
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -316,6 +316,113 @@ typedef struct {
     size_t dependency_count;
     size_t error_count;
 } Noc_Transform_Result;
+
+/* Incremental source workspace. Paths are copied and compared as exact,
+   case-sensitive byte strings without filesystem canonicalization. File IDs are
+   stable only within one live workspace and are never reused by another path.
+
+   Noc_Workspace and Noc_Document_Snapshot are owning C handles initialized with
+   {0}; do not shallow-copy an initialized handle. Use
+   noc_document_snapshot_clone() to create another owning snapshot handle. */
+typedef size_t Noc_File_Id;
+#define NOC_FILE_ID_NONE ((Noc_File_Id)-1)
+
+typedef enum {
+    NOC_SOURCE_CLASS_PROJECT = 0,
+    NOC_SOURCE_CLASS_TRUSTED,
+    NOC_SOURCE_CLASS_SYSTEM,
+    NOC_SOURCE_CLASS_GENERATED,
+} Noc_Source_Class;
+
+typedef enum {
+    NOC_WORKSPACE_OK = 0,
+    NOC_WORKSPACE_INVALID_ARGUMENT,
+    NOC_WORKSPACE_ALREADY_OPEN,
+    NOC_WORKSPACE_NOT_CURRENT,
+    NOC_WORKSPACE_NOT_FOUND,
+    NOC_WORKSPACE_OUT_OF_RANGE,
+    NOC_WORKSPACE_OUT_OF_MEMORY,
+    NOC_WORKSPACE_LIMIT_EXCEEDED,
+} Noc_Workspace_Status;
+
+typedef struct Noc_Workspace_Impl Noc_Workspace_Impl;
+typedef struct Noc_Document_Snapshot_Impl Noc_Document_Snapshot_Impl;
+
+typedef struct {
+    Noc_Workspace_Impl *impl;
+} Noc_Workspace;
+
+typedef struct {
+    Noc_Document_Snapshot_Impl *impl;
+} Noc_Document_Snapshot;
+
+NOCDEF const char *noc_workspace_status_name(Noc_Workspace_Status status);
+/* init requires an uninitialized or deinitialized workspace. Workspace and
+   snapshot operations are not safe concurrently on a shared object graph;
+   disjoint workspaces have no mutable global workspace state. */
+NOCDEF void noc_workspace_init(Noc_Workspace *workspace);
+NOCDEF void noc_workspace_deinit(Noc_Workspace *workspace);
+
+/* These operations copy input bytes. Owning outputs are replaced only on
+   success and otherwise remain unchanged. update accepts output == expected;
+   its expected snapshot must be the exact current revision. */
+NOCDEF Noc_Workspace_Status noc_workspace_open_document(
+    Noc_Workspace *workspace,
+    const char *path,
+    const char *source,
+    size_t source_count,
+    Noc_Source_Class source_class,
+    Noc_Document_Snapshot *output);
+NOCDEF Noc_Workspace_Status noc_workspace_update_document(
+    Noc_Workspace *workspace,
+    const Noc_Document_Snapshot *expected,
+    const char *source,
+    size_t source_count,
+    Noc_Document_Snapshot *output);
+NOCDEF Noc_Workspace_Status noc_workspace_close_document(
+    Noc_Workspace *workspace,
+    const Noc_Document_Snapshot *expected);
+NOCDEF Noc_Workspace_Status noc_workspace_current_document(
+    const Noc_Workspace *workspace,
+    Noc_File_Id file_id,
+    Noc_Document_Snapshot *output);
+NOCDEF Noc_Workspace_Status noc_workspace_find_document(
+    const Noc_Workspace *workspace,
+    const char *path,
+    Noc_Document_Snapshot *output);
+NOCDEF bool noc_document_snapshot_is_current(
+    const Noc_Workspace *workspace,
+    const Noc_Document_Snapshot *snapshot);
+
+NOCDEF Noc_Workspace_Status noc_document_snapshot_clone(
+    const Noc_Document_Snapshot *source,
+    Noc_Document_Snapshot *output);
+NOCDEF void noc_document_snapshot_free(Noc_Document_Snapshot *snapshot);
+NOCDEF bool noc_document_snapshot_is_valid(const Noc_Document_Snapshot *snapshot);
+NOCDEF Noc_File_Id noc_document_snapshot_file_id(
+    const Noc_Document_Snapshot *snapshot);
+NOCDEF size_t noc_document_snapshot_generation(
+    const Noc_Document_Snapshot *snapshot);
+NOCDEF const char *noc_document_snapshot_path(
+    const Noc_Document_Snapshot *snapshot);
+NOCDEF Noc_Slice noc_document_snapshot_source(
+    const Noc_Document_Snapshot *snapshot);
+NOCDEF Noc_Source_Class noc_document_snapshot_source_class(
+    const Noc_Document_Snapshot *snapshot);
+
+/* Physical offsets include EOF (0..source_count). Lines and byte columns are
+   1-based. CRLF counts as one newline but both bytes retain distinct columns;
+   tabs and multibyte text are counted as original bytes. Returned paths borrow
+   storage from the retained snapshot. Scalar outputs are preserved on failure. */
+NOCDEF Noc_Workspace_Status noc_document_snapshot_location(
+    const Noc_Document_Snapshot *snapshot,
+    size_t offset,
+    Noc_Location *output);
+NOCDEF Noc_Workspace_Status noc_document_snapshot_offset(
+    const Noc_Document_Snapshot *snapshot,
+    size_t line,
+    size_t byte_column,
+    size_t *output);
 
 /* Slices and tokens */
 NOCDEF Noc_Slice noc_slice_from_cstr(const char *text);

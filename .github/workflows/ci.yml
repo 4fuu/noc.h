@@ -75,7 +75,7 @@ jobs:
           cc -o nob nob.c
           ./nob verify-header
           ./nob header
-          for suite in lexing syntax c_analysis rewriter artifacts; do
+          for suite in workspace lexing syntax c_analysis rewriter artifacts; do
             cc -std=c11 -Wall -Wextra -Wpedantic \
                -fsanitize=address,undefined -fno-omit-frame-pointer \
                -Ibuild/generated -I. \

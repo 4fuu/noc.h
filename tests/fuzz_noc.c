@@ -111,6 +111,52 @@ static void fuzz_standalone_lexer(const uint8_t *data, size_t size)
     }
 }
 
+static void fuzz_workspace(const uint8_t *data, size_t size, unsigned int selector)
+{
+    Noc_Workspace workspace = {0};
+    Noc_Document_Snapshot current = {0};
+    Noc_Document_Snapshot original = {0};
+    Noc_Slice source;
+    size_t offsets[3];
+    size_t index;
+    noc_workspace_init(&workspace);
+    FUZZ_CHECK(noc_workspace_open_document(
+                   &workspace,
+                   "memory://fuzz.c",
+                   (const char *)data,
+                   size,
+                   (Noc_Source_Class)(selector % 4u),
+                   &current) == NOC_WORKSPACE_OK);
+    FUZZ_CHECK(noc_document_snapshot_clone(&current, &original) == NOC_WORKSPACE_OK);
+    offsets[0] = 0;
+    offsets[1] = size;
+    offsets[2] = size == 0 ? 0 : selector % (size + 1);
+    for (index = 0; index < sizeof(offsets) / sizeof(offsets[0]); ++index) {
+        Noc_Location location;
+        size_t round_trip = SIZE_MAX;
+        FUZZ_CHECK(noc_document_snapshot_location(&current,
+                                                  offsets[index],
+                                                  &location) == NOC_WORKSPACE_OK);
+        FUZZ_CHECK(noc_document_snapshot_offset(&current,
+                                                location.line,
+                                                location.column,
+                                                &round_trip) == NOC_WORKSPACE_OK);
+        FUZZ_CHECK(round_trip == offsets[index]);
+    }
+    source = noc_document_snapshot_source(&current);
+    FUZZ_CHECK(noc_workspace_update_document(&workspace,
+                                             &current,
+                                             source.data + size / 2,
+                                             size - size / 2,
+                                             &current) == NOC_WORKSPACE_OK);
+    FUZZ_CHECK(noc_document_snapshot_generation(&current) == 2);
+    FUZZ_CHECK(noc_document_snapshot_source(&original).count == size);
+    FUZZ_CHECK(noc_workspace_close_document(&workspace, &current) == NOC_WORKSPACE_OK);
+    noc_workspace_deinit(&workspace);
+    noc_document_snapshot_free(&original);
+    noc_document_snapshot_free(&current);
+}
+
 static void fuzz_token_apis(Noc_Context *context,
                             const uint8_t *data,
                             size_t size,
@@ -192,6 +238,7 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
     Fuzz_State state;
     Noc_Rule rule;
     fuzz_standalone_lexer(data, size);
+    fuzz_workspace(data, size, size > 0 ? data[0] : 0);
     noc_context_init(&context);
     noc_context_set_diagnostic(&context, ignore_diagnostic, NULL);
     state.selector = size > 0 ? data[0] : 0;

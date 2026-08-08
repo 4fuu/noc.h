@@ -38,8 +38,8 @@ $ ./nob test
 ```
 
 Run one independently buildable suite on demand with `./nob test <suite>`.
-The suite names are `header-c`, `header-cpp`, `lexing`, `syntax`, `c-analysis`,
-`rewriter`, and `artifacts`, for example:
+The suite names are `header-c`, `header-cpp`, `workspace`, `lexing`, `syntax`,
+`c-analysis`, `rewriter`, and `artifacts`, for example:
 
 ```console
 $ ./nob test c-analysis
@@ -82,6 +82,54 @@ definitions and subsystem modules belong below it. Add a source module to the
 ordered `header_sources` manifest, regenerate, run its focused suite and the full
 suite, and commit both source and generated header together. The published file
 remains self-contained and dialect inputs keep normal `.c` and `.h` suffixes.
+
+## Incremental workspace snapshots
+
+`Noc_Workspace` is the in-memory source foundation for parser and LSP work. A
+successful open copies the path and source, assigns a workspace-local stable file
+ID, and returns an immutable owning snapshot. Updates create a new generation;
+older snapshots remain valid until their owners free them, including after the
+workspace itself is deinitialized.
+
+```c
+Noc_Workspace workspace = {0};
+Noc_Document_Snapshot document = {0};
+
+noc_workspace_init(&workspace);
+if (noc_workspace_open_document(&workspace,
+                                "src/app.c",
+                                source,
+                                source_count,
+                                NOC_SOURCE_CLASS_PROJECT,
+                                &document) != NOC_WORKSPACE_OK) {
+    return 1;
+}
+
+/* output may alias the exact current snapshot for an in-place editor update. */
+if (noc_workspace_update_document(&workspace,
+                                  &document,
+                                  edited_source,
+                                  edited_source_count,
+                                  &document) != NOC_WORKSPACE_OK) {
+    return 1;
+}
+
+noc_workspace_deinit(&workspace);
+/* document still owns its immutable path, bytes, class, and physical line map. */
+noc_document_snapshot_free(&document);
+```
+
+Owning workspace/snapshot handles start as `{0}` and must not be shallow-copied;
+use `noc_document_snapshot_clone` for another owner. Open/update/lookups replace
+their output only on success. Stale, closed, and foreign snapshots cannot update
+or close another workspace's current revision. Paths use exact case-sensitive
+byte identity on every platform—callers choose any filesystem canonicalization.
+
+`noc_document_snapshot_location` and `noc_document_snapshot_offset` round-trip
+physical byte positions including EOF. Lines and columns are 1-based; CRLF is
+one newline while its two original bytes keep separate columns. This is a byte
+source map, not the UTF-16 position conversion that an LSP transport will add.
+The focused suite is available as `./nob test workspace`.
 
 ## Fuzzing
 

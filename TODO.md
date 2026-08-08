@@ -110,13 +110,13 @@ must be generated reproducibly as one self-contained `noc.h`.
 
 ## Milestone 6 — modular source and reproducible single-header release
 
-- [ ] Define public/internal module boundaries without breaking the 0.19 API.
-- [ ] Add deterministic amalgamation and make the checked-in root `noc.h` a
+- [x] Define public/internal module boundaries without breaking the 0.19 API.
+- [x] Add deterministic amalgamation and make the checked-in root `noc.h` a
       generated artifact with a clear generated-file banner.
-- [ ] Verify two generations are byte-identical and CI fails on a stale header.
-- [ ] Compile all tests/examples against the generated header with GCC, Clang,
+- [x] Verify two generations are byte-identical and CI fails on a stale header.
+- [x] Compile all tests/examples against the generated header with GCC, Clang,
       and MSVC; add C and C++ include-only smoke tests where supported.
-- [ ] Document the module contribution workflow and release generation command.
+- [x] Document the module contribution workflow and release generation command.
 
 ## Milestone 7 — source manager and incremental workspace
 

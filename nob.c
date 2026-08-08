@@ -20,6 +20,7 @@
 
 static const char *header_sources[] = {
     "src/noc.h",
+    "src/workspace.h",
 };
 
 typedef struct {
@@ -32,6 +33,7 @@ typedef struct {
 static const Test_Suite test_suites[] = {
     {"header-c", "tests/test_header.c", "build/noc-test-header-c" NOC_EXE, false},
     {"header-cpp", "tests/test_header.c", "build/noc-test-header-cpp" NOC_EXE, true},
+    {"workspace", "tests/test_workspace.c", "build/noc-test-workspace" NOC_EXE, false},
     {"lexing", "tests/test_lexing.c", "build/noc-test-lexing" NOC_EXE, false},
     {"syntax", "tests/test_syntax.c", "build/noc-test-syntax" NOC_EXE, false},
     {"c-analysis", "tests/test_c_analysis.c", "build/noc-test-c-analysis" NOC_EXE, false},
