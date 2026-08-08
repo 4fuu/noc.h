@@ -165,6 +165,7 @@ static void fuzz_preprocessor(Noc_Context *context,
     Noc_Workspace workspace = {0};
     Noc_Document_Snapshot snapshot = {0};
     Noc_Preprocessor_Unit unit = {0};
+    Noc_Macro_Environment environment = {0};
     size_t index;
     noc_workspace_init(&workspace);
     FUZZ_CHECK(noc_workspace_open_document(
@@ -252,6 +253,7 @@ static void fuzz_preprocessor(Noc_Context *context,
         }
         {
             size_t invalid_macro_count = 0;
+            size_t effective_macro_count = 0;
             for (index = 0; index < unit.macro_directive_count; ++index) {
                 const Noc_Macro_Directive *macro =
                     noc_macro_directive_at(&unit, index);
@@ -311,13 +313,32 @@ static void fuzz_preprocessor(Noc_Context *context,
                 FUZZ_CHECK(found_variadic == macro->variadic);
                 if (macro->status != NOC_MACRO_DIRECTIVE_STATUS_VALID) {
                     invalid_macro_count += 1;
+                } else if (directive->macro_definition_allowed) {
+                    FUZZ_CHECK(noc_macro_environment_apply(&environment,
+                                                           &unit,
+                                                           index) ==
+                               NOC_MACRO_ENVIRONMENT_OK);
+                    effective_macro_count += 1;
                 }
             }
             FUZZ_CHECK(invalid_macro_count == unit.invalid_macro_directive_count);
+            FUZZ_CHECK(noc_macro_environment_is_valid(&environment));
+            FUZZ_CHECK(environment.count == effective_macro_count);
+            for (index = 0; index < environment.count; ++index) {
+                const Noc_Macro_Environment_Entry *entry =
+                    noc_macro_environment_entry_at(&environment, index);
+                const Noc_Macro_Directive *macro =
+                    noc_macro_environment_entry_directive(&environment, index);
+                FUZZ_CHECK(entry != NULL && macro != NULL);
+                FUZZ_CHECK(entry->previous_entry_index == NOC_TOKEN_INDEX_NONE ||
+                           entry->previous_entry_index < index);
+                FUZZ_CHECK(macro->status == NOC_MACRO_DIRECTIVE_STATUS_VALID);
+            }
         }
         (void)noc_preprocessor_unit_validate_macro_policy(context, &unit);
         (void)noc_preprocessor_unit_validate_macro_directives(context, &unit);
     }
+    noc_macro_environment_free(&environment);
     noc_preprocessor_unit_free(&unit);
     noc_document_snapshot_free(&snapshot);
     noc_workspace_deinit(&workspace);

@@ -142,7 +142,9 @@ must be generated reproducibly as one self-contained `noc.h`.
       expansion with hide sets, stringification, token pasting, and built-ins.
   - [x] Publish recoverable object/function `#define` and `#undef` structure,
         parameter/replacement ranges, C11 variadic slots, and syntax status.
-  - [ ] Build the macro environment and implement expansion semantics.
+  - [x] Add a caller-ordered, multi-unit macro environment with definition/undef
+        history, policy filtering, stale generation checks, and lookup-before.
+  - [ ] Implement expansion semantics on top of the macro environment.
 - [ ] Implement includes, include guards/pragma-once behavior, conditionals,
       integer constant evaluation, diagnostics, and target predefined macros.
 - [ ] Implement disabled, trusted-only, project, and full macro policies without

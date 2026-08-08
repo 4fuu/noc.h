@@ -29,9 +29,9 @@
 #define NOC_H_INCLUDED
 
 #define NOC_VERSION_MAJOR 0
-#define NOC_VERSION_MINOR 25
+#define NOC_VERSION_MINOR 26
 #define NOC_VERSION_PATCH 0
-#define NOC_VERSION "0.25.0"
+#define NOC_VERSION "0.26.0"
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -566,6 +566,37 @@ typedef struct {
     size_t invalid_macro_directive_count;
 } Noc_Preprocessor_Unit;
 
+typedef enum {
+    NOC_MACRO_ENVIRONMENT_OK = 0,
+    NOC_MACRO_ENVIRONMENT_INVALID_ARGUMENT,
+    NOC_MACRO_ENVIRONMENT_INVALID_DIRECTIVE,
+    NOC_MACRO_ENVIRONMENT_DISABLED,
+    NOC_MACRO_ENVIRONMENT_STALE,
+    NOC_MACRO_ENVIRONMENT_GENERATION_EXHAUSTED,
+    NOC_MACRO_ENVIRONMENT_OUT_OF_MEMORY,
+} Noc_Macro_Environment_Status;
+
+/* One caller-selected effective #define/#undef event. The referenced unit and
+   its owning object must outlive the environment and must not be rebuilt. */
+typedef struct {
+    const Noc_Preprocessor_Unit *unit;
+    size_t unit_stream_generation;
+    size_t macro_directive_index;
+    /* Prior applied event for the same phase-2 logical name, or NONE. */
+    size_t previous_entry_index;
+} Noc_Macro_Environment_Entry;
+
+/* Owning, caller-driven macro state. Initialize to {0}; do not shallow-copy.
+   Apply directives in active preprocessing order, including include traversal.
+   This layer deliberately does not guess conditional activity. Mutation
+   invalidates returned entry pointers; failure preserves all prior state. */
+typedef struct {
+    Noc_Macro_Environment_Entry *items;
+    size_t count;
+    size_t capacity;
+    size_t generation;
+} Noc_Macro_Environment;
+
 NOCDEF const char *noc_source_class_name(Noc_Source_Class source_class);
 NOCDEF const char *noc_macro_policy_name(Noc_Macro_Policy policy);
 NOCDEF const char *noc_preprocessor_directive_kind_name(
@@ -604,6 +635,33 @@ NOCDEF bool noc_preprocessor_unit_validate_macro_policy(
 NOCDEF bool noc_preprocessor_unit_validate_macro_directives(
     Noc_Context *context,
     const Noc_Preprocessor_Unit *unit);
+NOCDEF const char *noc_macro_environment_status_name(
+    Noc_Macro_Environment_Status status);
+NOCDEF void noc_macro_environment_free(Noc_Macro_Environment *environment);
+NOCDEF bool noc_macro_environment_is_valid(
+    const Noc_Macro_Environment *environment);
+/* Applies one structurally valid, policy-enabled directive by index. #undef of
+   an absent name is still recorded as an event. Successful apply increments
+   environment.generation; every failure leaves the environment unchanged. */
+NOCDEF Noc_Macro_Environment_Status noc_macro_environment_apply(
+    Noc_Macro_Environment *environment,
+    const Noc_Preprocessor_Unit *unit,
+    size_t macro_directive_index);
+NOCDEF const Noc_Macro_Environment_Entry *noc_macro_environment_entry_at(
+    const Noc_Macro_Environment *environment,
+    size_t index);
+NOCDEF const Noc_Macro_Directive *noc_macro_environment_entry_directive(
+    const Noc_Macro_Environment *environment,
+    size_t index);
+/* Returns the active definition after considering entries [0, entry_limit).
+   An absent name or a latest matching #undef returns NULL. */
+NOCDEF const Noc_Macro_Environment_Entry *noc_macro_environment_lookup_before(
+    const Noc_Macro_Environment *environment,
+    Noc_Slice logical_name,
+    size_t entry_limit);
+NOCDEF const Noc_Macro_Environment_Entry *noc_macro_environment_lookup(
+    const Noc_Macro_Environment *environment,
+    Noc_Slice logical_name);
 
 /* Slices and tokens */
 NOCDEF Noc_Slice noc_slice_from_cstr(const char *text);

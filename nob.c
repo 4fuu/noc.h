@@ -23,6 +23,7 @@ static const char *header_sources[] = {
     "src/workspace.h",
     "src/macro_directives.h",
     "src/preprocessor.h",
+    "src/macro_environment.h",
 };
 
 typedef struct {
@@ -38,6 +39,7 @@ static const Test_Suite test_suites[] = {
     {"workspace", "tests/test_workspace.c", "build/noc-test-workspace" NOC_EXE, false},
     {"preprocessing-tokens", "tests/test_preprocessing_tokens.c", "build/noc-test-preprocessing-tokens" NOC_EXE, false},
     {"macro-directives", "tests/test_macro_directives.c", "build/noc-test-macro-directives" NOC_EXE, false},
+    {"macro-environment", "tests/test_macro_environment.c", "build/noc-test-macro-environment" NOC_EXE, false},
     {"preprocessor", "tests/test_preprocessor.c", "build/noc-test-preprocessor" NOC_EXE, false},
     {"lexing", "tests/test_lexing.c", "build/noc-test-lexing" NOC_EXE, false},
     {"syntax", "tests/test_syntax.c", "build/noc-test-syntax" NOC_EXE, false},

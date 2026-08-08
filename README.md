@@ -39,8 +39,8 @@ $ ./nob test
 
 Run one independently buildable suite on demand with `./nob test <suite>`.
 The suite names are `header-c`, `header-cpp`, `workspace`,
-`preprocessing-tokens`, `macro-directives`, `preprocessor`, `lexing`, `syntax`,
-`c-analysis`, `rewriter`, and `artifacts`, for example:
+`preprocessing-tokens`, `macro-directives`, `macro-environment`, `preprocessor`,
+`lexing`, `syntax`, `c-analysis`, `rewriter`, and `artifacts`, for example:
 
 ```console
 $ ./nob test c-analysis
@@ -94,6 +94,7 @@ must not create a private dependency back to a later module. Current ownership i
 | `src/workspace.h` | Workspace identities, immutable snapshots, edits, and line maps |
 | `src/macro_directives.h` | Recoverable `#define`/`#undef` grammar and macro query APIs |
 | `src/preprocessor.h` | Macro policy, directive inventory, lossless token construction, and unit transactions |
+| `src/macro_environment.h` | Caller-ordered effective macro state and definition history |
 
 New compiler phases get their own domain module and focused test suite; they are
 not appended to `src/noc.h` or an unrelated implementation merely because the
@@ -196,6 +197,24 @@ partial record. Batch callers may invoke
 This is structural parsing only: expansion, duplicate-parameter constraints,
 replacement `#`/`##` validation, hide sets, and built-ins remain later work. Run
 this coverage independently with `./nob test macro-directives`.
+
+`Noc_Macro_Environment` is the separate state layer used by future conditional,
+include, and expansion processing. A caller applies valid, policy-enabled macro
+directives in the order they are actually active; the environment never guesses
+whether an unresolved conditional branch executes. Entries may come from
+different preprocessing units, which lets an include traversal preserve one
+definition history. `#undef` events remain in that history, while
+`noc_macro_environment_lookup` returns only the currently active definition.
+`noc_macro_environment_lookup_before` provides a half-open historical query for
+IDE expansion previews and definition navigation.
+
+The environment borrows its referenced units. Those owning unit objects must
+outlive it and must not be rebuilt; generation checks reject a stale environment
+after a legal rebuild. Apply is transactional, increments the environment
+generation only on success, and rejects malformed or policy-disabled directives
+without changing prior state. Run this layer independently with
+`./nob test macro-environment`. It still does not perform macro expansion or
+conditional evaluation.
 
 Macro definition permission is explicit:
 
