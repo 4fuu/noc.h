@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$repo_root"
+
+started_at=$SECONDS
+echo "[orb resume] checking noc.h workspace"
+
+if ! command -v cc >/dev/null 2>&1; then
+    echo "[orb resume] missing C compiler; rerun .agents/setup" >&2
+    exit 1
+fi
+
+if [[ ! -x nob || nob.c -nt nob || nob.h -nt nob ]]; then
+    echo "[orb resume] refreshing nob bootstrap"
+    cc -o nob nob.c
+fi
+
+echo "[orb resume] ready in $((SECONDS - started_at))s"

@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$repo_root"
+
+started_at=$SECONDS
+echo "[orb setup] preparing noc.h in $repo_root"
+
+missing_packages=()
+command -v cc >/dev/null 2>&1 || missing_packages+=(build-essential)
+command -v git >/dev/null 2>&1 || missing_packages+=(git)
+
+if ((${#missing_packages[@]} > 0)); then
+    apt_command=(apt-get)
+    if ((EUID != 0)); then
+        if ! command -v sudo >/dev/null 2>&1; then
+            echo "[orb setup] sudo is required to install: ${missing_packages[*]}" >&2
+            exit 1
+        fi
+        apt_command=(sudo apt-get)
+    fi
+    package_started_at=$SECONDS
+    echo "[orb setup] installing missing packages: ${missing_packages[*]}"
+    "${apt_command[@]}" update
+    "${apt_command[@]}" install -y --no-install-recommends "${missing_packages[@]}"
+    echo "[orb setup] packages ready in $((SECONDS - package_started_at))s"
+else
+    echo "[orb setup] C toolchain and Git already available"
+fi
+
+build_started_at=$SECONDS
+if [[ ! -x nob || nob.c -nt nob || nob.h -nt nob ]]; then
+    echo "[orb setup] bootstrapping nob"
+    cc -o nob nob.c
+else
+    echo "[orb setup] existing nob bootstrap is current"
+fi
+
+echo "[orb setup] warming and verifying the build"
+CC=cc ./nob test
+echo "[orb setup] build verified in $((SECONDS - build_started_at))s"
+echo "[orb setup] complete in $((SECONDS - started_at))s"
