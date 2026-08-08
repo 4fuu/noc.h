@@ -29,9 +29,9 @@
 #define NOC_H_INCLUDED
 
 #define NOC_VERSION_MAJOR 0
-#define NOC_VERSION_MINOR 29
+#define NOC_VERSION_MINOR 30
 #define NOC_VERSION_PATCH 0
-#define NOC_VERSION "0.29.0"
+#define NOC_VERSION "0.30.0"
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -799,13 +799,16 @@ NOCDEF const char *noc_macro_expansion_token_origin_name(
 NOCDEF Noc_Macro_Expansion_Limits noc_macro_expansion_default_limits(void);
 NOCDEF void noc_macro_expansion_free(Noc_Macro_Expansion *expansion);
 NOCDEF bool noc_macro_expansion_is_valid(const Noc_Macro_Expansion *expansion);
-/* Expands object-like and fixed-arity function-like macros using environment
-   entries [0, entry_limit). Arguments are collected from the logical token
-   stream, prescanned once, substituted, and rescanned with provenance retained.
+/* Expands object-like, fixed-arity, and strict C11 variadic function-like macros
+   using environment entries [0, entry_limit). Arguments are collected from the
+   logical token stream, prescanned once, substituted, and rescanned with
+   provenance retained. For F(x, ...), F(value) omits the required variable
+   argument and is rejected, while F(value,) supplies it explicitly as empty;
+   V() is valid for V(...) and supplies one empty variable argument.
    The token limit bounds every live logical sequence, including raw input and
    argument-prescan sequences, rather than only the final rendered result.
-   Variadics and replacements requiring #, %:, ##, or %:%: are rejected rather
-   than emitted with incorrect semantics.
+   Replacements requiring #, %:, ##, or %:%: are rejected rather than emitted
+   with incorrect semantics.
    Success replaces output; every failure preserves the prior expansion. */
 NOCDEF Noc_Macro_Expansion_Status noc_macro_expansion_build(
     const Noc_Macro_Environment *environment,

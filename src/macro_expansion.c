@@ -493,24 +493,62 @@ static size_t noc__macro_replacement_parameter_index(
             &unit->macro_parameters[directive->parameter_begin + index];
         Noc_Token parameter_token =
             unit->preprocessing_tokens[parameter->token_index].token;
-        if (!parameter->variadic &&
-            noc__slices_logically_equal(token.text, parameter_token.text)) {
+        if ((parameter->variadic &&
+             noc_token_is_identifier(token, "__VA_ARGS__")) ||
+            (!parameter->variadic &&
+             noc__slices_logically_equal(token.text, parameter_token.text))) {
             return index;
         }
     }
     return NOC_TOKEN_INDEX_NONE;
 }
 
-static bool noc__macro_function_parameters_are_unique(
+static bool noc__macro_replacement_uses_va_args(
+    const Noc_Preprocessor_Unit *unit,
+    Noc_Token_Range replacement)
+{
+    size_t index;
+    for (index = replacement.begin; index < replacement.end; ++index) {
+        if (noc_token_is_identifier(unit->preprocessing_tokens[index].token,
+                                    "__VA_ARGS__")) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool noc__macro_directive_has_reserved_va_args_name(
+    const Noc_Preprocessor_Unit *unit,
+    const Noc_Macro_Directive *directive)
+{
+    return noc_token_is_identifier(
+        unit->preprocessing_tokens[directive->name_token_index].token,
+        "__VA_ARGS__");
+}
+
+static bool noc__macro_function_parameters_are_valid(
     const Noc_Preprocessor_Unit *unit,
     const Noc_Macro_Directive *directive)
 {
     size_t left;
+    bool found_variadic = false;
     for (left = 0; left < directive->parameter_count; ++left) {
         const Noc_Macro_Parameter *left_parameter =
             &unit->macro_parameters[directive->parameter_begin + left];
         size_t right;
-        if (left_parameter->variadic) continue;
+        if (left_parameter->variadic) {
+            if (found_variadic || left + 1 != directive->parameter_count) {
+                return false;
+            }
+            found_variadic = true;
+            continue;
+        }
+        if (noc_token_is_identifier(
+                unit->preprocessing_tokens[
+                    left_parameter->token_index].token,
+                "__VA_ARGS__")) {
+            return false;
+        }
         for (right = left + 1; right < directive->parameter_count; ++right) {
             const Noc_Macro_Parameter *right_parameter =
                 &unit->macro_parameters[directive->parameter_begin + right];
@@ -524,7 +562,7 @@ static bool noc__macro_function_parameters_are_unique(
             }
         }
     }
-    return true;
+    return found_variadic == directive->variadic;
 }
 
 static Noc_Macro_Expansion_Status noc__macro_expand_sequence(
@@ -543,6 +581,11 @@ static Noc_Macro_Expansion_Status noc__macro_expand_object(
     size_t frame_index;
     size_t replacement_hide_set;
     size_t index;
+    if (noc__macro_directive_has_reserved_va_args_name(entry->unit, directive) ||
+        noc__macro_replacement_uses_va_args(entry->unit,
+                                            directive->replacement_tokens)) {
+        return NOC_MACRO_EXPANSION_INVALID_DEFINITION;
+    }
     if (noc__macro_replacement_has_operator(entry->unit,
                                             directive->replacement_tokens,
                                             false)) {
@@ -597,11 +640,13 @@ static Noc_Macro_Expansion_Status noc__macro_expand_function(
     size_t invocation_hide_set;
     size_t frame_index;
     size_t replacement_hide_set;
+    size_t supplied_argument_count;
     size_t index;
-    if (directive->variadic) {
-        return NOC_MACRO_EXPANSION_UNSUPPORTED_VARIADIC;
-    }
-    if (!noc__macro_function_parameters_are_unique(entry->unit, directive)) {
+    if (noc__macro_directive_has_reserved_va_args_name(entry->unit, directive) ||
+        !noc__macro_function_parameters_are_valid(entry->unit, directive) ||
+        (!directive->variadic &&
+         noc__macro_replacement_uses_va_args(entry->unit,
+                                             directive->replacement_tokens))) {
         return NOC_MACRO_EXPANSION_INVALID_DEFINITION;
     }
     if (noc__macro_replacement_has_operator(entry->unit,
@@ -609,9 +654,14 @@ static Noc_Macro_Expansion_Status noc__macro_expand_function(
                                             true)) {
         return NOC_MACRO_EXPANSION_UNSUPPORTED_OPERATOR;
     }
-    if (!((invocation->argument_count == directive->parameter_count) ||
-          (invocation->argument_count == 0 &&
-           directive->parameter_count == 1))) {
+    supplied_argument_count = invocation->argument_count;
+    if (supplied_argument_count == 0 && directive->parameter_count != 0) {
+        supplied_argument_count = 1;
+    }
+    if ((directive->variadic &&
+         supplied_argument_count < directive->parameter_count) ||
+        (!directive->variadic &&
+         supplied_argument_count != directive->parameter_count)) {
         return NOC_MACRO_EXPANSION_ARGUMENT_COUNT_MISMATCH;
     }
     if (directive->parameter_count > SIZE_MAX / sizeof(*arguments)) {
@@ -624,7 +674,15 @@ static Noc_Macro_Expansion_Status noc__macro_expand_function(
         if (!arguments) return NOC_MACRO_EXPANSION_OUT_OF_MEMORY;
     }
     for (index = 0; index < directive->parameter_count; ++index) {
-        if (invocation->argument_count == 0) {
+        const Noc_Macro_Parameter *parameter =
+            &entry->unit->macro_parameters[directive->parameter_begin + index];
+        if (parameter->variadic && invocation->argument_count != 0) {
+            arguments[index].source_tokens.begin =
+                invocation->arguments[index].tokens.begin;
+            arguments[index].source_tokens.end =
+                invocation->arguments[
+                    invocation->argument_count - 1].tokens.end;
+        } else if (invocation->argument_count == 0) {
             arguments[index].source_tokens.begin = invocation->open_token_index + 1;
             arguments[index].source_tokens.end = invocation->open_token_index + 1;
         } else {

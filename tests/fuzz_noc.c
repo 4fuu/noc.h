@@ -550,7 +550,8 @@ int main(void)
         "#if FLAG\n@fuzz(\n#endif\n42\n#if FLAG\n)\n#endif\n",
         "F(a, (b, c),) G(unterminated\n",
         ("#define ID(x) x\n#define CALL(f,x) f(x)\n"
-         "#define OPEN ID(\nCALL(ID, ID(1)) OPEN 2)\n"),
+         "#define OPEN ID(\n#define V(...) __VA_ARGS__\n"
+         "CALL(ID, ID(1)) OPEN 2) V(ID(3),4)\n"),
         "([{}]) <::> %:%: /\\\n* block *\\\n/",
         "\"string\\n\\x41\" '\\123' 0x1p+2",
     };

@@ -42,8 +42,8 @@ The suite names are `header-c`, `header-cpp`, `public-header-c`,
 `public-header-cpp`, `modules`, `workspace`,
 `preprocessing-tokens`, `macro-directives`, `macro-environment`,
 `macro-invocations`, `macro-expansion`, `function-macro-expansion`,
-`preprocessor`, `lexing`, `syntax`, `c-analysis`, `rewriter`, and `artifacts`,
-for example:
+`variadic-macro-expansion`, `preprocessor`, `lexing`, `syntax`, `c-analysis`,
+`rewriter`, and `artifacts`, for example:
 
 ```console
 $ ./nob test c-analysis
@@ -246,13 +246,16 @@ without changing prior state. Run this layer independently with
 `./nob test macro-environment`. It still does not perform macro expansion or
 conditional evaluation.
 
-`noc_macro_expansion_build` performs bounded object-like and fixed-arity
-function-like macro substitution and recursive rescan against a selected
-environment history prefix. Function arguments are collected from the logical
-token stream, prescanned, substituted, and rescanned, including invocations whose
-name and parentheses were assembled across replacement/input boundaries. Direct
-and indirect recursion use token hide sets rather than provenance ancestry, so
-nested cases such as `ID(ID(3))` retain standard rescan behavior.
+`noc_macro_expansion_build` performs bounded object-like, fixed-arity, and strict
+C11 variadic function-like macro substitution and recursive rescan against a
+selected environment history prefix. Function arguments are collected from the
+logical token stream, prescanned, substituted, and rescanned, including
+invocations whose name and parentheses were assembled across replacement/input
+boundaries. Multiple variable arguments preserve their separating commas and
+substitute through `__VA_ARGS__`; reserved-name and omitted-variable-argument
+constraints are rejected rather than treated as GNU extensions. Direct and
+indirect recursion use token hide sets rather than provenance ancestry, so nested
+cases such as `ID(ID(3))` retain standard rescan behavior.
 
 Every result token records its physical source unit, preprocessing-token index,
 input/argument/replacement origin, and expansion frame. Frames link nested
@@ -260,11 +263,12 @@ expansions to both their invocation token and environment definition, providing
 the provenance needed by later diagnostics and IDE expansion previews. Expansion
 limits bound provenance depth, every live logical token sequence, and total
 expansion frames. Limit failures, incomplete or mismatched calls, malformed
-definitions, variadics, and unsupported `#`/`%:`/`##`/`%:%:` operators preserve
+definitions, and unsupported `#`/`%:`/`##`/`%:%:` operators preserve
 the previous owning result rather than emitting a known-incorrect approximation.
 `noc_macro_expansion_render` concatenates exact physical token spellings for
 inspection. Run the object and function coverage independently with
-`./nob test macro-expansion` and `./nob test function-macro-expansion`.
+`./nob test macro-expansion`, `./nob test function-macro-expansion`, and
+`./nob test variadic-macro-expansion`.
 
 Macro definition permission is explicit:
 
@@ -788,11 +792,11 @@ and node references must not escape the callback.
 ## Current boundary
 
 This version handles explicit token/AST-assisted transformations, a lossless
-delimiter tree, lightweight C structure discovery, and bounded object/fixed-arity
-function macro inspection expansion. It does not provide a complete integrated
-preprocessor, variadic/stringify/paste/built-in macro expansion, a semantic C AST,
-typedef resolution, or a C type system. Rules inside preprocessor directives are
-left untouched. More
+delimiter tree, lightweight C structure discovery, and bounded
+object/fixed-arity/C11-variadic macro inspection expansion. It does not provide a
+complete integrated preprocessor, stringify/paste/built-in macro expansion, a
+semantic C AST, typedef resolution, or a C type system. Rules inside preprocessor
+directives are left untouched. More
 structured statement and declaration helpers can be added without changing the
 registration model.
 

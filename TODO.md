@@ -152,9 +152,12 @@ must be generated reproducibly as one self-contained `noc.h`.
         lossless argument collection and incomplete editor-input representation.
   - [x] Add fixed-arity function-like argument prescan, substitution, and
         cross-boundary rescan using a shared logical-token collector without
-        weakening hide-set
-        semantics or collapsing per-token provenance into physical source ranges.
-  - [ ] Add stringification, token pasting, variadic substitution, and built-ins.
+        weakening hide-set semantics or collapsing per-token provenance into
+        physical source ranges.
+  - [x] Add strict C11 variadic argument prescan and `__VA_ARGS__` substitution,
+        including explicit empty arguments, comma provenance, and reserved-name
+        validation without accepting GNU omitted-argument behavior.
+  - [ ] Add stringification, token pasting, and built-ins.
 - [ ] Implement includes, include guards/pragma-once behavior, conditionals,
       integer constant evaluation, diagnostics, and target predefined macros.
 - [ ] Implement disabled, trusted-only, project, and full macro policies without
