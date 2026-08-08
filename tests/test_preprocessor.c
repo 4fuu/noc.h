@@ -140,6 +140,10 @@ static void test_directive_inventory(void)
         CHECK(noc_slice_equal(directive->spelling,
                               unit.stream.items[directive->token_index].text));
         CHECK(strcmp(directive->location.path, "src/policy.c") == 0);
+        CHECK(directive->preprocessing_tokens.begin <
+              directive->preprocessing_tokens.end);
+        CHECK(directive->preprocessing_tokens.end <=
+              unit.preprocessing_token_count);
         if (directive->kind == NOC_PREPROCESSOR_DIRECTIVE_DEFINE ||
             directive->kind == NOC_PREPROCESSOR_DIRECTIVE_UNDEF) {
             CHECK(!directive->macro_definition_allowed);
@@ -188,9 +192,12 @@ static void test_policy_validation_and_transactionality(void)
     Noc_Document_Snapshot invalid = {0};
     Noc_Document_Snapshot plain_snapshot = {0};
     Noc_Preprocessor_Unit unit = {0};
+    Noc_Syntax_Tree borrowed_tree = {0};
     Diagnostic_State diagnostics = {0};
     Noc_Preprocessor_Directive *preserved_items;
+    Noc_Preprocessing_Token *preserved_tokens;
     Noc_File_Id preserved_file;
+    size_t preserved_generation;
     noc_context_init(&context);
     noc_context_set_diagnostic(&context, count_diagnostics, &diagnostics);
     noc_workspace_init(&workspace);
@@ -207,25 +214,38 @@ static void test_policy_validation_and_transactionality(void)
     CHECK(unit.disabled_macro_definition_count == 0);
     CHECK(noc_preprocessor_unit_validate_macro_policy(&context, &unit));
     CHECK(diagnostics.errors == 0);
+    CHECK(noc_syntax_tree_build(&context, &unit.stream, &borrowed_tree));
+    CHECK(noc_syntax_tree_is_valid(&borrowed_tree));
 
     preserved_items = unit.items;
+    preserved_tokens = unit.preprocessing_tokens;
     preserved_file = unit.file_id;
+    preserved_generation = unit.stream.generation;
     CHECK(!noc_preprocessor_unit_build(&context,
                                        &trusted,
                                        (Noc_Macro_Policy)99,
                                        &unit));
     CHECK(unit.items == preserved_items && unit.file_id == preserved_file);
+    CHECK(unit.preprocessing_tokens == preserved_tokens);
+    CHECK(unit.stream.generation == preserved_generation);
+    CHECK(noc_syntax_tree_is_valid(&borrowed_tree));
     CHECK(diagnostics.errors == 1);
     CHECK(!noc_preprocessor_unit_build(&context,
                                        &invalid,
                                        NOC_MACROS_FULL,
                                        &unit));
     CHECK(unit.items == preserved_items && unit.file_id == preserved_file);
+    CHECK(unit.preprocessing_tokens == preserved_tokens);
+    CHECK(unit.stream.generation == preserved_generation);
+    CHECK(noc_syntax_tree_is_valid(&borrowed_tree));
 
     CHECK(noc_preprocessor_unit_build(&context,
                                       &trusted,
                                       NOC_MACROS_DISABLED,
                                       &unit));
+    CHECK(unit.stream.generation == preserved_generation + 1);
+    CHECK(!noc_syntax_tree_is_valid(&borrowed_tree));
+    noc_syntax_tree_free(&borrowed_tree);
     CHECK(unit.disabled_macro_definition_count == 2);
     CHECK(!noc_preprocessor_unit_validate_macro_policy(&context, &unit));
     CHECK(diagnostics.errors == 3);

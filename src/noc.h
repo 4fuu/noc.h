@@ -29,9 +29,9 @@
 #define NOC_H_INCLUDED
 
 #define NOC_VERSION_MAJOR 0
-#define NOC_VERSION_MINOR 23
+#define NOC_VERSION_MINOR 24
 #define NOC_VERSION_PATCH 0
-#define NOC_VERSION "0.23.0"
+#define NOC_VERSION "0.24.0"
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -78,7 +78,9 @@ typedef enum {
     NOC_TOKEN_LINE_COMMENT,
     NOC_TOKEN_BLOCK_COMMENT,
     NOC_TOKEN_PREPROCESSOR,
+    NOC_TOKEN_HEADER_NAME,
     NOC_TOKEN_PUNCTUATOR,
+    NOC_TOKEN_OTHER,
     NOC_TOKEN_INVALID,
 } Noc_Token_Kind;
 
@@ -441,10 +443,11 @@ NOCDEF Noc_Workspace_Status noc_document_snapshot_offset(
     size_t byte_column,
     size_t *output);
 
-/* Policy-aware preprocessor inventory. Building an inventory recognizes source
-   directives regardless of whether policy permits them. Validation is a
-   separate operation so IDEs can still inspect disabled constructs. Macro
-   expansion itself is implemented by later preprocessor milestones. */
+/* Policy-aware preprocessing frontend. Building a unit recognizes source
+   directives regardless of whether policy permits them and also publishes a
+   lossless preprocessing-token view. Validation is a separate operation so
+   IDEs can still inspect disabled constructs. Macro expansion itself is
+   implemented by later preprocessor milestones. */
 typedef enum {
     NOC_MACROS_DISABLED = 0,
     NOC_MACROS_TRUSTED_ONLY,
@@ -472,9 +475,27 @@ typedef enum {
     NOC_PREPROCESSOR_DIRECTIVE_UNKNOWN,
 } Noc_Preprocessor_Directive_Kind;
 
+typedef enum {
+    NOC_PREPROCESSING_TOKEN_SOURCE = 0,
+    NOC_PREPROCESSING_TOKEN_DIRECTIVE_MARKER,
+    NOC_PREPROCESSING_TOKEN_DIRECTIVE_KEYWORD,
+    NOC_PREPROCESSING_TOKEN_DIRECTIVE_BODY,
+    NOC_PREPROCESSING_TOKEN_DIRECTIVE_TRIVIA,
+} Noc_Preprocessing_Token_Role;
+
+typedef struct {
+    Noc_Token token;
+    Noc_Preprocessing_Token_Role role;
+    /* NOC_TOKEN_INDEX_NONE for tokens outside preprocessing directives. */
+    size_t directive_index;
+} Noc_Preprocessing_Token;
+
 typedef struct {
     Noc_Preprocessor_Directive_Kind kind;
+    /* Index of the original opaque directive in stream. */
     size_t token_index;
+    /* Half-open range in Noc_Preprocessor_Unit.preprocessing_tokens. */
+    Noc_Token_Range preprocessing_tokens;
     Noc_Slice spelling;
     Noc_Slice keyword;
     Noc_Slice payload;
@@ -482,8 +503,14 @@ typedef struct {
     bool macro_definition_allowed;
 } Noc_Preprocessor_Directive;
 
+/* Owning handle: initialize to {0}, do not shallow-copy, and release with
+   noc_preprocessor_unit_free. Successful rebuild invalidates pointers and
+   derived views borrowed from the old unit; failed rebuild preserves them. */
 typedef struct {
     Noc_Token_Stream stream;
+    Noc_Preprocessing_Token *preprocessing_tokens;
+    size_t preprocessing_token_count;
+    size_t preprocessing_token_capacity;
     Noc_Preprocessor_Directive *items;
     size_t count;
     size_t capacity;
@@ -498,6 +525,8 @@ NOCDEF const char *noc_source_class_name(Noc_Source_Class source_class);
 NOCDEF const char *noc_macro_policy_name(Noc_Macro_Policy policy);
 NOCDEF const char *noc_preprocessor_directive_kind_name(
     Noc_Preprocessor_Directive_Kind kind);
+NOCDEF const char *noc_preprocessing_token_role_name(
+    Noc_Preprocessing_Token_Role role);
 NOCDEF bool noc_macro_policy_allows_definition(Noc_Macro_Policy policy,
                                                Noc_Source_Class source_class);
 NOCDEF bool noc_preprocessor_unit_build(Noc_Context *context,
@@ -507,6 +536,9 @@ NOCDEF bool noc_preprocessor_unit_build(Noc_Context *context,
 NOCDEF void noc_preprocessor_unit_free(Noc_Preprocessor_Unit *unit);
 NOCDEF bool noc_preprocessor_unit_is_valid(const Noc_Preprocessor_Unit *unit);
 NOCDEF const Noc_Preprocessor_Directive *noc_preprocessor_directive_at(
+    const Noc_Preprocessor_Unit *unit,
+    size_t index);
+NOCDEF const Noc_Preprocessing_Token *noc_preprocessor_token_at(
     const Noc_Preprocessor_Unit *unit,
     size_t index);
 /* Reports every disabled #define/#undef through context but leaves unit valid. */
@@ -954,6 +986,31 @@ static size_t noc__skip_splices(const char *source, size_t count, size_t positio
     return position;
 }
 
+static size_t noc__universal_character_name_end(const char *source,
+                                                size_t count,
+                                                size_t start)
+{
+    size_t position;
+    size_t digit_count;
+    size_t index;
+    if (start >= count || source[start] != '\\') return start;
+    position = noc__skip_splices(source, count, start + 1);
+    if (position >= count || (source[position] != 'u' && source[position] != 'U')) {
+        return start;
+    }
+    digit_count = source[position] == 'u' ? 4 : 8;
+    position += 1;
+    for (index = 0; index < digit_count; ++index) {
+        position = noc__skip_splices(source, count, position);
+        if (position >= count ||
+            !isxdigit((unsigned char)source[position])) {
+            return start;
+        }
+        position += 1;
+    }
+    return position;
+}
+
 static bool noc__slice_logically_equal_cstr(Noc_Slice slice, const char *text)
 {
     size_t source_index = 0;
@@ -1067,7 +1124,9 @@ NOCDEF const char *noc_token_kind_name(Noc_Token_Kind kind)
     case NOC_TOKEN_LINE_COMMENT: return "line comment";
     case NOC_TOKEN_BLOCK_COMMENT: return "block comment";
     case NOC_TOKEN_PREPROCESSOR: return "preprocessor directive";
+    case NOC_TOKEN_HEADER_NAME: return "header name";
     case NOC_TOKEN_PUNCTUATOR: return "punctuator";
+    case NOC_TOKEN_OTHER: return "non-whitespace character";
     case NOC_TOKEN_INVALID: return "invalid token";
     }
     return "unknown token";
@@ -1204,16 +1263,6 @@ static size_t noc__scan_preprocessor(Noc_Lexer *lexer, size_t start)
             continue;
         }
         c = lexer->source[i];
-        if (c == '\n' || c == '\r') {
-            i += 1;
-            if (c == '\r' && i < lexer->source_count && lexer->source[i] == '\n') i += 1;
-            if (block_comment) lexer->continuing_block_comment = true;
-            return i;
-        }
-        if (line_comment) {
-            i += 1;
-            continue;
-        }
         if (block_comment) {
             if (noc__logical_pair(lexer->source,
                                   lexer->source_count,
@@ -1226,6 +1275,15 @@ static size_t noc__scan_preprocessor(Noc_Lexer *lexer, size_t start)
             } else {
                 i += 1;
             }
+            continue;
+        }
+        if (c == '\n' || c == '\r') {
+            i += 1;
+            if (c == '\r' && i < lexer->source_count && lexer->source[i] == '\n') i += 1;
+            return i;
+        }
+        if (line_comment) {
+            i += 1;
             continue;
         }
         if (quote != 0) {
@@ -1443,9 +1501,6 @@ NOCDEF Noc_Token noc_lexer_next(Noc_Lexer *lexer)
                                 start,
                                 end,
                                 location);
-        if (noc__contains_newline(token.text.data, token.text.count)) {
-            lexer->beginning_of_line = true;
-        }
         return token;
     }
 
@@ -1479,15 +1534,27 @@ NOCDEF Noc_Token noc_lexer_next(Noc_Lexer *lexer)
         return token;
     }
 
-    if (noc__is_identifier_start((unsigned char)lexer->source[start])) {
-        end = start + 1;
+    end = noc__universal_character_name_end(lexer->source,
+                                            lexer->source_count,
+                                            start);
+    if (noc__is_identifier_start((unsigned char)lexer->source[start]) ||
+        end != start) {
+        if (end == start) end = start + 1;
         while (end < lexer->source_count) {
             size_t next = noc__skip_splices(lexer->source, lexer->source_count, end);
-            if (next >= lexer->source_count ||
-                !noc__is_identifier_continue((unsigned char)lexer->source[next])) {
+            size_t ucn_end;
+            if (next >= lexer->source_count) break;
+            ucn_end = noc__universal_character_name_end(lexer->source,
+                                                        lexer->source_count,
+                                                        next);
+            if (ucn_end != next) {
+                end = ucn_end;
+            } else if (noc__is_identifier_continue(
+                           (unsigned char)lexer->source[next])) {
+                end = next + 1;
+            } else {
                 break;
             }
-            end = next + 1;
         }
         lexer->beginning_of_line = false;
         return noc__make_token(lexer, NOC_TOKEN_IDENTIFIER, start, end, location);
@@ -1505,12 +1572,19 @@ NOCDEF Noc_Token noc_lexer_next(Noc_Lexer *lexer)
             size_t next = noc__skip_splices(lexer->source,
                                             lexer->source_count,
                                             end);
+            size_t ucn_end;
             unsigned char c;
             if (next >= lexer->source_count) break;
             c = (unsigned char)lexer->source[next];
+            ucn_end = noc__universal_character_name_end(lexer->source,
+                                                        lexer->source_count,
+                                                        next);
             if (isalnum(c) || c == '_' || c == '.') {
                 previous = c;
                 end = next + 1;
+            } else if (ucn_end != next) {
+                previous = 0;
+                end = ucn_end;
             } else if ((c == '+' || c == '-') &&
                        (previous == 'e' || previous == 'E' ||
                         previous == 'p' || previous == 'P')) {

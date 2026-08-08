@@ -178,14 +178,77 @@ static void fuzz_preprocessor(Noc_Context *context,
                                     &snapshot,
                                     (Noc_Macro_Policy)(selector % 4u),
                                     &unit)) {
+        size_t source_offset = 0;
         FUZZ_CHECK(noc_preprocessor_unit_is_valid(&unit));
+        for (index = 0; index < unit.preprocessing_token_count; ++index) {
+            const Noc_Preprocessing_Token *token =
+                noc_preprocessor_token_at(&unit, index);
+            Noc_Location expected_location;
+            FUZZ_CHECK(token != NULL);
+            FUZZ_CHECK(token->token.kind != NOC_TOKEN_PREPROCESSOR);
+            FUZZ_CHECK(token->token.location.offset == source_offset);
+            FUZZ_CHECK(token->token.text.data == unit.stream.source + source_offset);
+            FUZZ_CHECK(token->token.text.count <= size - source_offset);
+            FUZZ_CHECK(token->role >= NOC_PREPROCESSING_TOKEN_SOURCE &&
+                       token->role <= NOC_PREPROCESSING_TOKEN_DIRECTIVE_TRIVIA);
+            FUZZ_CHECK(noc_document_snapshot_location(&snapshot,
+                                                      source_offset,
+                                                      &expected_location) ==
+                       NOC_WORKSPACE_OK);
+            FUZZ_CHECK(token->token.location.line == expected_location.line);
+            FUZZ_CHECK(token->token.location.column == expected_location.column);
+            source_offset += token->token.text.count;
+            if (token->directive_index == NOC_TOKEN_INDEX_NONE) {
+                FUZZ_CHECK(token->role == NOC_PREPROCESSING_TOKEN_SOURCE);
+            } else {
+                FUZZ_CHECK(token->directive_index < unit.count);
+            }
+        }
+        FUZZ_CHECK(source_offset == size);
+        FUZZ_CHECK(unit.preprocessing_tokens[
+                       unit.preprocessing_token_count - 1].token.kind ==
+                   NOC_TOKEN_EOF);
+        FUZZ_CHECK(unit.preprocessing_tokens[
+                       unit.preprocessing_token_count - 1].token.text.count == 0);
+        FUZZ_CHECK(unit.preprocessing_tokens[
+                       unit.preprocessing_token_count - 1].role ==
+                   NOC_PREPROCESSING_TOKEN_SOURCE);
+        FUZZ_CHECK(unit.preprocessing_tokens[
+                       unit.preprocessing_token_count - 1].directive_index ==
+                   NOC_TOKEN_INDEX_NONE);
         for (index = 0; index < unit.count; ++index) {
             const Noc_Preprocessor_Directive *directive =
                 noc_preprocessor_directive_at(&unit, index);
+            const Noc_Preprocessing_Token *first;
+            const Noc_Preprocessing_Token *last;
+            size_t directive_token_index;
+            Noc_Slice spelling;
             FUZZ_CHECK(directive != NULL);
             FUZZ_CHECK(directive->token_index < unit.stream.count);
             FUZZ_CHECK(unit.stream.items[directive->token_index].kind ==
                        NOC_TOKEN_PREPROCESSOR);
+            FUZZ_CHECK(directive->preprocessing_tokens.begin <
+                       directive->preprocessing_tokens.end);
+            FUZZ_CHECK(directive->preprocessing_tokens.end <=
+                       unit.preprocessing_token_count);
+            first = noc_preprocessor_token_at(
+                &unit,
+                directive->preprocessing_tokens.begin);
+            last = noc_preprocessor_token_at(
+                &unit,
+                directive->preprocessing_tokens.end - 1);
+            FUZZ_CHECK(first != NULL && last != NULL);
+            spelling.data = first->token.text.data;
+            spelling.count = (size_t)(last->token.text.data +
+                                      last->token.text.count -
+                                      spelling.data);
+            FUZZ_CHECK(noc_slice_equal(spelling, directive->spelling));
+            for (directive_token_index = directive->preprocessing_tokens.begin;
+                 directive_token_index < directive->preprocessing_tokens.end;
+                 ++directive_token_index) {
+                FUZZ_CHECK(unit.preprocessing_tokens[
+                               directive_token_index].directive_index == index);
+            }
         }
         (void)noc_preprocessor_unit_validate_macro_policy(context, &unit);
     }

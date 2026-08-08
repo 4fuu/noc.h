@@ -38,8 +38,9 @@ $ ./nob test
 ```
 
 Run one independently buildable suite on demand with `./nob test <suite>`.
-The suite names are `header-c`, `header-cpp`, `workspace`, `preprocessor`,
-`lexing`, `syntax`, `c-analysis`, `rewriter`, and `artifacts`, for example:
+The suite names are `header-c`, `header-cpp`, `workspace`,
+`preprocessing-tokens`, `preprocessor`, `lexing`, `syntax`, `c-analysis`,
+`rewriter`, and `artifacts`, for example:
 
 ```console
 $ ./nob test c-analysis
@@ -137,14 +138,29 @@ failure, and stale snapshots leave both the workspace and output unchanged. An
 empty batch intentionally creates a new generation with identical content. The
 focused suite is available as `./nob test workspace`.
 
-## Macro policy and directive inventory
+## Preprocessing tokens, directives, and macro policy
 
-`noc_preprocessor_unit_build` inventories every directive from an immutable
-document snapshot while retaining exact directive spelling, keyword, payload,
-physical location, source class, file ID, and generation. It recognizes null,
-unknown, C11, and selected newer directive names without pretending to expand
-macros yet. The unit owns its copied token stream, so IDE queries remain valid
-after the source snapshot or workspace is released.
+`noc_preprocessor_unit_build` produces a lossless preprocessing-token view and
+inventories every directive from an immutable document snapshot. Unlike the
+compatibility lexer stream, this view does not collapse a directive into one
+opaque token: markers, keywords, body tokens, comments, whitespace, and physical
+newlines remain independently queryable. `#include` header names are identified
+as `NOC_TOKEN_HEADER_NAME` (including empty spellings, whose validity is checked
+later), while otherwise unmatched non-whitespace characters use
+`NOC_TOKEN_OTHER`. C11 universal-character-name spellings remain part of their
+identifier or preprocessing-number token. Every token retains an exact source
+slice and physical location plus a semantic role and owning directive index;
+each directive publishes its half-open preprocessing-token range.
+An incomplete directive may publish `NOC_TOKEN_INVALID` inside an otherwise
+queryable unit, allowing editor clients to retain structure while text is typed.
+
+`noc_preprocessor_token_at` and `noc_preprocessing_token_role_name` are suitable
+for IDE semantic tokenization and later macro provenance queries. Directive
+records also retain exact spelling, keyword, payload, source class, file ID, and
+document generation. Null, unknown, C11, and selected newer directive names are
+recognized without pretending to expand macros yet. The unit owns its copied
+source and token storage, so queries remain valid after the source snapshot or
+workspace is released.
 
 Macro definition permission is explicit:
 
@@ -158,9 +174,10 @@ validation are separate: the inventory always records a recognized `#define` or
 `#undef`, including when disabled, while
 `noc_preprocessor_unit_validate_macro_policy` emits precise feature-disabled
 diagnostics. This prevents tooling from reporting a policy violation as a parse
-error. Expansion policy, recursive hide sets, `#`/`##`, includes, and provenance
-remain subsequent preprocessor milestones. Run this suite independently with
-`./nob test preprocessor`.
+error. Expansion policy, recursive hide sets, `#`/`##`, include loading, and
+expansion provenance remain subsequent preprocessor milestones. Run the token
+and recovery coverage independently with `./nob test preprocessing-tokens`, or
+the directive/policy coverage with `./nob test preprocessor`.
 
 ## Fuzzing
 

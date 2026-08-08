@@ -61,6 +61,19 @@ NOCDEF const char *noc_preprocessor_directive_kind_name(
     return "unknown";
 }
 
+NOCDEF const char *noc_preprocessing_token_role_name(
+    Noc_Preprocessing_Token_Role role)
+{
+    switch (role) {
+    case NOC_PREPROCESSING_TOKEN_SOURCE: return "source";
+    case NOC_PREPROCESSING_TOKEN_DIRECTIVE_MARKER: return "directive-marker";
+    case NOC_PREPROCESSING_TOKEN_DIRECTIVE_KEYWORD: return "directive-keyword";
+    case NOC_PREPROCESSING_TOKEN_DIRECTIVE_BODY: return "directive-body";
+    case NOC_PREPROCESSING_TOKEN_DIRECTIVE_TRIVIA: return "directive-trivia";
+    }
+    return "unknown";
+}
+
 NOCDEF bool noc_macro_policy_allows_definition(Noc_Macro_Policy policy,
                                                Noc_Source_Class source_class)
 {
@@ -225,9 +238,149 @@ static bool noc__preprocessor_unit_append(Noc_Preprocessor_Unit *unit,
     return true;
 }
 
+static bool noc__preprocessor_token_append(
+    Noc_Preprocessor_Unit *unit,
+    Noc_Token token,
+    Noc_Preprocessing_Token_Role role,
+    size_t directive_index)
+{
+    Noc_Preprocessing_Token *items;
+    size_t capacity;
+    if (unit->preprocessing_token_count < unit->preprocessing_token_capacity) {
+        Noc_Preprocessing_Token *item =
+            &unit->preprocessing_tokens[unit->preprocessing_token_count++];
+        item->token = token;
+        item->role = role;
+        item->directive_index = directive_index;
+        return true;
+    }
+    if (unit->preprocessing_token_capacity == 0) {
+        capacity = 32;
+    } else {
+        if (unit->preprocessing_token_capacity > SIZE_MAX / 2) return false;
+        capacity = unit->preprocessing_token_capacity * 2;
+    }
+    if (capacity > SIZE_MAX / sizeof(*items)) return false;
+    items = (Noc_Preprocessing_Token *)realloc(
+        unit->preprocessing_tokens,
+        capacity * sizeof(*items));
+    if (!items) return false;
+    unit->preprocessing_tokens = items;
+    unit->preprocessing_token_capacity = capacity;
+    return noc__preprocessor_token_append(unit, token, role, directive_index);
+}
+
+static bool noc__preprocessor_scan_header_name(Noc_Lexer *lexer,
+                                               Noc_Token *token)
+{
+    size_t start = lexer->cursor;
+    size_t end;
+    char close;
+    Noc_Location location;
+    if (start >= lexer->source_count ||
+        (lexer->source[start] != '<' && lexer->source[start] != '"')) {
+        return false;
+    }
+    close = lexer->source[start] == '<' ? '>' : '"';
+    location.path = lexer->path;
+    location.offset = start;
+    location.line = lexer->line;
+    location.column = lexer->column;
+    end = start + 1;
+    while (end < lexer->source_count) {
+        size_t splice = noc__splice_length(lexer->source,
+                                           lexer->source_count,
+                                           end);
+        if (splice != 0) {
+            end += splice;
+            continue;
+        }
+        if (lexer->source[end] == close) {
+            end += 1;
+            *token = noc__make_token(lexer,
+                                     NOC_TOKEN_HEADER_NAME,
+                                     start,
+                                     end,
+                                     location);
+            lexer->beginning_of_line = false;
+            return true;
+        }
+        if (lexer->source[end] == '\r' || lexer->source[end] == '\n') return false;
+        end += 1;
+    }
+    return false;
+}
+
+static bool noc__preprocessor_is_c_punctuator(Noc_Token token)
+{
+    static const char single_character_punctuators[] =
+        "[](){}.&*+-~!/%<>^|?:;=,#";
+    return token.kind == NOC_TOKEN_PUNCTUATOR &&
+           (token.text.count != 1 ||
+            strchr(single_character_punctuators, token.text.data[0]) != NULL);
+}
+
+static bool noc__preprocessor_tokenize_directive(
+    Noc_Preprocessor_Unit *unit,
+    Noc_Token directive_token,
+    Noc_Preprocessor_Directive_Kind directive_kind,
+    size_t directive_index)
+{
+    Noc_Lexer lexer;
+    unsigned int significant_state = 0;
+    bool include_operand_pending = false;
+    noc_lexer_init(&lexer,
+                   directive_token.location.path,
+                   directive_token.text.data,
+                   directive_token.text.count);
+    lexer.beginning_of_line = false;
+    lexer.line = directive_token.location.line;
+    lexer.column = directive_token.location.column;
+    for (;;) {
+        Noc_Preprocessing_Token_Role role;
+        Noc_Token token;
+        if (include_operand_pending &&
+            noc__preprocessor_scan_header_name(&lexer, &token)) {
+            include_operand_pending = false;
+        } else {
+            token = noc_lexer_next(&lexer);
+        }
+        token.location.offset += directive_token.location.offset;
+        if (token.kind == NOC_TOKEN_EOF) break;
+        if (token.kind == NOC_TOKEN_PUNCTUATOR &&
+            !noc__preprocessor_is_c_punctuator(token)) {
+            token.kind = NOC_TOKEN_OTHER;
+        }
+        if (noc_token_is_trivia(token)) {
+            role = NOC_PREPROCESSING_TOKEN_DIRECTIVE_TRIVIA;
+        } else if (significant_state == 0) {
+            role = NOC_PREPROCESSING_TOKEN_DIRECTIVE_MARKER;
+            significant_state = 1;
+        } else if (significant_state == 1) {
+            role = NOC_PREPROCESSING_TOKEN_DIRECTIVE_KEYWORD;
+            significant_state = 2;
+            include_operand_pending =
+                directive_kind == NOC_PREPROCESSOR_DIRECTIVE_INCLUDE;
+        } else {
+            role = NOC_PREPROCESSING_TOKEN_DIRECTIVE_BODY;
+            if (include_operand_pending) {
+                include_operand_pending = false;
+            }
+        }
+        if (!noc__preprocessor_token_append(unit,
+                                            token,
+                                            role,
+                                            directive_index)) {
+            return false;
+        }
+    }
+    return true;
+}
+
 NOCDEF void noc_preprocessor_unit_free(Noc_Preprocessor_Unit *unit)
 {
     if (!unit) return;
+    free(unit->preprocessing_tokens);
     free(unit->items);
     noc_token_stream_free(&unit->stream);
     memset(unit, 0, sizeof(*unit));
@@ -239,6 +392,12 @@ NOCDEF bool noc_preprocessor_unit_is_valid(const Noc_Preprocessor_Unit *unit)
            unit->file_id != NOC_FILE_ID_NONE && unit->document_generation != 0 &&
            noc__source_class_is_valid(unit->source_class) &&
            noc__macro_policy_is_valid(unit->macro_policy) &&
+           unit->preprocessing_token_count > 0 &&
+           unit->preprocessing_token_count <=
+               unit->preprocessing_token_capacity &&
+           unit->preprocessing_tokens &&
+           unit->preprocessing_tokens[
+               unit->preprocessing_token_count - 1].token.kind == NOC_TOKEN_EOF &&
            unit->count <= unit->capacity && (unit->count == 0 || unit->items);
 }
 
@@ -263,6 +422,7 @@ NOCDEF bool noc_preprocessor_unit_build(Noc_Context *context,
         return false;
     }
     source = noc_document_snapshot_source(snapshot);
+    parsed.stream.generation = unit->stream.generation;
     if (!noc_tokenize(context,
                       noc_document_snapshot_path(snapshot),
                       source.data,
@@ -277,12 +437,39 @@ NOCDEF bool noc_preprocessor_unit_build(Noc_Context *context,
     for (index = 0; index < parsed.stream.count; ++index) {
         Noc_Token token = parsed.stream.items[index];
         Noc_Preprocessor_Directive directive;
-        if (token.kind != NOC_TOKEN_PREPROCESSOR) continue;
+        if (token.kind != NOC_TOKEN_PREPROCESSOR) {
+            if (!noc__preprocessor_token_append(&parsed,
+                                                token,
+                                                NOC_PREPROCESSING_TOKEN_SOURCE,
+                                                NOC_TOKEN_INDEX_NONE)) {
+                noc__report(context,
+                            NOC_DIAGNOSTIC_ERROR,
+                            token.location,
+                            "out of memory while recording preprocessing tokens");
+                noc_preprocessor_unit_free(&parsed);
+                return false;
+            }
+            continue;
+        }
         noc__preprocessor_inventory_parse(token,
                                           index,
                                           macro_policy,
                                           parsed.source_class,
                                           &directive);
+        directive.preprocessing_tokens.begin =
+            parsed.preprocessing_token_count;
+        if (!noc__preprocessor_tokenize_directive(&parsed,
+                                                  token,
+                                                  directive.kind,
+                                                  parsed.count)) {
+            noc__report(context,
+                        NOC_DIAGNOSTIC_ERROR,
+                        token.location,
+                        "out of memory while recording preprocessing tokens");
+            noc_preprocessor_unit_free(&parsed);
+            return false;
+        }
+        directive.preprocessing_tokens.end = parsed.preprocessing_token_count;
         if (!directive.macro_definition_allowed) {
             parsed.disabled_macro_definition_count += 1;
         }
@@ -306,6 +493,17 @@ NOCDEF const Noc_Preprocessor_Directive *noc_preprocessor_directive_at(
 {
     if (!noc_preprocessor_unit_is_valid(unit) || index >= unit->count) return NULL;
     return &unit->items[index];
+}
+
+NOCDEF const Noc_Preprocessing_Token *noc_preprocessor_token_at(
+    const Noc_Preprocessor_Unit *unit,
+    size_t index)
+{
+    if (!noc_preprocessor_unit_is_valid(unit) ||
+        index >= unit->preprocessing_token_count) {
+        return NULL;
+    }
+    return &unit->preprocessing_tokens[index];
 }
 
 NOCDEF bool noc_preprocessor_unit_validate_macro_policy(

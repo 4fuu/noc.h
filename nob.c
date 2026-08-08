@@ -35,6 +35,7 @@ static const Test_Suite test_suites[] = {
     {"header-c", "tests/test_header.c", "build/noc-test-header-c" NOC_EXE, false},
     {"header-cpp", "tests/test_header.c", "build/noc-test-header-cpp" NOC_EXE, true},
     {"workspace", "tests/test_workspace.c", "build/noc-test-workspace" NOC_EXE, false},
+    {"preprocessing-tokens", "tests/test_preprocessing_tokens.c", "build/noc-test-preprocessing-tokens" NOC_EXE, false},
     {"preprocessor", "tests/test_preprocessor.c", "build/noc-test-preprocessor" NOC_EXE, false},
     {"lexing", "tests/test_lexing.c", "build/noc-test-lexing" NOC_EXE, false},
     {"syntax", "tests/test_syntax.c", "build/noc-test-syntax" NOC_EXE, false},

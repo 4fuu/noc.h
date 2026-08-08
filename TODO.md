@@ -132,7 +132,7 @@ must be generated reproducibly as one self-contained `noc.h`.
 
 ## Milestone 8 — policy-aware complete C preprocessor
 
-- [ ] Tokenize preprocessing tokens and directives without collapsing each
+- [x] Tokenize preprocessing tokens and directives without collapsing each
       directive into one opaque token; preserve whitespace/comments/provenance.
 - [ ] Implement object/function macros, variadics, argument prescan, recursive
       expansion with hide sets, stringification, token pasting, and built-ins.

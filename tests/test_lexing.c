@@ -34,6 +34,68 @@ static void test_lexer(void)
     CHECK(noc_token_is_identifier(token, "twice"));
 }
 
+static void test_multiline_comment_directive_boundaries(void)
+{
+    static const char source[] =
+        "/* at\nbol */ #define YES 1\n"
+        "token /* mid\r\nline */ #define NO 1\r\n"
+        "#define VALUE /* in\rcomment */ 1\r";
+    Noc_Lexer lexer;
+    Noc_Token token;
+    size_t directive_count = 0;
+    size_t hash_count = 0;
+    noc_lexer_init(&lexer, "comments.c", source, sizeof(source) - 1);
+    do {
+        token = noc_lexer_next(&lexer);
+        if (token.kind == NOC_TOKEN_PREPROCESSOR) {
+            directive_count += 1;
+            if (directive_count == 1) {
+                CHECK(slice_equals(token.text, "#define YES 1\n"));
+                CHECK(token.location.line == 2);
+            } else if (directive_count == 2) {
+                CHECK(slice_equals(token.text,
+                                   "#define VALUE /* in\rcomment */ 1\r"));
+                CHECK(token.location.line == 5);
+            }
+        } else if (noc_token_is_punct(token, "#")) {
+            hash_count += 1;
+            CHECK(token.location.line == 4);
+        }
+    } while (token.kind != NOC_TOKEN_EOF);
+    CHECK(directive_count == 2);
+    CHECK(hash_count == 1);
+}
+
+static void test_universal_character_name_tokens(void)
+{
+    static const char source[] =
+        "caf\\u00E9 _\\U0001F600 1\\u00E9 .5\\U0001F600 "
+        "joined\\\n\\u00E9";
+    Noc_Lexer lexer;
+    Noc_Token token;
+    noc_lexer_init(&lexer, "ucn.c", source, sizeof(source) - 1);
+    token = noc_lexer_next(&lexer);
+    CHECK(token.kind == NOC_TOKEN_IDENTIFIER);
+    CHECK(slice_equals(token.text, "caf\\u00E9"));
+    CHECK(noc_lexer_next(&lexer).kind == NOC_TOKEN_WHITESPACE);
+    token = noc_lexer_next(&lexer);
+    CHECK(token.kind == NOC_TOKEN_IDENTIFIER);
+    CHECK(slice_equals(token.text, "_\\U0001F600"));
+    CHECK(noc_lexer_next(&lexer).kind == NOC_TOKEN_WHITESPACE);
+    token = noc_lexer_next(&lexer);
+    CHECK(token.kind == NOC_TOKEN_NUMBER);
+    CHECK(slice_equals(token.text, "1\\u00E9"));
+    CHECK(noc_lexer_next(&lexer).kind == NOC_TOKEN_WHITESPACE);
+    token = noc_lexer_next(&lexer);
+    CHECK(token.kind == NOC_TOKEN_NUMBER);
+    CHECK(slice_equals(token.text, ".5\\U0001F600"));
+    CHECK(noc_lexer_next(&lexer).kind == NOC_TOKEN_WHITESPACE);
+    token = noc_lexer_next(&lexer);
+    CHECK(token.kind == NOC_TOKEN_IDENTIFIER);
+    CHECK(slice_equals(token.text, "joined\\\n\\u00E9"));
+    CHECK(noc_lexer_next(&lexer).kind == NOC_TOKEN_EOF);
+}
+
 static void test_phase2_splices(void)
 {
     static const char source[] =
@@ -497,6 +559,15 @@ static void test_tokenize_error(void)
     CHECK(strcmp(diagnostics.last_path, "invalid.c") == 0);
     CHECK(stream.items == NULL);
     CHECK(stream.source == NULL);
+    CHECK(!noc_tokenize(&context,
+                        "invalid-directive.c",
+                        "#define VALUE /*",
+                        sizeof("#define VALUE /*") - 1,
+                        &stream));
+    CHECK(diagnostics.errors == 2);
+    CHECK(strcmp(diagnostics.last_path, "invalid-directive.c") == 0);
+    CHECK(stream.items == NULL);
+    CHECK(stream.source == NULL);
     noc_context_deinit(&context);
 }
 
@@ -530,6 +601,8 @@ static void test_string_codec(void)
 int main(void)
 {
     test_lexer();
+    test_multiline_comment_directive_boundaries();
+    test_universal_character_name_tokens();
     test_phase2_splices();
     test_preprocessor_activity_map();
     test_token_stream_and_cursor();
