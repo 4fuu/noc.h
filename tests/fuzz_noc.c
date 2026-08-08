@@ -549,8 +549,8 @@ int main(void)
         "#if 0\n@missing\n#elif 1\n@fuzz(42)\n#endif\n",
         "#if FLAG\n@fuzz(\n#endif\n42\n#if FLAG\n)\n#endif\n",
         "F(a, (b, c),) G(unterminated\n",
-        "#define ID(x) x\n#define CALL(f,x) f(x)\n"
-        "#define OPEN ID(\nCALL(ID, ID(1)) OPEN 2)\n",
+        ("#define ID(x) x\n#define CALL(f,x) f(x)\n"
+         "#define OPEN ID(\nCALL(ID, ID(1)) OPEN 2)\n"),
         "([{}]) <::> %:%: /\\\n* block *\\\n/",
         "\"string\\n\\x41\" '\\123' 0x1p+2",
     };
