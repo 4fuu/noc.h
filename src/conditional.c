@@ -490,7 +490,7 @@ static Noc__Preprocessor_Value noc__preprocessor_parse_multiplicative(
                 left = noc__preprocessor_unsigned_value(lhs % rhs);
             }
         } else {
-            intmax_t result;
+            intmax_t result = 0;
             if ((operator_name[0] == '/' || operator_name[0] == '%') &&
                 right.signed_value == 0) {
                 noc__preprocessor_expression_fail(
