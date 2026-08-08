@@ -46,6 +46,7 @@ The suite names are `header-c`, `header-cpp`, `public-header-c`,
 `macro-builtins`, `configured-builtins`, `preprocessor-expressions`,
 `conditional-groups`, `include-operands`, `include-resolver`,
 `include-expansion`, `include-expansion-resolver`,
+`include-graph`, `include-graph-limits`, `include-graph-queries`,
 `release-header-runtime`,
 `preprocessor`, `lexing`, `syntax`, `c-analysis`, `rewriter`, and `artifacts`, for
 example:
@@ -111,6 +112,7 @@ be declared by `src/internal.h`; module-local helpers remain static. Current own
 | `src/macro_environment.c`, `src/macro_expansion.c` | Effective macro state and bounded expansion |
 | `src/conditional.c`, `src/conditional_groups.c` | C11 condition evaluation and recoverable balanced conditional analysis |
 | `src/include_resolver.c`, `src/include_expansion.c` | Physical/expanded include operands and host-configurable snapshot resolution |
+| `src/include_graph.c` | Bounded conditional include discovery, recursion, cycles, and stable IDE queries |
 | `src/parser.c`, `src/ast.c` | Token cursors/arguments and syntax/C structure analysis |
 | `src/features.c` | Context, rules, feature controls, and metadata interfaces |
 | `src/lower.c`, `src/emit_c.c` | Rewrite/edit lowering and transformation/artifact/CLI emission |
@@ -355,8 +357,23 @@ normal macro expansion when physical classification requires it, then publishes
 an owning logical name with expansion-relative ranges and full token provenance;
 `noc_include_expansion_resolve` sends only a valid final name to the same host
 policy. Its focused suites are `include-expansion` and
-`include-expansion-resolver`. Recursive include graphs, conditional traversal,
-cycle handling, and guards remain later preprocessing stages.
+`include-expansion-resolver`.
+
+`noc_include_graph_build` composes those phases into bounded, deterministic
+depth-first discovery using heap-backed traversal frames rather than recursive C
+calls. The graph owns immutable snapshots and per-inclusion
+preprocessor/conditional contexts, records inactive and unknown edges without
+calling the host resolver, detects ancestor cycles, and exposes stable node,
+edge, operand, expansion, and phase-object queries for IDE/LSP indexing. The
+same snapshot may be represented by multiple nodes because each occurrence can
+have a different macro prefix. Since child macro effects are not yet executed
+back into the parent, later affected edges are explicitly
+`UNKNOWN_MACRO_STATE` rather than guessed. Noc still performs no filesystem I/O:
+the host resolver owns search and overlays. Exercise traversal, bounds and
+transactionality, or query/provenance independently with `./nob test
+include-graph`, `./nob test include-graph-limits`, and `./nob test
+include-graph-queries`. Include guards, `#pragma once`, and exact cross-file
+macro execution remain later preprocessing stages.
 
 Macro definition permission is explicit:
 

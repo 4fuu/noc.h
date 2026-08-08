@@ -29,9 +29,9 @@
 #define NOC_H_INCLUDED
 
 #define NOC_VERSION_MAJOR 0
-#define NOC_VERSION_MINOR 38
+#define NOC_VERSION_MINOR 39
 #define NOC_VERSION_PATCH 0
-#define NOC_VERSION "0.38.0"
+#define NOC_VERSION "0.39.0"
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -1043,6 +1043,139 @@ typedef struct {
     size_t generation;
 } Noc_Include_Expansion;
 
+/* A Noc include graph is a bounded, owning discovery result rather than a
+   hidden filesystem preprocessor. It owns its snapshots, preprocessing units,
+   conditional analyses, physical operands, expanded operands, logical-name
+   bytes, and resolved edges. Initialize the handle to {0}, never shallow-copy
+   it, and release it with noc_include_graph_free. Returned node, edge,
+   snapshot, unit, conditional, operand, and expansion pointers are borrowed,
+   read-only, and stable until the graph is successfully rebuilt or freed.
+
+   Node zero is the root. Traversal is deterministic depth-first source order:
+   each source node's include directives retain source order, and a resolved
+   child is visited before the next directive in its parent. Traversal frames use
+   bounded heap storage rather than one C call frame per include. Every occurrence
+   that resolves to a non-ancestor snapshot creates a separate context;
+   the same immutable file may therefore appear repeatedly under distinct macro
+   prefixes. Resolving to the same retained immutable snapshot revision as an
+   ancestor creates a CYCLE edge targeting that existing ancestor; equal
+   workspace-local file ids, generations, or paths alone do not establish
+   identity.
+
+   Physical classification, optional normal macro expansion, host resolution,
+   and recursion remain separately queryable phases. Definitely INACTIVE and
+   UNKNOWN conditional edges are recorded but never sent to the resolver.
+   Definitely active edges use the concrete local macro prefix visible at their
+   directive. Local definitely-active macro events are passed into child
+   analysis. This layer deliberately does not splice macro side effects from a
+   child back into its parent. A child, cycle, bound, or unknown branch that may
+   change macros therefore makes affected later edges UNKNOWN_MACRO_STATE rather
+   than evaluating them against an unsound prefix; their published conditional
+   activity is UNKNOWN even if the parent-only analysis had predicted ACTIVE or
+   INACTIVE. may_mutate_macros propagates this conservative state through
+   descendants. This is explicit IDE recovery, not a claim of complete
+   translation-unit preprocessing.
+
+   Paths, file identities, snapshots, and source classes are host-authoritative.
+   Source class controls configured macro permission but does not establish
+   filesystem trust. No graph operation reads the filesystem, searches or
+   canonicalizes paths, infers trust, handles include guards or pragma once, or
+   suppresses repeated includes. Hosts implement all resolution through the
+   required Noc_Include_Resolver callback. */
+typedef struct Noc_Include_Graph_Impl Noc_Include_Graph_Impl;
+typedef struct {
+    Noc_Include_Graph_Impl *impl;
+    size_t generation;
+} Noc_Include_Graph;
+
+typedef enum {
+    NOC_INCLUDE_GRAPH_OK = 0,
+    NOC_INCLUDE_GRAPH_INVALID_ARGUMENT,
+    NOC_INCLUDE_GRAPH_STALE,
+    NOC_INCLUDE_GRAPH_CANCELLED,
+    NOC_INCLUDE_GRAPH_GENERATION_EXHAUSTED,
+    NOC_INCLUDE_GRAPH_OUT_OF_MEMORY,
+    NOC_INCLUDE_GRAPH_PREPROCESSOR_FAILED,
+    NOC_INCLUDE_GRAPH_INVALID_RESULT,
+} Noc_Include_Graph_Status;
+
+typedef enum {
+    NOC_INCLUDE_GRAPH_EDGE_RESOLVED = 0,
+    NOC_INCLUDE_GRAPH_EDGE_CYCLE,
+    NOC_INCLUDE_GRAPH_EDGE_INACTIVE,
+    NOC_INCLUDE_GRAPH_EDGE_UNKNOWN_ACTIVITY,
+    NOC_INCLUDE_GRAPH_EDGE_UNKNOWN_MACRO_STATE,
+    NOC_INCLUDE_GRAPH_EDGE_INVALID_OPERAND,
+    NOC_INCLUDE_GRAPH_EDGE_EXPANSION_FAILED,
+    NOC_INCLUDE_GRAPH_EDGE_NOT_FOUND,
+    NOC_INCLUDE_GRAPH_EDGE_AMBIGUOUS,
+    NOC_INCLUDE_GRAPH_EDGE_DENIED,
+    NOC_INCLUDE_GRAPH_EDGE_RESOLVER_FAILED,
+    NOC_INCLUDE_GRAPH_EDGE_DEPTH_LIMIT,
+    NOC_INCLUDE_GRAPH_EDGE_NODE_LIMIT,
+} Noc_Include_Graph_Edge_Status;
+
+enum {
+    NOC_INCLUDE_GRAPH_LIMIT_NONE = 0,
+    NOC_INCLUDE_GRAPH_LIMIT_DEPTH = 1u << 0,
+    NOC_INCLUDE_GRAPH_LIMIT_NODES = 1u << 1,
+    NOC_INCLUDE_GRAPH_LIMIT_EDGES = 1u << 2,
+};
+
+typedef bool (*Noc_Include_Graph_Cancel_Fn)(void *user_data);
+
+/* max_depth counts edges from the root (whose depth is zero). All three limits
+   must be nonzero. Reaching depth/nodes records a recoverable edge and flag;
+   reaching max_edges records the flag but cannot allocate an edge for the
+   omitted directive. should_cancel is optional and is called only during build;
+   returning true aborts transactionally without publishing a partial graph. */
+typedef struct {
+    Noc_Macro_Policy macro_policy;
+    Noc_Macro_Expansion_Options macro_expansion_options;
+    size_t max_depth;
+    size_t max_nodes;
+    size_t max_edges;
+    Noc_Include_Graph_Cancel_Fn should_cancel;
+    void *cancel_user_data;
+} Noc_Include_Graph_Options;
+
+typedef struct {
+    size_t index;
+    /* NUL-terminated path borrowed from this node's owned snapshot. */
+    const char *path;
+    Noc_File_Id file_id;
+    size_t document_generation;
+    Noc_Source_Class source_class;
+    /* Number of resolved parent-to-child edges from root node zero. */
+    size_t depth;
+    size_t outgoing_edge_count;
+    /* False only when a graph bound prevented complete local edge discovery or
+       traversal. Recoverable syntax/resolver states remain explicit edges. */
+    bool traversal_complete;
+    /* Conservative transitive answer: including this context can or might
+       change the caller's macro state. */
+    bool may_mutate_macros;
+} Noc_Include_Graph_Node;
+
+typedef struct {
+    size_t index;
+    size_t source_node_index;
+    /* A node index only for RESOLVED and CYCLE; otherwise TOKEN_INDEX_NONE. */
+    size_t target_node_index;
+    size_t directive_index;
+    /* Owned by the graph. Empty when no valid final logical name exists. */
+    Noc_Slice logical_name;
+    Noc_Preprocessor_Activity conditional_activity;
+    Noc_Include_Graph_Edge_Status status;
+    Noc_Include_Form form;
+    /* INVALID_ARGUMENT when expansion was unnecessary or not attempted. */
+    Noc_Macro_Expansion_Status expansion_status;
+    /* INVALID_ARGUMENT when host resolution was not attempted. */
+    Noc_Include_Resolve_Status resolve_status;
+    /* True only when a successful expansion object supplies the final fields. */
+    bool macro_expanded;
+} Noc_Include_Graph_Edge;
+
 NOCDEF const char *noc_source_class_name(Noc_Source_Class source_class);
 NOCDEF const char *noc_macro_policy_name(Noc_Macro_Policy policy);
 NOCDEF const char *noc_preprocessor_directive_kind_name(
@@ -1126,6 +1259,68 @@ NOCDEF Noc_Include_Resolve_Status noc_include_expansion_resolve(
     Noc_Include_Resolver resolver,
     const Noc_Include_Expansion *expansion,
     Noc_Document_Snapshot *resolved_snapshot);
+NOCDEF const char *noc_include_graph_status_name(Noc_Include_Graph_Status status);
+NOCDEF const char *noc_include_graph_edge_status_name(
+    Noc_Include_Graph_Edge_Status status);
+NOCDEF Noc_Include_Graph_Options noc_include_graph_default_options(void);
+NOCDEF void noc_include_graph_free(Noc_Include_Graph *graph);
+NOCDEF bool noc_include_graph_is_valid(const Noc_Include_Graph *graph);
+/* Build one graph using options.macro_policy for every node. initial_environment
+   may be NULL only when initial_entry_limit is zero; that pair starts from an
+   empty macro environment. Otherwise [0,initial_entry_limit) is cloned into the
+   root analysis. Definition units named by those cloned entries remain borrowed
+   and must stay alive and unchanged for the graph lifetime. Root and resolver
+   snapshots are retained or moved into the graph, so caller snapshot handles and
+   their workspace may be released after success. A nonempty initial prefix may
+   not borrow units owned by the same output graph being rebuilt in place; use an
+   externally owned prelude environment instead.
+
+   INVALID_OPERAND, EXPANSION_FAILED, ordinary resolver failures, cycles, and
+   graph bounds are recoverable published edge states. A cancellation requested
+   either by options or the resolver, an allocation/preprocessor failure, stale
+   borrowed input, generation exhaustion, or a resolver contract violation is a
+   fatal build status and preserves the previous output graph exactly. A
+   successful rebuild increments output.generation and invalidates every pointer
+   borrowed from the previous graph. */
+NOCDEF Noc_Include_Graph_Status noc_include_graph_build(
+    Noc_Context *context,
+    const Noc_Document_Snapshot *root_snapshot,
+    const Noc_Macro_Environment *initial_environment,
+    size_t initial_entry_limit,
+    Noc_Include_Resolver resolver,
+    Noc_Include_Graph_Options options,
+    Noc_Include_Graph *output);
+NOCDEF size_t noc_include_graph_node_count(const Noc_Include_Graph *graph);
+NOCDEF size_t noc_include_graph_edge_count(const Noc_Include_Graph *graph);
+NOCDEF unsigned int noc_include_graph_limit_flags(
+    const Noc_Include_Graph *graph);
+NOCDEF const Noc_Include_Graph_Node *noc_include_graph_node_at(
+    const Noc_Include_Graph *graph,
+    size_t node_index);
+NOCDEF const Noc_Include_Graph_Edge *noc_include_graph_edge_at(
+    const Noc_Include_Graph *graph,
+    size_t edge_index);
+NOCDEF const Noc_Include_Graph_Edge *noc_include_graph_node_edge_at(
+    const Noc_Include_Graph *graph,
+    size_t node_index,
+    size_t outgoing_edge_index);
+NOCDEF const Noc_Document_Snapshot *noc_include_graph_node_snapshot(
+    const Noc_Include_Graph *graph,
+    size_t node_index);
+NOCDEF const Noc_Preprocessor_Unit *noc_include_graph_node_preprocessor_unit(
+    const Noc_Include_Graph *graph,
+    size_t node_index);
+NOCDEF const Noc_Preprocessor_Conditional_Groups *
+noc_include_graph_node_conditional_groups(const Noc_Include_Graph *graph,
+                                          size_t node_index);
+NOCDEF const Noc_Include_Operand *noc_include_graph_edge_operand(
+    const Noc_Include_Graph *graph,
+    size_t edge_index);
+/* NULL unless macro expansion completed successfully for this edge, including
+   recoverable EMPTY/MALFORMED/INCOMPLETE final syntax. */
+NOCDEF const Noc_Include_Expansion *noc_include_graph_edge_expansion(
+    const Noc_Include_Graph *graph,
+    size_t edge_index);
 NOCDEF const Noc_Macro_Directive *noc_macro_directive_at(
     const Noc_Preprocessor_Unit *unit,
     size_t index);

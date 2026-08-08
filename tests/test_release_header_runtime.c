@@ -15,6 +15,17 @@ static int failed = 0;
         }                                                                       \
     } while (0)
 
+static Noc_Include_Resolve_Status release_not_found(
+    void *user_data,
+    const Noc_Include_Request *request,
+    Noc_Document_Snapshot *output)
+{
+    (void)user_data;
+    (void)request;
+    (void)output;
+    return NOC_INCLUDE_RESOLVE_NOT_FOUND;
+}
+
 int main(void)
 {
     static const char source[] =
@@ -27,6 +38,10 @@ int main(void)
     Noc_Macro_Environment environment = {0};
     Noc_Include_Operand operand = {0};
     Noc_Include_Expansion expansion = {0};
+    Noc_Include_Graph graph = {0};
+    Noc_Include_Graph_Options graph_options =
+        noc_include_graph_default_options();
+    Noc_Include_Resolver resolver = {release_not_found, NULL};
 
     noc_context_init(&context);
     noc_workspace_init(&workspace);
@@ -60,7 +75,22 @@ int main(void)
             memcmp(expansion.logical_name.data,
                    "closed.h",
                    sizeof("closed.h") - 1) == 0);
+    graph_options.macro_policy = NOC_MACROS_FULL;
+    REQUIRE(noc_include_graph_build(&context,
+                                    &snapshot,
+                                    NULL,
+                                    0,
+                                    resolver,
+                                    graph_options,
+                                    &graph) == NOC_INCLUDE_GRAPH_OK);
+    REQUIRE(noc_include_graph_is_valid(&graph));
+    REQUIRE(noc_include_graph_node_count(&graph) == 1);
+    REQUIRE(noc_include_graph_edge_count(&graph) == 1);
+    REQUIRE(noc_include_graph_edge_at(&graph, 0)->macro_expanded);
+    REQUIRE(noc_include_graph_edge_at(&graph, 0)->status ==
+            NOC_INCLUDE_GRAPH_EDGE_NOT_FOUND);
 
+    noc_include_graph_free(&graph);
     noc_include_expansion_free(&expansion);
     noc_include_operand_free(&operand);
     noc_macro_environment_free(&environment);

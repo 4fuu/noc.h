@@ -81,6 +81,7 @@ jobs:
                        macro_builtins configured_builtins preprocessor_expressions \
                        conditional_groups include_operands include_resolver \
                        include_expansion include_expansion_resolver \
+                       include_graph include_graph_limits include_graph_queries \
                        release_header_runtime \
                        preprocessor lexing syntax c_analysis rewriter artifacts; do
             cc -std=c11 -Wall -Wextra -Wpedantic \
@@ -96,6 +97,7 @@ jobs:
              src/macro_directives.c src/preprocessor.c src/macro_invocations.c \
              src/macro_environment.c src/macro_expansion.c src/conditional.c \
              src/conditional_groups.c src/include_resolver.c src/include_expansion.c \
+             src/include_graph.c \
              src/parser.c src/ast.c src/lower.c src/emit_c.c
           ASAN_OPTIONS=detect_leaks=1 ./build/noc-test-modules-sanitize
           cc -std=c11 -Wall -Wextra -Wpedantic \

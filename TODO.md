@@ -4,7 +4,7 @@ This file is the long-running implementation checklist. A milestone is checked
 only after its interfaces have tests or examples, the complete local suite
 passes, and the milestone has been committed and pushed.
 
-The 0.19 public API remains the compatibility baseline while the 0.38
+The 0.19 public API remains the compatibility baseline while the 0.39
 compiler frontend is built. Dialect inputs continue to use ordinary `.c` and
 `.h` names. Development code may be split into normal C modules, but releases
 must be generated reproducibly as one self-contained `noc.h`.
@@ -185,8 +185,11 @@ must be generated reproducibly as one self-contained `noc.h`.
         filesystem-independent resolver that returns owning workspace snapshots.
   - [x] Add bounded macro-expanded include operands with owning logical names,
         expansion-relative ranges, full token provenance, and host resolution.
-  - [ ] Add bounded recursive include graphs, cycles, include guards,
-        pragma-once behavior, and conditional edge state.
+  - [x] Add bounded recursive include graphs with deterministic traversal,
+        ancestor cycles, conditional edge state, stable IDE queries, limits,
+        cancellation, and conservative cross-file macro-state recovery.
+  - [ ] Add include guards, pragma-once behavior, and exact cross-file macro
+        execution without weakening graph provenance or bounded recovery.
   - [x] Publish significant directive-body token ranges and add condition-mode
         macro expansion that preserves `defined` operands with full provenance.
   - [x] Add a bounded C11 preprocessing integer-expression evaluator with
