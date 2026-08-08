@@ -1,4 +1,8 @@
-#ifdef NOC_IMPLEMENTATION
+#ifndef NOC_INTERNAL_H_INCLUDED
+#define NOC__INDIVIDUAL_SOURCE 1
+#include "internal.h"
+#endif
+#if defined(NOC_IMPLEMENTATION) || defined(NOC__INDIVIDUAL_SOURCE)
 #ifndef NOC_MACRO_DIRECTIVES_IMPLEMENTATION_INCLUDED
 #define NOC_MACRO_DIRECTIVES_IMPLEMENTATION_INCLUDED
 
@@ -273,7 +277,7 @@ static bool noc__macro_parse_function(Noc_Preprocessor_Unit *unit,
     }
 }
 
-static bool noc__macro_parse_directive(Noc_Preprocessor_Unit *unit,
+NOC__PRIVATE bool noc__macro_parse_directive(Noc_Preprocessor_Unit *unit,
                                        Noc_Preprocessor_Directive *directive,
                                        size_t directive_index)
 {
@@ -423,4 +427,4 @@ NOCDEF bool noc_preprocessor_unit_validate_macro_directives(
 }
 
 #endif /* NOC_MACRO_DIRECTIVES_IMPLEMENTATION_INCLUDED */
-#endif /* NOC_IMPLEMENTATION */
+#endif /* NOC_IMPLEMENTATION || NOC__INDIVIDUAL_SOURCE */

@@ -38,9 +38,11 @@ $ ./nob test
 ```
 
 Run one independently buildable suite on demand with `./nob test <suite>`.
-The suite names are `header-c`, `header-cpp`, `workspace`,
-`preprocessing-tokens`, `macro-directives`, `macro-environment`, `preprocessor`,
-`lexing`, `syntax`, `c-analysis`, `rewriter`, and `artifacts`, for example:
+The suite names are `header-c`, `header-cpp`, `public-header-c`,
+`public-header-cpp`, `modules`, `workspace`,
+`preprocessing-tokens`, `macro-directives`, `macro-environment`,
+`macro-expansion`, `preprocessor`, `lexing`, `syntax`, `c-analysis`, `rewriter`,
+and `artifacts`, for example:
 
 ```console
 $ ./nob test c-analysis
@@ -63,41 +65,49 @@ attribute scopes. Both dialect inputs and applications use ordinary `.c` files.
 
 ## Developing the single header
 
-The root `noc.h` is a checked-in release artifact. Its editable source is listed
-by `header_sources` in `nob.c`; this starts with `src/noc.h` and allows compiler
-subsystems to move into focused ordinary `.c`/`.h` modules as the frontend grows.
-Do not edit the generated root header directly.
+`include/noc/noc.h` is the standalone, declaration-only public header.
+`release/noc.h` is the checked-in quick-start header that emits bodies when
+`NOC_IMPLEMENTATION` is defined. Editable implementations live in focused,
+independently compilable `src/*.c` compiler-phase modules. `nob.c` builds the
+standalone C11 `tools/amalgamate.c` tool and supplies its ordered source
+manifest. Do not edit the release header.
 
 ```console
-$ ./nob header          # regenerate noc.h and build/generated/noc.h
-$ ./nob verify-header   # fail if the checked-in noc.h is stale
+$ ./nob header          # regenerate release/noc.h and build/generated/noc.h
+$ ./nob verify-header   # fail if release/noc.h is stale or generation varies
 ```
 
 Generation has no timestamp or host-specific data. `verify-header` generates
 the payload twice and compares both byte-for-byte before checking the release
 artifact. Normal tests compile against `build/generated/noc.h`, not accidentally
-against a stale root copy. CI checks the root artifact before running tests.
+against the release copy. CI checks the release artifact before running tests.
 
-Public declarations remain above the `NOC_IMPLEMENTATION` section; internal
-definitions and subsystem modules belong below it. Add a source module to the
-ordered `header_sources` manifest, regenerate, run its focused suite and the full
-suite, and commit both source and generated header together. The published file
-remains self-contained and dialect inputs keep normal `.c` and `.h` suffixes.
+Public declarations remain above the `NOC_IMPLEMENTATION` bodies; private
+types and genuine cross-module helper contracts live in `src/internal.h`.
+Add a source module to the coherent phase-ordered amalgamation manifest,
+regenerate, run its focused suite and the full suite, and commit both source and
+generated header together. The published file remains self-contained and
+dialect inputs keep normal `.c` and `.h` suffixes.
 
-The manifest is also the implementation dependency order. A module may use the
-public API declared by `src/noc.h` and private helpers from an earlier module; it
-must not create a private dependency back to a later module. Current ownership is:
+The manifest controls presentation, not C visibility or dependencies. Every
+module compiles as its own translation unit and cross-module dependencies must
+be declared by `src/internal.h`; module-local helpers remain static. Current ownership is:
 
 | Module | Responsibility |
 | --- | --- |
-| `src/noc.h` | Public API plus the compatibility lexer/syntax/rewriter core |
-| `src/workspace.h` | Workspace identities, immutable snapshots, edits, and line maps |
-| `src/macro_directives.h` | Recoverable `#define`/`#undef` grammar and macro query APIs |
-| `src/preprocessor.h` | Macro policy, directive inventory, lossless token construction, and unit transactions |
-| `src/macro_environment.h` | Caller-ordered effective macro state and definition history |
+| `include/noc/noc.h` | Central public declarations |
+| `src/internal.h` | Private shared types and cross-module contracts |
+| `src/source.c` | Workspace identities, snapshots, edits, and line maps |
+| `src/lexer.c` | Slices, lexer, buffers, and shared lexical primitives |
+| `src/preprocessor.c` | Token streams, activity, policy, directive inventory, and PP units |
+| `src/macro_directives.c` | Recoverable `#define`/`#undef` grammar and queries |
+| `src/macro_environment.c`, `src/macro_expansion.c` | Effective macro state and bounded expansion |
+| `src/parser.c`, `src/ast.c` | Token cursors/arguments and syntax/C structure analysis |
+| `src/features.c` | Context, rules, feature controls, and metadata interfaces |
+| `src/lower.c`, `src/emit_c.c` | Rewrite/edit lowering and transformation/artifact/CLI emission |
 
 New compiler phases get their own domain module and focused test suite; they are
-not appended to `src/noc.h` or an unrelated implementation merely because the
+not appended to an unrelated implementation merely because the
 release is amalgamated. In particular, macro environment/expansion, includes,
 C parsing, semantic analysis, lowering, emission, and IDE indexing remain
 separate ownership boundaries. Shared helpers move downward only when at least
@@ -215,6 +225,22 @@ generation only on success, and rejects malformed or policy-disabled directives
 without changing prior state. Run this layer independently with
 `./nob test macro-environment`. It still does not perform macro expansion or
 conditional evaluation.
+
+`noc_macro_expansion_build` currently performs bounded object-like macro
+substitution and recursive rescan against a selected environment history prefix.
+Direct and indirect recursion are suppressed, empty replacements are retained as
+zero-token expansion frames, and every emitted token records its source unit,
+preprocessing-token index, origin, and expansion frame. Frames link nested
+expansions to both their invocation token and environment definition, providing
+the provenance needed by later diagnostics and IDE expansion previews.
+
+Expansion limits bound recursion depth, output token count, and total expansion
+frames. Limit failures and unsupported `##`/`%:%:` token-paste replacements
+preserve the previous owning result. Function-like macros intentionally remain
+unexpanded until argument prescan/substitution is implemented; this milestone
+never emits a known-incorrect approximation. `noc_macro_expansion_render`
+concatenates the result's exact physical token spellings for inspection. Run the
+focused suite with `./nob test macro-expansion`.
 
 Macro definition permission is explicit:
 
@@ -736,9 +762,10 @@ and node references must not escape the callback.
 
 ## Current boundary
 
-This version deliberately handles explicit token/AST-assisted transformations,
-a lossless delimiter tree, and lightweight C structure discovery. It does not
-expand C macros, build a semantic C AST, resolve typedefs, or change the C type
+This version handles explicit token/AST-assisted transformations, a lossless
+delimiter tree, lightweight C structure discovery, and bounded object-like macro
+inspection expansion. It does not provide a complete integrated preprocessor,
+function-like macro expansion, a semantic C AST, typedef resolution, or a C type
 system. Rules inside preprocessor directives are left untouched. More
 structured statement and declaration helpers can be added without changing the
 registration model.

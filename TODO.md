@@ -86,9 +86,11 @@ must be generated reproducibly as one self-contained `noc.h`.
 ## Compiler rewrite contract
 
 - The editable implementation is organized by compiler phase even though the
-  release is one header. `header_sources` is the private dependency order; new
-  macro expansion, include, parser, semantic, lowering/emitter, and IDE/index
-  work belongs in separate domain modules with separate focused test suites.
+  release is `release/noc.h`. Independently compiled modules express private
+  cross-module contracts through `src/internal.h`; the amalgamation manifest is
+  presentation order. New macro expansion, include, parser, semantic,
+  lowering/emitter, and IDE/index work belongs in separate domain modules with
+  separate focused test suites.
 - The first complete language target is ISO C11. ISO C17 and C23 are explicit
   follow-up input/output profiles; GCC, Clang, and MSVC extensions are explicit
   target profiles rather than silently accepted syntax.
@@ -115,7 +117,7 @@ must be generated reproducibly as one self-contained `noc.h`.
 ## Milestone 6 — modular source and reproducible single-header release
 
 - [x] Define public/internal module boundaries without breaking the 0.19 API.
-- [x] Add deterministic amalgamation and make the checked-in root `noc.h` a
+- [x] Add deterministic amalgamation and make checked-in `release/noc.h` a
       generated artifact with a clear generated-file banner.
 - [x] Verify two generations are byte-identical and CI fails on a stale header.
 - [x] Compile all tests/examples against the generated header with GCC, Clang,
@@ -144,7 +146,10 @@ must be generated reproducibly as one self-contained `noc.h`.
         parameter/replacement ranges, C11 variadic slots, and syntax status.
   - [x] Add a caller-ordered, multi-unit macro environment with definition/undef
         history, policy filtering, stale generation checks, and lookup-before.
-  - [ ] Implement expansion semantics on top of the macro environment.
+  - [x] Add bounded object-like substitution/rescan, direct and indirect
+        recursion suppression, and invocation/definition provenance frames.
+  - [ ] Add function-like argument collection, prescan, and substitution.
+  - [ ] Add stringification, token pasting, variadic substitution, and built-ins.
 - [ ] Implement includes, include guards/pragma-once behavior, conditionals,
       integer constant evaluation, diagnostics, and target predefined macros.
 - [ ] Implement disabled, trusted-only, project, and full macro policies without

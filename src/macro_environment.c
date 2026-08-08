@@ -1,4 +1,8 @@
-#ifdef NOC_IMPLEMENTATION
+#ifndef NOC_INTERNAL_H_INCLUDED
+#define NOC__INDIVIDUAL_SOURCE 1
+#include "internal.h"
+#endif
+#if defined(NOC_IMPLEMENTATION) || defined(NOC__INDIVIDUAL_SOURCE)
 #ifndef NOC_MACRO_ENVIRONMENT_IMPLEMENTATION_INCLUDED
 #define NOC_MACRO_ENVIRONMENT_IMPLEMENTATION_INCLUDED
 
@@ -18,7 +22,7 @@ NOCDEF const char *noc_macro_environment_status_name(
     return "unknown";
 }
 
-static const Noc_Macro_Directive *noc__macro_environment_entry_directive(
+NOC__PRIVATE const Noc_Macro_Directive *noc__macro_environment_entry_directive(
     const Noc_Macro_Environment_Entry *entry)
 {
     if (!entry || !noc_preprocessor_unit_is_valid(entry->unit) ||
@@ -207,4 +211,4 @@ NOCDEF const Noc_Macro_Environment_Entry *noc_macro_environment_lookup(
 }
 
 #endif /* NOC_MACRO_ENVIRONMENT_IMPLEMENTATION_INCLUDED */
-#endif /* NOC_IMPLEMENTATION */
+#endif /* NOC_IMPLEMENTATION || NOC__INDIVIDUAL_SOURCE */

@@ -166,6 +166,7 @@ static void fuzz_preprocessor(Noc_Context *context,
     Noc_Document_Snapshot snapshot = {0};
     Noc_Preprocessor_Unit unit = {0};
     Noc_Macro_Environment environment = {0};
+    Noc_Macro_Expansion expansion = {0};
     size_t index;
     noc_workspace_init(&workspace);
     FUZZ_CHECK(noc_workspace_open_document(
@@ -334,10 +335,42 @@ static void fuzz_preprocessor(Noc_Context *context,
                            entry->previous_entry_index < index);
                 FUZZ_CHECK(macro->status == NOC_MACRO_DIRECTIVE_STATUS_VALID);
             }
+            {
+                Noc_Macro_Expansion_Limits limits =
+                    noc_macro_expansion_default_limits();
+                Noc_Macro_Expansion_Status status;
+                limits.max_depth = 16;
+                limits.max_output_tokens = 4096;
+                limits.max_expansions = 1024;
+                status = noc_macro_expansion_build(
+                    &environment,
+                    environment.count,
+                    &unit,
+                    (Noc_Token_Range){0, unit.preprocessing_token_count},
+                    limits,
+                    &expansion);
+                FUZZ_CHECK(status == NOC_MACRO_EXPANSION_OK ||
+                           status == NOC_MACRO_EXPANSION_DEPTH_LIMIT ||
+                           status == NOC_MACRO_EXPANSION_OUTPUT_LIMIT ||
+                           status == NOC_MACRO_EXPANSION_COUNT_LIMIT ||
+                           status == NOC_MACRO_EXPANSION_UNSUPPORTED_OPERATOR ||
+                           status == NOC_MACRO_EXPANSION_OUT_OF_MEMORY);
+                if (status == NOC_MACRO_EXPANSION_OK) {
+                    FUZZ_CHECK(noc_macro_expansion_is_valid(&expansion));
+                    for (index = 0; index < expansion.count; ++index) {
+                        const Noc_Macro_Expansion_Token *token =
+                            noc_macro_expansion_token_at(&expansion, index);
+                        FUZZ_CHECK(token != NULL);
+                        FUZZ_CHECK(token->preprocessing_token_index <
+                                   token->unit->preprocessing_token_count);
+                    }
+                }
+            }
         }
         (void)noc_preprocessor_unit_validate_macro_policy(context, &unit);
         (void)noc_preprocessor_unit_validate_macro_directives(context, &unit);
     }
+    noc_macro_expansion_free(&expansion);
     noc_macro_environment_free(&environment);
     noc_preprocessor_unit_free(&unit);
     noc_document_snapshot_free(&snapshot);

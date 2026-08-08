@@ -1,4 +1,8 @@
-#ifdef NOC_IMPLEMENTATION
+#ifndef NOC_INTERNAL_H_INCLUDED
+#define NOC__INDIVIDUAL_SOURCE 1
+#include "internal.h"
+#endif
+#if defined(NOC_IMPLEMENTATION) || defined(NOC__INDIVIDUAL_SOURCE)
 #ifndef NOC_WORKSPACE_IMPLEMENTATION_INCLUDED
 #define NOC_WORKSPACE_IMPLEMENTATION_INCLUDED
 
@@ -34,7 +38,7 @@ struct Noc_Workspace_Impl {
     Noc_File_Id next_file_id;
 };
 
-static bool noc__source_class_is_valid(Noc_Source_Class source_class)
+NOC__PRIVATE bool noc__source_class_is_valid(Noc_Source_Class source_class)
 {
     switch (source_class) {
     case NOC_SOURCE_CLASS_PROJECT:
@@ -676,4 +680,4 @@ NOCDEF Noc_Workspace_Status noc_document_snapshot_offset(
 }
 
 #endif /* NOC_WORKSPACE_IMPLEMENTATION_INCLUDED */
-#endif /* NOC_IMPLEMENTATION */
+#endif /* NOC_IMPLEMENTATION || NOC__INDIVIDUAL_SOURCE */

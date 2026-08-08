@@ -75,13 +75,21 @@ jobs:
           cc -o nob nob.c
           ./nob verify-header
           ./nob header
-          for suite in workspace preprocessor lexing syntax c_analysis rewriter artifacts; do
+          for suite in workspace preprocessing_tokens macro_directives macro_environment \
+                       macro_expansion preprocessor lexing syntax c_analysis rewriter artifacts; do
             cc -std=c11 -Wall -Wextra -Wpedantic \
                -fsanitize=address,undefined -fno-omit-frame-pointer \
                -Ibuild/generated -I. \
                -o "build/noc-test-${suite}-sanitize" "tests/test_${suite}.c"
             ASAN_OPTIONS=detect_leaks=1 "./build/noc-test-${suite}-sanitize"
           done
+          cc -std=c11 -Wall -Wextra -Wpedantic \
+             -fsanitize=address,undefined -fno-omit-frame-pointer \
+             -Iinclude -I. -o build/noc-test-modules-sanitize \
+             tests/test_modules.c src/lexer.c src/source.c src/features.c \
+             src/macro_directives.c src/preprocessor.c src/macro_environment.c \
+             src/macro_expansion.c src/parser.c src/ast.c src/lower.c src/emit_c.c
+          ASAN_OPTIONS=detect_leaks=1 ./build/noc-test-modules-sanitize
           cc -std=c11 -Wall -Wextra -Wpedantic \
              -fsanitize=address,undefined -fno-omit-frame-pointer \
              -Ibuild/generated -I. -o noc-fuzz-sanitize tests/fuzz_noc.c
