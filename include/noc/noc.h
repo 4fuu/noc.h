@@ -29,9 +29,9 @@
 #define NOC_H_INCLUDED
 
 #define NOC_VERSION_MAJOR 0
-#define NOC_VERSION_MINOR 31
+#define NOC_VERSION_MINOR 32
 #define NOC_VERSION_PATCH 0
-#define NOC_VERSION "0.31.0"
+#define NOC_VERSION "0.32.0"
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -652,6 +652,8 @@ typedef enum {
     NOC_MACRO_EXPANSION_UNSUPPORTED_VARIADIC,
     NOC_MACRO_EXPANSION_GENERATION_EXHAUSTED,
     NOC_MACRO_EXPANSION_OUT_OF_MEMORY,
+    /* A ##/%:%: application did not form exactly one preprocessing token. */
+    NOC_MACRO_EXPANSION_INVALID_PASTE,
 } Noc_Macro_Expansion_Status;
 
 typedef enum {
@@ -659,6 +661,7 @@ typedef enum {
     NOC_MACRO_EXPANSION_TOKEN_ARGUMENT,
     NOC_MACRO_EXPANSION_TOKEN_REPLACEMENT,
     NOC_MACRO_EXPANSION_TOKEN_STRINGIFICATION,
+    NOC_MACRO_EXPANSION_TOKEN_PASTE,
 } Noc_Macro_Expansion_Token_Origin;
 
 typedef struct {
@@ -707,7 +710,7 @@ typedef struct {
     Noc_Macro_Expansion_Frame *frames;
     size_t frame_count;
     size_t frame_capacity;
-    /* Stable, owned spellings for synthesized expansion tokens. */
+    /* Stable, owned spelling arena for synthesized and intermediate tokens. */
     Noc_Slice *generated_spellings;
     size_t generated_spelling_count;
     size_t generated_spelling_capacity;
@@ -812,14 +815,14 @@ NOCDEF bool noc_macro_expansion_is_valid(const Noc_Macro_Expansion *expansion);
    using environment entries [0, entry_limit). Arguments are collected from the
    logical token stream, prescanned once, substituted, and rescanned with
    provenance retained. # and %: stringify the raw, unprescanned argument using
-   C11 whitespace and literal-escaping rules. For F(x, ...), F(value) omits the
-   required variable argument and is rejected, while F(value,) supplies it
-   explicitly as empty; V() is valid for V(...) and supplies one empty variable
-   argument.
+   C11 whitespace and literal-escaping rules. ## and %:%: paste raw adjacent
+   arguments using C11 placemarkers, re-tokenize the result, and rescan it. Noc
+   resolves paste chains deterministically from left to right; C11 leaves their
+   evaluation order unspecified. For F(x, ...), F(value) omits the required
+   variable argument and is rejected, while F(value,) supplies it explicitly as
+   empty; V() is valid for V(...) and supplies one empty variable argument.
    The token limit bounds every live logical sequence, including raw input and
    argument-prescan sequences, rather than only the final rendered result.
-   Replacements requiring ## or %:%: are rejected rather than emitted with
-   incorrect semantics.
    Success replaces output; every failure preserves the prior expansion. */
 NOCDEF Noc_Macro_Expansion_Status noc_macro_expansion_build(
     const Noc_Macro_Environment *environment,

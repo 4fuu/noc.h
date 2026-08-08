@@ -159,8 +159,7 @@ static void test_variadic_errors_are_transactional(void)
         "#define BAD_FIXED(__VA_ARGS__) __VA_ARGS__\n"
         "#define BAD_USE(x) __VA_ARGS__\n"
         "#define BAD_OBJECT __VA_ARGS__\n"
-        "#define DUPLICATE(x,x,...) x\n"
-        "#define PASTE(...) __VA_ARGS__ ## suffix\n";
+        "#define DUPLICATE(x,x,...) x\n";
     static const char input[] =
         "GOOD(1)\n"
         "NEED(1)\n"
@@ -170,7 +169,6 @@ static void test_variadic_errors_are_transactional(void)
         "BAD_USE(1)\n"
         "BAD_OBJECT\n"
         "DUPLICATE(1,2,3)\n"
-        "PASTE(1)\n"
         "GOOD(unterminated\n";
     static const Noc_Macro_Expansion_Status statuses[] = {
         NOC_MACRO_EXPANSION_ARGUMENT_COUNT_MISMATCH,
@@ -180,7 +178,6 @@ static void test_variadic_errors_are_transactional(void)
         NOC_MACRO_EXPANSION_INVALID_DEFINITION,
         NOC_MACRO_EXPANSION_INVALID_DEFINITION,
         NOC_MACRO_EXPANSION_INVALID_DEFINITION,
-        NOC_MACRO_EXPANSION_UNSUPPORTED_OPERATOR,
         NOC_MACRO_EXPANSION_INCOMPLETE_INVOCATION,
     };
     Macro_Expansion_Fixture fixture;

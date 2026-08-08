@@ -211,20 +211,17 @@ static void test_stringification_errors_are_transactional(void)
         "#define GOOD(x) #x\n"
         "#define BAD_END(x) #\n"
         "#define BAD_NAME(x) # missing\n"
-        "#define DOUBLE(x) # # x\n"
-        "#define PASTE(x) x ## suffix\n";
+        "#define DOUBLE(x) # # x\n";
     static const char input[] =
         "GOOD(ok)\n"
         "BAD_END(value)\n"
         "BAD_NAME(value)\n"
         "DOUBLE(value)\n"
-        "PASTE(value)\n"
         "GOOD(unterminated\n";
     static const Noc_Macro_Expansion_Status statuses[] = {
         NOC_MACRO_EXPANSION_INVALID_DEFINITION,
         NOC_MACRO_EXPANSION_INVALID_DEFINITION,
         NOC_MACRO_EXPANSION_INVALID_DEFINITION,
-        NOC_MACRO_EXPANSION_UNSUPPORTED_OPERATOR,
         NOC_MACRO_EXPANSION_INCOMPLETE_INVOCATION,
     };
     Macro_Expansion_Fixture fixture;

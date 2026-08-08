@@ -395,6 +395,7 @@ static void fuzz_preprocessor(Noc_Context *context,
                            status == NOC_MACRO_EXPANSION_COUNT_LIMIT ||
                            status == NOC_MACRO_EXPANSION_UNSUPPORTED_OPERATOR ||
                            status == NOC_MACRO_EXPANSION_UNSUPPORTED_VARIADIC ||
+                           status == NOC_MACRO_EXPANSION_INVALID_PASTE ||
                            status == NOC_MACRO_EXPANSION_OUT_OF_MEMORY);
                 if (status == NOC_MACRO_EXPANSION_OK) {
                     FUZZ_CHECK(noc_macro_expansion_is_valid(&expansion));

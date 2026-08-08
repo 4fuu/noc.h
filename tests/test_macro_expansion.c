@@ -41,6 +41,9 @@ static void check_expansion_names_and_defaults(void)
                      NOC_MACRO_EXPANSION_OUT_OF_MEMORY),
                  "out-of-memory") == 0);
     CHECK(strcmp(noc_macro_expansion_status_name(
+                     NOC_MACRO_EXPANSION_INVALID_PASTE),
+                 "invalid-paste") == 0);
+    CHECK(strcmp(noc_macro_expansion_status_name(
                      (Noc_Macro_Expansion_Status)99),
                  "unknown") == 0);
     CHECK(strcmp(noc_macro_expansion_token_origin_name(
@@ -55,6 +58,9 @@ static void check_expansion_names_and_defaults(void)
     CHECK(strcmp(noc_macro_expansion_token_origin_name(
                      NOC_MACRO_EXPANSION_TOKEN_STRINGIFICATION),
                  "stringification") == 0);
+    CHECK(strcmp(noc_macro_expansion_token_origin_name(
+                     NOC_MACRO_EXPANSION_TOKEN_PASTE),
+                 "paste") == 0);
     CHECK(strcmp(noc_macro_expansion_token_origin_name(
                      (Noc_Macro_Expansion_Token_Origin)99),
                  "unknown") == 0);
@@ -192,22 +198,14 @@ static void test_limits_transactionality_and_stale_inputs(void)
 {
     static const char definitions_source[] =
         "#define ONE 1\n"
-        "#define TWO ONE + ONE\n"
-        "#define PASTE a ## b\n"
-        "#define DIGRAPH_PASTE a %:%: b\n";
+        "#define TWO ONE + ONE\n";
     static const char input_source[] = "TWO\n";
-    static const char paste_source[] = "PASTE\n";
-    static const char digraph_paste_source[] = "DIGRAPH_PASTE\n";
     Noc_Context context;
     Noc_Workspace workspace = {0};
     Noc_Document_Snapshot definitions_snapshot = {0};
     Noc_Document_Snapshot input_snapshot = {0};
-    Noc_Document_Snapshot paste_snapshot = {0};
-    Noc_Document_Snapshot digraph_paste_snapshot = {0};
     Noc_Preprocessor_Unit definitions = {0};
     Noc_Preprocessor_Unit input = {0};
-    Noc_Preprocessor_Unit paste = {0};
-    Noc_Preprocessor_Unit digraph_paste = {0};
     Noc_Macro_Environment environment = {0};
     Noc_Macro_Expansion expansion = {0};
     Noc_Macro_Expansion_Limits limits = noc_macro_expansion_default_limits();
@@ -231,18 +229,6 @@ static void test_limits_transactionality_and_stale_inputs(void)
                                       sizeof(input_source) - 1,
                                       NOC_SOURCE_CLASS_PROJECT,
                                       &input_snapshot) == NOC_WORKSPACE_OK);
-    CHECK(noc_workspace_open_document(&workspace,
-                                      "paste-input.c",
-                                      paste_source,
-                                      sizeof(paste_source) - 1,
-                                      NOC_SOURCE_CLASS_PROJECT,
-                                      &paste_snapshot) == NOC_WORKSPACE_OK);
-    CHECK(noc_workspace_open_document(&workspace,
-                                      "digraph-paste-input.c",
-                                      digraph_paste_source,
-                                      sizeof(digraph_paste_source) - 1,
-                                      NOC_SOURCE_CLASS_PROJECT,
-                                      &digraph_paste_snapshot) == NOC_WORKSPACE_OK);
     CHECK(noc_preprocessor_unit_build(&context,
                                       &definitions_snapshot,
                                       NOC_MACROS_FULL,
@@ -251,14 +237,6 @@ static void test_limits_transactionality_and_stale_inputs(void)
                                       &input_snapshot,
                                       NOC_MACROS_FULL,
                                       &input));
-    CHECK(noc_preprocessor_unit_build(&context,
-                                      &paste_snapshot,
-                                      NOC_MACROS_FULL,
-                                      &paste));
-    CHECK(noc_preprocessor_unit_build(&context,
-                                      &digraph_paste_snapshot,
-                                      NOC_MACROS_FULL,
-                                      &digraph_paste));
     for (index = 0; index < definitions.macro_directive_count; ++index) {
         CHECK(noc_macro_environment_apply(&environment, &definitions, index) ==
               NOC_MACRO_ENVIRONMENT_OK);
@@ -275,26 +253,6 @@ static void test_limits_transactionality_and_stale_inputs(void)
     preserved_count = expansion.count;
     preserved_generation = expansion.generation;
 
-    CHECK(noc_macro_expansion_build(
-              &environment,
-              environment.count,
-              &paste,
-              (Noc_Token_Range){0, paste.preprocessing_token_count - 1},
-              limits,
-              &expansion) == NOC_MACRO_EXPANSION_UNSUPPORTED_OPERATOR);
-    CHECK(expansion.items == preserved_items && expansion.frames == preserved_frames);
-    CHECK(expansion.count == preserved_count);
-    CHECK(expansion.generation == preserved_generation);
-    CHECK(noc_macro_expansion_build(
-              &environment,
-              environment.count,
-              &digraph_paste,
-              (Noc_Token_Range){0, digraph_paste.preprocessing_token_count - 1},
-              limits,
-              &expansion) == NOC_MACRO_EXPANSION_UNSUPPORTED_OPERATOR);
-    CHECK(expansion.items == preserved_items && expansion.frames == preserved_frames);
-    CHECK(expansion.count == preserved_count);
-    CHECK(expansion.generation == preserved_generation);
     limits.max_depth = 1;
     CHECK(noc_macro_expansion_build(
               &environment,
@@ -357,12 +315,8 @@ static void test_limits_transactionality_and_stale_inputs(void)
 
     noc_macro_expansion_free(&expansion);
     noc_macro_environment_free(&environment);
-    noc_preprocessor_unit_free(&digraph_paste);
-    noc_preprocessor_unit_free(&paste);
     noc_preprocessor_unit_free(&input);
     noc_preprocessor_unit_free(&definitions);
-    noc_document_snapshot_free(&digraph_paste_snapshot);
-    noc_document_snapshot_free(&paste_snapshot);
     noc_document_snapshot_free(&input_snapshot);
     noc_document_snapshot_free(&definitions_snapshot);
     noc_workspace_deinit(&workspace);

@@ -32,9 +32,9 @@
 #define NOC_H_INCLUDED
 
 #define NOC_VERSION_MAJOR 0
-#define NOC_VERSION_MINOR 31
+#define NOC_VERSION_MINOR 32
 #define NOC_VERSION_PATCH 0
-#define NOC_VERSION "0.31.0"
+#define NOC_VERSION "0.32.0"
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -655,6 +655,8 @@ typedef enum {
     NOC_MACRO_EXPANSION_UNSUPPORTED_VARIADIC,
     NOC_MACRO_EXPANSION_GENERATION_EXHAUSTED,
     NOC_MACRO_EXPANSION_OUT_OF_MEMORY,
+    /* A ##/%:%: application did not form exactly one preprocessing token. */
+    NOC_MACRO_EXPANSION_INVALID_PASTE,
 } Noc_Macro_Expansion_Status;
 
 typedef enum {
@@ -662,6 +664,7 @@ typedef enum {
     NOC_MACRO_EXPANSION_TOKEN_ARGUMENT,
     NOC_MACRO_EXPANSION_TOKEN_REPLACEMENT,
     NOC_MACRO_EXPANSION_TOKEN_STRINGIFICATION,
+    NOC_MACRO_EXPANSION_TOKEN_PASTE,
 } Noc_Macro_Expansion_Token_Origin;
 
 typedef struct {
@@ -710,7 +713,7 @@ typedef struct {
     Noc_Macro_Expansion_Frame *frames;
     size_t frame_count;
     size_t frame_capacity;
-    /* Stable, owned spellings for synthesized expansion tokens. */
+    /* Stable, owned spelling arena for synthesized and intermediate tokens. */
     Noc_Slice *generated_spellings;
     size_t generated_spelling_count;
     size_t generated_spelling_capacity;
@@ -815,14 +818,14 @@ NOCDEF bool noc_macro_expansion_is_valid(const Noc_Macro_Expansion *expansion);
    using environment entries [0, entry_limit). Arguments are collected from the
    logical token stream, prescanned once, substituted, and rescanned with
    provenance retained. # and %: stringify the raw, unprescanned argument using
-   C11 whitespace and literal-escaping rules. For F(x, ...), F(value) omits the
-   required variable argument and is rejected, while F(value,) supplies it
-   explicitly as empty; V() is valid for V(...) and supplies one empty variable
-   argument.
+   C11 whitespace and literal-escaping rules. ## and %:%: paste raw adjacent
+   arguments using C11 placemarkers, re-tokenize the result, and rescan it. Noc
+   resolves paste chains deterministically from left to right; C11 leaves their
+   evaluation order unspecified. For F(x, ...), F(value) omits the required
+   variable argument and is rejected, while F(value,) supplies it explicitly as
+   empty; V() is valid for V(...) and supplies one empty variable argument.
    The token limit bounds every live logical sequence, including raw input and
    argument-prescan sequences, rather than only the final rendered result.
-   Replacements requiring ## or %:%: are rejected rather than emitted with
-   incorrect semantics.
    Success replaces output; every failure preserves the prior expansion. */
 NOCDEF Noc_Macro_Expansion_Status noc_macro_expansion_build(
     const Noc_Macro_Environment *environment,
@@ -5666,10 +5669,13 @@ NOCDEF const Noc_Macro_Environment_Entry *noc_macro_environment_lookup(
 #define NOC_MACRO_EXPANSION_IMPLEMENTATION_INCLUDED
 
 #define NOC__MACRO_EXPANSION_HARD_MAX_DEPTH 256u
+#define NOC__MACRO_TOKEN_PLACEMARKER 1u
+#define NOC__MACRO_TOKEN_PASTE_OPERATOR 2u
 
 typedef struct {
     Noc_Macro_Expansion_Token *items;
     size_t *hide_sets;
+    unsigned char *flags;
     size_t count;
     size_t capacity;
 } Noc__Macro_Token_Sequence;
@@ -5692,7 +5698,7 @@ typedef struct {
 typedef struct {
     Noc__Macro_Token_Sequence tokens;
     Noc_Token_Range source_tokens;
-    size_t use_count;
+    size_t expanded_use_count;
 } Noc__Macro_Expanded_Argument;
 
 NOCDEF const char *noc_macro_expansion_status_name(
@@ -5717,6 +5723,7 @@ NOCDEF const char *noc_macro_expansion_status_name(
     case NOC_MACRO_EXPANSION_GENERATION_EXHAUSTED:
         return "generation-exhausted";
     case NOC_MACRO_EXPANSION_OUT_OF_MEMORY: return "out-of-memory";
+    case NOC_MACRO_EXPANSION_INVALID_PASTE: return "invalid-paste";
     }
     return "unknown";
 }
@@ -5729,6 +5736,7 @@ NOCDEF const char *noc_macro_expansion_token_origin_name(
     case NOC_MACRO_EXPANSION_TOKEN_ARGUMENT: return "argument";
     case NOC_MACRO_EXPANSION_TOKEN_REPLACEMENT: return "replacement";
     case NOC_MACRO_EXPANSION_TOKEN_STRINGIFICATION: return "stringification";
+    case NOC_MACRO_EXPANSION_TOKEN_PASTE: return "paste";
     }
     return "unknown";
 }
@@ -5787,13 +5795,34 @@ NOCDEF bool noc_macro_expansion_is_valid(const Noc_Macro_Expansion *expansion)
                 token->unit->preprocessing_token_count) {
             return false;
         }
-        if (token->origin == NOC_MACRO_EXPANSION_TOKEN_STRINGIFICATION) {
+        if (token->origin == NOC_MACRO_EXPANSION_TOKEN_STRINGIFICATION ||
+            token->origin == NOC_MACRO_EXPANSION_TOKEN_PASTE) {
             const Noc_Slice *spelling;
             if (token->frame_index >= expansion->frame_count ||
                 token->generated_spelling_index >=
-                    expansion->generated_spelling_count ||
-                token->token.kind != NOC_TOKEN_STRING) {
+                    expansion->generated_spelling_count) {
                 return false;
+            }
+            if (token->origin == NOC_MACRO_EXPANSION_TOKEN_STRINGIFICATION) {
+                Noc_Token operator_token = token->unit->preprocessing_tokens[
+                    token->preprocessing_token_index].token;
+                if (token->token.kind != NOC_TOKEN_STRING ||
+                    (!noc_token_is_punct(operator_token, "#") &&
+                     !noc_token_is_punct(operator_token, "%:"))) {
+                    return false;
+                }
+            } else {
+                Noc_Token operator_token = token->unit->preprocessing_tokens[
+                    token->preprocessing_token_index].token;
+                if ((!noc_token_is_punct(operator_token, "##") &&
+                     !noc_token_is_punct(operator_token, "%:%:")) ||
+                    token->token.kind == NOC_TOKEN_EOF ||
+                    token->token.kind == NOC_TOKEN_PREPROCESSOR ||
+                    token->token.kind == NOC_TOKEN_HEADER_NAME ||
+                    token->token.kind == NOC_TOKEN_INVALID ||
+                    noc_token_is_trivia(token->token)) {
+                    return false;
+                }
             }
             spelling = &expansion->generated_spellings[
                 token->generated_spelling_index];
@@ -5830,6 +5859,7 @@ NOCDEF bool noc_macro_expansion_is_valid(const Noc_Macro_Expansion *expansion)
 static void noc__macro_token_sequence_free(Noc__Macro_Token_Sequence *sequence)
 {
     if (!sequence) return;
+    free(sequence->flags);
     free(sequence->hide_sets);
     free(sequence->items);
     memset(sequence, 0, sizeof(*sequence));
@@ -5840,6 +5870,7 @@ static Noc_Macro_Expansion_Status noc__macro_token_sequence_reserve(
     Noc__Macro_Token_Sequence *sequence,
     size_t needed)
 {
+    unsigned char *flags;
     size_t *hide_sets;
     Noc_Macro_Expansion_Token *items;
     size_t capacity;
@@ -5870,6 +5901,10 @@ static Noc_Macro_Expansion_Status noc__macro_token_sequence_reserve(
                                  capacity * sizeof(*hide_sets));
     if (!hide_sets) return NOC_MACRO_EXPANSION_OUT_OF_MEMORY;
     sequence->hide_sets = hide_sets;
+    flags = (unsigned char *)realloc(sequence->flags,
+                                    capacity * sizeof(*flags));
+    if (!flags) return NOC_MACRO_EXPANSION_OUT_OF_MEMORY;
+    sequence->flags = flags;
     sequence->capacity = capacity;
     return NOC_MACRO_EXPANSION_OK;
 }
@@ -5890,8 +5925,27 @@ static Noc_Macro_Expansion_Status noc__macro_token_sequence_append(
     if (status != NOC_MACRO_EXPANSION_OK) return status;
     sequence->items[sequence->count] = token;
     sequence->hide_sets[sequence->count] = hide_set;
+    sequence->flags[sequence->count] = 0;
     sequence->count += 1;
     return NOC_MACRO_EXPANSION_OK;
+}
+
+static Noc_Macro_Expansion_Status noc__macro_token_sequence_append_flagged(
+    Noc__Macro_Expansion_Builder *builder,
+    Noc__Macro_Token_Sequence *sequence,
+    Noc_Macro_Expansion_Token token,
+    size_t hide_set,
+    unsigned char flags)
+{
+    Noc_Macro_Expansion_Status status = noc__macro_token_sequence_append(
+        builder,
+        sequence,
+        token,
+        hide_set);
+    if (status == NOC_MACRO_EXPANSION_OK) {
+        sequence->flags[sequence->count - 1] = flags;
+    }
+    return status;
 }
 
 static Noc_Macro_Expansion_Status noc__macro_token_sequence_append_sequence(
@@ -5914,6 +5968,9 @@ static Noc_Macro_Expansion_Status noc__macro_token_sequence_append_sequence(
         memcpy(sequence->hide_sets + sequence->count,
                suffix->hide_sets,
                suffix->count * sizeof(*suffix->hide_sets));
+        memcpy(sequence->flags + sequence->count,
+               suffix->flags,
+               suffix->count * sizeof(*suffix->flags));
     }
     sequence->count = needed;
     return NOC_MACRO_EXPANSION_OK;
@@ -5947,6 +6004,9 @@ static Noc_Macro_Expansion_Status noc__macro_token_sequence_splice(
         memmove(sequence->hide_sets + removed.begin + replacement->count,
                 sequence->hide_sets + removed.end,
                 suffix_count * sizeof(*sequence->hide_sets));
+        memmove(sequence->flags + removed.begin + replacement->count,
+                sequence->flags + removed.end,
+                suffix_count * sizeof(*sequence->flags));
     }
     if (replacement->count != 0) {
         memcpy(sequence->items + removed.begin,
@@ -5955,6 +6015,9 @@ static Noc_Macro_Expansion_Status noc__macro_token_sequence_splice(
         memcpy(sequence->hide_sets + removed.begin,
                replacement->hide_sets,
                replacement->count * sizeof(*replacement->hide_sets));
+        memcpy(sequence->flags + removed.begin,
+               replacement->flags,
+               replacement->count * sizeof(*replacement->flags));
     }
     sequence->count = needed;
     return NOC_MACRO_EXPANSION_OK;
@@ -6184,23 +6247,87 @@ static Noc_Macro_Expansion_Status noc__macro_generated_spelling_append(
     return NOC_MACRO_EXPANSION_OK;
 }
 
-static bool noc__macro_replacement_has_operator(
+static bool noc__macro_token_is_paste_operator(Noc_Token token)
+{
+    return noc_token_is_punct(token, "##") ||
+           noc_token_is_punct(token, "%:%:");
+}
+
+static size_t noc__macro_replacement_previous_significant(
     const Noc_Preprocessor_Unit *unit,
     Noc_Token_Range replacement,
-    bool include_stringify)
+    size_t index)
+{
+    while (index > replacement.begin) {
+        index -= 1;
+        if (!noc_token_is_trivia(unit->preprocessing_tokens[index].token)) {
+            return index;
+        }
+    }
+    return NOC_TOKEN_INDEX_NONE;
+}
+
+static size_t noc__macro_replacement_next_significant(
+    const Noc_Preprocessor_Unit *unit,
+    Noc_Token_Range replacement,
+    size_t index)
+{
+    for (index += 1; index < replacement.end; ++index) {
+        if (!noc_token_is_trivia(unit->preprocessing_tokens[index].token)) {
+            return index;
+        }
+    }
+    return NOC_TOKEN_INDEX_NONE;
+}
+
+static bool noc__macro_replacement_pastes_are_valid(
+    const Noc_Preprocessor_Unit *unit,
+    Noc_Token_Range replacement)
 {
     size_t index;
     for (index = replacement.begin; index < replacement.end; ++index) {
-        Noc_Token token = unit->preprocessing_tokens[index].token;
-        if (noc_token_is_punct(token, "##") ||
-            noc_token_is_punct(token, "%:%:") ||
-            (include_stringify &&
-             (noc_token_is_punct(token, "#") ||
-              noc_token_is_punct(token, "%:")))) {
-            return true;
+        size_t left;
+        size_t right;
+        if (!noc__macro_token_is_paste_operator(
+                unit->preprocessing_tokens[index].token)) {
+            continue;
+        }
+        left = noc__macro_replacement_previous_significant(unit,
+                                                           replacement,
+                                                           index);
+        right = noc__macro_replacement_next_significant(unit,
+                                                        replacement,
+                                                        index);
+        if (left == NOC_TOKEN_INDEX_NONE || right == NOC_TOKEN_INDEX_NONE ||
+            noc__macro_token_is_paste_operator(
+                unit->preprocessing_tokens[left].token) ||
+            noc__macro_token_is_paste_operator(
+                unit->preprocessing_tokens[right].token)) {
+            return false;
         }
     }
-    return false;
+    return true;
+}
+
+static bool noc__macro_replacement_parameter_is_pasted(
+    const Noc_Preprocessor_Unit *unit,
+    Noc_Token_Range replacement,
+    size_t index)
+{
+    size_t adjacent = noc__macro_replacement_previous_significant(unit,
+                                                                  replacement,
+                                                                  index);
+    if (adjacent != NOC_TOKEN_INDEX_NONE &&
+        noc__macro_token_is_paste_operator(
+            unit->preprocessing_tokens[adjacent].token)) {
+        return true;
+    }
+    adjacent = noc__macro_replacement_next_significant(unit,
+                                                       replacement,
+                                                       index);
+    return adjacent != NOC_TOKEN_INDEX_NONE &&
+           noc__macro_token_is_paste_operator(
+               unit->preprocessing_tokens[adjacent].token);
 }
 
 static size_t noc__macro_replacement_parameter_index(
@@ -6320,6 +6447,230 @@ done:
     return status;
 }
 
+static Noc_Macro_Expansion_Status noc__macro_append_raw_paste_argument(
+    Noc__Macro_Expansion_Builder *builder,
+    const Noc__Macro_Token_Sequence *sequence,
+    Noc_Token_Range source,
+    const Noc_Macro_Environment_Entry *entry,
+    size_t parameter_token_index,
+    size_t frame_index,
+    size_t replacement_hide_set,
+    Noc__Macro_Token_Sequence *replacement)
+{
+    Noc_Macro_Expansion_Status status;
+    size_t index;
+    while (source.begin < source.end &&
+           noc_token_is_trivia(sequence->items[source.begin].token)) {
+        source.begin += 1;
+    }
+    while (source.end > source.begin &&
+           noc_token_is_trivia(sequence->items[source.end - 1].token)) {
+        source.end -= 1;
+    }
+    if (source.begin == source.end) {
+        return noc__macro_token_sequence_append_flagged(
+            builder,
+            replacement,
+            noc__macro_expansion_token(entry->unit,
+                                       parameter_token_index,
+                                       frame_index,
+                                       NOC_MACRO_EXPANSION_TOKEN_ARGUMENT),
+            replacement_hide_set,
+            NOC__MACRO_TOKEN_PLACEMARKER);
+    }
+    for (index = source.begin; index < source.end; ++index) {
+        Noc_Macro_Expansion_Token token = sequence->items[index];
+        size_t hide_set;
+        token.frame_index = frame_index;
+        if (token.generated_spelling_index == NOC_TOKEN_INDEX_NONE) {
+            token.origin = NOC_MACRO_EXPANSION_TOKEN_ARGUMENT;
+        }
+        status = noc__macro_hide_set_union(builder,
+                                           sequence->hide_sets[index],
+                                           replacement_hide_set,
+                                           &hide_set);
+        if (status != NOC_MACRO_EXPANSION_OK) return status;
+        status = noc__macro_token_sequence_append(builder,
+                                                  replacement,
+                                                  token,
+                                                  hide_set);
+        if (status != NOC_MACRO_EXPANSION_OK) return status;
+    }
+    return NOC_MACRO_EXPANSION_OK;
+}
+
+static Noc_Macro_Expansion_Status noc__macro_paste_tokens(
+    Noc__Macro_Expansion_Builder *builder,
+    const Noc_Macro_Expansion_Token *left,
+    const Noc_Macro_Expansion_Token *right,
+    const Noc_Macro_Expansion_Token *operator_token,
+    size_t hide_set,
+    Noc__Macro_Token_Sequence *result)
+{
+    Noc_Buffer spelling = {0};
+    Noc_Buffer logical = {0};
+    Noc_Lexer lexer;
+    Noc_Token lexed;
+    Noc_Token tail;
+    Noc_Macro_Expansion_Token token;
+    Noc_Macro_Expansion_Status status = NOC_MACRO_EXPANSION_OUT_OF_MEMORY;
+    size_t generated_spelling_index;
+    if (!noc_token_logical_text(left->token, &logical) ||
+        !noc_buffer_append_slice(
+            &spelling,
+            (Noc_Slice){logical.items, logical.count}) ||
+        !noc_token_logical_text(right->token, &logical) ||
+        !noc_buffer_append_slice(
+            &spelling,
+            (Noc_Slice){logical.items, logical.count})) {
+        goto done;
+    }
+    noc_lexer_init(&lexer, "<macro-paste>", spelling.items, spelling.count);
+    lexer.beginning_of_line = false;
+    lexed = noc_lexer_next(&lexer);
+    tail = noc_lexer_next(&lexer);
+    if (lexed.kind == NOC_TOKEN_EOF ||
+        lexed.kind == NOC_TOKEN_PREPROCESSOR ||
+        lexed.kind == NOC_TOKEN_HEADER_NAME ||
+        lexed.kind == NOC_TOKEN_INVALID ||
+        noc_token_is_trivia(lexed) ||
+        lexed.text.data != spelling.items ||
+        lexed.text.count != spelling.count ||
+        tail.kind != NOC_TOKEN_EOF) {
+        status = NOC_MACRO_EXPANSION_INVALID_PASTE;
+        goto done;
+    }
+    status = noc__macro_generated_spelling_append(builder,
+                                                  &spelling,
+                                                  &generated_spelling_index);
+    if (status != NOC_MACRO_EXPANSION_OK) goto done;
+    token = *operator_token;
+    token.token.kind = lexed.kind;
+    token.token.text = builder->output->generated_spellings[
+        generated_spelling_index];
+    token.generated_spelling_index = generated_spelling_index;
+    token.origin = NOC_MACRO_EXPANSION_TOKEN_PASTE;
+    status = noc__macro_token_sequence_append(builder,
+                                              result,
+                                              token,
+                                              hide_set);
+
+done:
+    noc_buffer_free(&logical);
+    noc_buffer_free(&spelling);
+    return status;
+}
+
+static Noc_Macro_Expansion_Status noc__macro_resolve_pastes(
+    Noc__Macro_Expansion_Builder *builder,
+    Noc__Macro_Token_Sequence *replacement)
+{
+    Noc_Macro_Expansion_Status status;
+    size_t operator_index;
+    for (;;) {
+        Noc__Macro_Token_Sequence result = {0};
+        size_t left;
+        size_t right;
+        size_t hide_set;
+        for (operator_index = 0;
+             operator_index < replacement->count &&
+             !(replacement->flags[operator_index] &
+               NOC__MACRO_TOKEN_PASTE_OPERATOR);
+             ++operator_index) {
+        }
+        if (operator_index == replacement->count) break;
+        left = operator_index;
+        while (left > 0) {
+            left -= 1;
+            if (!noc_token_is_trivia(replacement->items[left].token)) break;
+        }
+        right = operator_index + 1;
+        while (right < replacement->count &&
+               noc_token_is_trivia(replacement->items[right].token)) {
+            right += 1;
+        }
+        if (left == operator_index || right >= replacement->count ||
+            (replacement->flags[left] & NOC__MACRO_TOKEN_PASTE_OPERATOR) ||
+            (replacement->flags[right] & NOC__MACRO_TOKEN_PASTE_OPERATOR)) {
+            return NOC_MACRO_EXPANSION_INVALID_DEFINITION;
+        }
+        if ((replacement->flags[left] & NOC__MACRO_TOKEN_PLACEMARKER) &&
+            (replacement->flags[right] & NOC__MACRO_TOKEN_PLACEMARKER)) {
+            status = noc__macro_hide_set_intersection(
+                builder,
+                replacement->hide_sets[left],
+                replacement->hide_sets[right],
+                &hide_set);
+            if (status == NOC_MACRO_EXPANSION_OK) {
+                status = noc__macro_token_sequence_append_flagged(
+                    builder,
+                    &result,
+                    replacement->items[left],
+                    hide_set,
+                    NOC__MACRO_TOKEN_PLACEMARKER);
+            }
+        } else if (replacement->flags[left] &
+                   NOC__MACRO_TOKEN_PLACEMARKER) {
+            status = noc__macro_token_sequence_append(
+                builder,
+                &result,
+                replacement->items[right],
+                replacement->hide_sets[right]);
+        } else if (replacement->flags[right] &
+                   NOC__MACRO_TOKEN_PLACEMARKER) {
+            status = noc__macro_token_sequence_append(
+                builder,
+                &result,
+                replacement->items[left],
+                replacement->hide_sets[left]);
+        } else {
+            status = noc__macro_hide_set_intersection(
+                builder,
+                replacement->hide_sets[left],
+                replacement->hide_sets[right],
+                &hide_set);
+            if (status == NOC_MACRO_EXPANSION_OK) {
+                status = noc__macro_paste_tokens(
+                    builder,
+                    &replacement->items[left],
+                    &replacement->items[right],
+                    &replacement->items[operator_index],
+                    hide_set,
+                    &result);
+            }
+        }
+        if (status == NOC_MACRO_EXPANSION_OK) {
+            status = noc__macro_token_sequence_splice(
+                builder,
+                replacement,
+                (Noc_Token_Range){left, right + 1},
+                &result);
+        }
+        noc__macro_token_sequence_free(&result);
+        if (status != NOC_MACRO_EXPANSION_OK) return status;
+    }
+    {
+        size_t read;
+        size_t write = 0;
+        for (read = 0; read < replacement->count; ++read) {
+            if (replacement->flags[read] & NOC__MACRO_TOKEN_PLACEMARKER) {
+                continue;
+            }
+            if (replacement->flags[read] != 0) {
+                return NOC_MACRO_EXPANSION_INVALID_DEFINITION;
+            }
+            if (write != read) {
+                replacement->items[write] = replacement->items[read];
+                replacement->hide_sets[write] = replacement->hide_sets[read];
+                replacement->flags[write] = 0;
+            }
+            write += 1;
+        }
+        replacement->count = write;
+    }
+    return NOC_MACRO_EXPANSION_OK;
+}
+
 static bool noc__macro_replacement_uses_va_args(
     const Noc_Preprocessor_Unit *unit,
     Noc_Token_Range replacement)
@@ -6403,10 +6754,10 @@ static Noc_Macro_Expansion_Status noc__macro_expand_object(
                                             directive->replacement_tokens)) {
         return NOC_MACRO_EXPANSION_INVALID_DEFINITION;
     }
-    if (noc__macro_replacement_has_operator(entry->unit,
-                                            directive->replacement_tokens,
-                                            false)) {
-        return NOC_MACRO_EXPANSION_UNSUPPORTED_OPERATOR;
+    if (!noc__macro_replacement_pastes_are_valid(
+            entry->unit,
+            directive->replacement_tokens)) {
+        return NOC_MACRO_EXPANSION_INVALID_DEFINITION;
     }
     status = noc__macro_expansion_frame_append(builder,
                                                environment_entry_index,
@@ -6421,16 +6772,28 @@ static Noc_Macro_Expansion_Status noc__macro_expand_object(
     for (index = directive->replacement_tokens.begin;
          index < directive->replacement_tokens.end;
          ++index) {
-        status = noc__macro_token_sequence_append(
-            builder,
-            &replacement,
-            noc__macro_expansion_token(entry->unit,
-                                       index,
-                                       frame_index,
-                                       NOC_MACRO_EXPANSION_TOKEN_REPLACEMENT),
-            replacement_hide_set);
+        Noc_Macro_Expansion_Token token = noc__macro_expansion_token(
+            entry->unit,
+            index,
+            frame_index,
+            NOC_MACRO_EXPANSION_TOKEN_REPLACEMENT);
+        if (noc__macro_token_is_paste_operator(token.token)) {
+            status = noc__macro_token_sequence_append_flagged(
+                builder,
+                &replacement,
+                token,
+                replacement_hide_set,
+                NOC__MACRO_TOKEN_PASTE_OPERATOR);
+        } else {
+            status = noc__macro_token_sequence_append(builder,
+                                                      &replacement,
+                                                      token,
+                                                      replacement_hide_set);
+        }
         if (status != NOC_MACRO_EXPANSION_OK) goto done;
     }
+    status = noc__macro_resolve_pastes(builder, &replacement);
+    if (status != NOC_MACRO_EXPANSION_OK) goto done;
     status = noc__macro_token_sequence_splice(
         builder,
         sequence,
@@ -6466,10 +6829,10 @@ static Noc_Macro_Expansion_Status noc__macro_expand_function(
                                              directive->replacement_tokens))) {
         return NOC_MACRO_EXPANSION_INVALID_DEFINITION;
     }
-    if (noc__macro_replacement_has_operator(entry->unit,
-                                            directive->replacement_tokens,
-                                            false)) {
-        return NOC_MACRO_EXPANSION_UNSUPPORTED_OPERATOR;
+    if (!noc__macro_replacement_pastes_are_valid(
+            entry->unit,
+            directive->replacement_tokens)) {
+        return NOC_MACRO_EXPANSION_INVALID_DEFINITION;
     }
     supplied_argument_count = invocation->argument_count;
     if (supplied_argument_count == 0 && directive->parameter_count != 0) {
@@ -6511,6 +6874,9 @@ static Noc_Macro_Expansion_Status noc__macro_expand_function(
          ++index) {
         Noc_Token replacement_token =
             entry->unit->preprocessing_tokens[index].token;
+        if (noc__macro_token_is_paste_operator(replacement_token)) {
+            continue;
+        }
         if (noc_token_is_punct(replacement_token, "#") ||
             noc_token_is_punct(replacement_token, "%:")) {
             size_t parameter_index;
@@ -6530,8 +6896,12 @@ static Noc_Macro_Expansion_Status noc__macro_expand_function(
             entry->unit,
             directive,
             replacement_token);
-        if (parameter_index != NOC_TOKEN_INDEX_NONE) {
-            arguments[parameter_index].use_count += 1;
+        if (parameter_index != NOC_TOKEN_INDEX_NONE &&
+            !noc__macro_replacement_parameter_is_pasted(
+                entry->unit,
+                directive->replacement_tokens,
+                index)) {
+            arguments[parameter_index].expanded_use_count += 1;
         }
     }
     status = noc__macro_expansion_frame_append(builder,
@@ -6553,7 +6923,7 @@ static Noc_Macro_Expansion_Status noc__macro_expand_function(
     for (index = 0; index < directive->parameter_count; ++index) {
         Noc_Token_Range source = arguments[index].source_tokens;
         size_t token_index;
-        if (arguments[index].use_count == 0) continue;
+        if (arguments[index].expanded_use_count == 0) continue;
         for (token_index = source.begin; token_index < source.end; ++token_index) {
             Noc_Macro_Expansion_Token token = sequence->items[token_index];
             token.frame_index = frame_index;
@@ -6579,10 +6949,10 @@ static Noc_Macro_Expansion_Status noc__macro_expand_function(
                 &arguments[index].tokens.hide_sets[token_index]);
             if (status != NOC_MACRO_EXPANSION_OK) goto done;
         }
-        if (arguments[index].use_count != 0 &&
+        if (arguments[index].expanded_use_count != 0 &&
             arguments[index].tokens.count >
                 builder->limits.max_output_tokens /
-                    arguments[index].use_count) {
+                    arguments[index].expanded_use_count) {
             status = NOC_MACRO_EXPANSION_OUTPUT_LIMIT;
             goto done;
         }
@@ -6592,6 +6962,20 @@ static Noc_Macro_Expansion_Status noc__macro_expand_function(
          ++index) {
         Noc_Token replacement_token =
             entry->unit->preprocessing_tokens[index].token;
+        if (noc__macro_token_is_paste_operator(replacement_token)) {
+            status = noc__macro_token_sequence_append_flagged(
+                builder,
+                &replacement,
+                noc__macro_expansion_token(
+                    entry->unit,
+                    index,
+                    frame_index,
+                    NOC_MACRO_EXPANSION_TOKEN_REPLACEMENT),
+                replacement_hide_set,
+                NOC__MACRO_TOKEN_PASTE_OPERATOR);
+            if (status != NOC_MACRO_EXPANSION_OK) goto done;
+            continue;
+        }
         if (noc_token_is_punct(replacement_token, "#") ||
             noc_token_is_punct(replacement_token, "%:")) {
             size_t parameter_index;
@@ -6622,10 +7006,25 @@ static Noc_Macro_Expansion_Status noc__macro_expand_function(
             directive,
             replacement_token);
         if (parameter_index != NOC_TOKEN_INDEX_NONE) {
-            status = noc__macro_token_sequence_append_sequence(
-                builder,
-                &replacement,
-                &arguments[parameter_index].tokens);
+            if (noc__macro_replacement_parameter_is_pasted(
+                    entry->unit,
+                    directive->replacement_tokens,
+                    index)) {
+                status = noc__macro_append_raw_paste_argument(
+                    builder,
+                    sequence,
+                    arguments[parameter_index].source_tokens,
+                    entry,
+                    index,
+                    frame_index,
+                    replacement_hide_set,
+                    &replacement);
+            } else {
+                status = noc__macro_token_sequence_append_sequence(
+                    builder,
+                    &replacement,
+                    &arguments[parameter_index].tokens);
+            }
         } else {
             status = noc__macro_token_sequence_append(
                 builder,
@@ -6639,6 +7038,8 @@ static Noc_Macro_Expansion_Status noc__macro_expand_function(
         }
         if (status != NOC_MACRO_EXPANSION_OK) goto done;
     }
+    status = noc__macro_resolve_pastes(builder, &replacement);
+    if (status != NOC_MACRO_EXPANSION_OK) goto done;
     status = noc__macro_token_sequence_splice(builder,
                                               sequence,
                                               invocation->tokens,
@@ -6794,6 +7195,8 @@ NOCDEF Noc_Macro_Expansion_Status noc_macro_expansion_build(
     parsed.capacity = sequence.capacity;
     free(sequence.hide_sets);
     sequence.hide_sets = NULL;
+    free(sequence.flags);
+    sequence.flags = NULL;
     memset(&sequence, 0, sizeof(sequence));
     free(builder.hide_sets);
     builder.hide_sets = NULL;
@@ -6853,6 +7256,8 @@ NOCDEF bool noc_macro_expansion_render(const Noc_Macro_Expansion *expansion,
 }
 
 #undef NOC__MACRO_EXPANSION_HARD_MAX_DEPTH
+#undef NOC__MACRO_TOKEN_PLACEMARKER
+#undef NOC__MACRO_TOKEN_PASTE_OPERATOR
 
 #endif /* NOC_MACRO_EXPANSION_IMPLEMENTATION_INCLUDED */
 #endif /* NOC_IMPLEMENTATION || NOC__INDIVIDUAL_SOURCE */
