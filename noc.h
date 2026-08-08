@@ -29,9 +29,9 @@
 #define NOC_H_INCLUDED
 
 #define NOC_VERSION_MAJOR 0
-#define NOC_VERSION_MINOR 18
+#define NOC_VERSION_MINOR 19
 #define NOC_VERSION_PATCH 0
-#define NOC_VERSION "0.18.0"
+#define NOC_VERSION "0.19.0"
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -254,6 +254,11 @@ typedef enum {
     NOC_RULE_DIRECTIVE,
 } Noc_Rule_Scope;
 
+typedef enum {
+    NOC_RULE_TRIGGER_AT_NAME = 0,
+    NOC_RULE_TRIGGER_PATTERN,
+} Noc_Rule_Trigger_Kind;
+
 typedef struct Noc_Context Noc_Context;
 typedef struct Noc_Rewriter Noc_Rewriter;
 typedef struct Noc_Rule Noc_Rule;
@@ -275,6 +280,7 @@ typedef struct {
     bool emit_line_directives;
     bool unknown_rule_is_error;
     bool skip_inactive_preprocessor_branches;
+    bool disabled_rule_is_error;
 } Noc_Options;
 
 typedef struct {
@@ -292,8 +298,11 @@ typedef struct {
 
 struct Noc_Context {
     Noc_Rule *rules;
+    const char **rule_patterns;
+    bool *rule_enabled;
     size_t rules_count;
     size_t rules_capacity;
+    size_t active_transforms;
     Noc_Diagnostic_Fn diagnostic;
     void *diagnostic_user_data;
     Noc_Options options;
@@ -338,13 +347,25 @@ NOCDEF bool noc_buffer_appendf(Noc_Buffer *buffer, const char *format, ...)
     NOC_PRINTF_FORMAT(2, 3);
 NOCDEF bool noc_buffer_terminate(Noc_Buffer *buffer);
 
-/* Context and rule registry. Rule strings must outlive the context. */
+/* Context and rule registry. Rule strings and explicit trigger patterns must
+   outlive the context. noc_register_rule() uses the legacy @name trigger.
+   Pattern triggers are significant C token sequences: source trivia between
+   their tokens is ignored, and a leading @ is reserved for legacy triggers. */
 NOCDEF void noc_context_init(Noc_Context *context);
 NOCDEF void noc_context_deinit(Noc_Context *context);
 NOCDEF void noc_context_set_diagnostic(Noc_Context *context,
                                        Noc_Diagnostic_Fn diagnostic,
                                        void *user_data);
 NOCDEF bool noc_register_rule(Noc_Context *context, Noc_Rule rule);
+NOCDEF bool noc_register_rule_pattern(Noc_Context *context,
+                                      const char *pattern,
+                                      Noc_Rule rule);
+/* Rules start enabled. Registry mutation is rejected while any outer or nested
+   transform is active. A missing name is diagnosed and returns false. */
+NOCDEF bool noc_set_rule_enabled(Noc_Context *context, Noc_Slice name, bool enabled);
+/* Missing rules and disabled rules both return false; use noc_find_rule() when
+   the distinction matters. */
+NOCDEF bool noc_rule_is_enabled(const Noc_Context *context, Noc_Slice name);
 NOCDEF const Noc_Rule *noc_find_rule(const Noc_Context *context, Noc_Slice name);
 NOCDEF void noc_describe(const Noc_Context *context, FILE *stream);
 NOCDEF const char *noc_rule_scope_name(Noc_Rule_Scope scope);
@@ -529,8 +550,8 @@ NOCDEF bool noc_edit_set_apply(const Noc_Edit_Set *edits,
 NOCDEF void noc_edit_set_free(Noc_Edit_Set *edits);
 
 /* Rewriter API available to expansion callbacks. The callback starts just after
-   the @name trigger. Raw operations include trivia; significant operations skip
-   whitespace and comments. */
+   the final significant token of the selected trigger. Raw operations include
+   trivia; significant operations skip whitespace and comments. */
 NOCDEF const Noc_Token *noc_rw_peek_raw(const Noc_Rewriter *rewriter, size_t lookahead);
 NOCDEF const Noc_Token *noc_rw_peek(const Noc_Rewriter *rewriter, size_t lookahead);
 NOCDEF bool noc_rw_take_raw(Noc_Rewriter *rewriter, Noc_Token *token);
@@ -547,6 +568,10 @@ NOCDEF bool noc_rw_capture_balanced(Noc_Rewriter *rewriter,
                                     Noc_Slice *inside);
 NOCDEF const char *noc_rw_source_path(const Noc_Rewriter *rewriter);
 NOCDEF Noc_Location noc_rw_trigger_location(const Noc_Rewriter *rewriter);
+/* The trigger range includes trivia between matched trigger tokens, but not
+   trivia before the first or after the last token. It borrows the callback's
+   token stream and is valid only during that callback. */
+NOCDEF Noc_Token_Range noc_rw_trigger_range(const Noc_Rewriter *rewriter);
 /* The stream and lazily built tree are borrowed and valid only for the current
    expansion callback. They must not be modified, freed, retokenized, or
    retained. The remaining half-open range excludes EOF and may be empty. */
@@ -673,6 +698,7 @@ struct Noc_Rewriter {
     Noc_Syntax_Tree syntax_tree;
     bool syntax_tree_attempted;
     Noc_Location trigger_location;
+    Noc_Token_Range trigger_range;
     Noc_Buffer *output;
     Noc__String_List *dependencies;
     size_t expansion_depth;
@@ -750,6 +776,32 @@ static bool noc__slice_logically_equal_cstr(Noc_Slice slice, const char *text)
         text_index += 1;
     }
     return text_index == text_count;
+}
+
+static bool noc__slices_logically_equal(Noc_Slice left, Noc_Slice right)
+{
+    size_t left_index = 0;
+    size_t right_index = 0;
+    if ((!left.data && left.count != 0) || (!right.data && right.count != 0)) {
+        return false;
+    }
+    for (;;) {
+        size_t splice;
+        while (left_index < left.count &&
+               (splice = noc__splice_length(left.data, left.count, left_index)) != 0) {
+            left_index += splice;
+        }
+        while (right_index < right.count &&
+               (splice = noc__splice_length(right.data, right.count, right_index)) != 0) {
+            right_index += splice;
+        }
+        if (left_index == left.count || right_index == right.count) {
+            return left_index == left.count && right_index == right.count;
+        }
+        if (left.data[left_index] != right.data[right_index]) return false;
+        left_index += 1;
+        right_index += 1;
+    }
 }
 
 static void noc__lexer_advance(Noc_Lexer *lexer, size_t end)
@@ -879,21 +931,24 @@ static bool noc__quoted_prefix(const char *source,
                                size_t start,
                                size_t *quote_position)
 {
+    size_t next;
     if (start >= count) return false;
     if (source[start] == '"' || source[start] == '\'') {
         *quote_position = start;
         return true;
     }
+    next = noc__skip_splices(source, count, start + 1);
     if ((source[start] == 'L' || source[start] == 'u' || source[start] == 'U') &&
-        start + 1 < count &&
-        (source[start + 1] == '"' || source[start + 1] == '\'')) {
-        *quote_position = start + 1;
+        next < count && (source[next] == '"' || source[next] == '\'')) {
+        *quote_position = next;
         return true;
     }
-    if (source[start] == 'u' && start + 2 < count && source[start + 1] == '8' &&
-        source[start + 2] == '"') {
-        *quote_position = start + 2;
-        return true;
+    if (source[start] == 'u' && next < count && source[next] == '8') {
+        next = noc__skip_splices(source, count, next + 1);
+        if (next < count && source[next] == '"') {
+            *quote_position = next;
+            return true;
+        }
     }
     return false;
 }
@@ -1242,17 +1297,28 @@ NOCDEF Noc_Token noc_lexer_next(Noc_Lexer *lexer)
     }
 
     if (isdigit((unsigned char)lexer->source[start]) ||
-        (lexer->source[start] == '.' && start + 1 < lexer->source_count &&
-         isdigit((unsigned char)lexer->source[start + 1]))) {
+        (lexer->source[start] == '.' &&
+         (end = noc__skip_splices(lexer->source,
+                                  lexer->source_count,
+                                  start + 1)) < lexer->source_count &&
+         isdigit((unsigned char)lexer->source[end]))) {
+        unsigned char previous = (unsigned char)lexer->source[start];
         end = start + 1;
         while (end < lexer->source_count) {
-            unsigned char c = (unsigned char)lexer->source[end];
+            size_t next = noc__skip_splices(lexer->source,
+                                            lexer->source_count,
+                                            end);
+            unsigned char c;
+            if (next >= lexer->source_count) break;
+            c = (unsigned char)lexer->source[next];
             if (isalnum(c) || c == '_' || c == '.') {
-                end += 1;
-            } else if ((c == '+' || c == '-') && end > start &&
-                       (lexer->source[end - 1] == 'e' || lexer->source[end - 1] == 'E' ||
-                        lexer->source[end - 1] == 'p' || lexer->source[end - 1] == 'P')) {
-                end += 1;
+                previous = c;
+                end = next + 1;
+            } else if ((c == '+' || c == '-') &&
+                       (previous == 'e' || previous == 'E' ||
+                        previous == 'p' || previous == 'P')) {
+                previous = c;
+                end = next + 1;
             } else {
                 break;
             }
@@ -1496,11 +1562,14 @@ NOCDEF void noc_context_init(Noc_Context *context)
     context->diagnostic = noc__default_diagnostic;
     context->options.emit_line_directives = true;
     context->options.unknown_rule_is_error = true;
+    context->options.disabled_rule_is_error = true;
 }
 
 NOCDEF void noc_context_deinit(Noc_Context *context)
 {
     free(context->rules);
+    free(context->rule_patterns);
+    free(context->rule_enabled);
     memset(context, 0, sizeof(*context));
 }
 
@@ -1521,23 +1590,70 @@ NOCDEF const Noc_Rule *noc_find_rule(const Noc_Context *context, Noc_Slice name)
     return NULL;
 }
 
-static const Noc_Rule *noc__find_rule_token(const Noc_Context *context,
-                                            Noc_Token token)
+static size_t noc__find_rule_token(const Noc_Context *context, Noc_Token token)
 {
     size_t i;
     for (i = 0; i < context->rules_count; ++i) {
-        if (noc_token_is_identifier(token, context->rules[i].name)) {
-            return &context->rules[i];
+        if (!context->rule_patterns[i] &&
+            noc_token_is_identifier(token, context->rules[i].name)) {
+            return i;
         }
     }
-    return NULL;
+    return NOC_TOKEN_INDEX_NONE;
 }
 
-NOCDEF bool noc_register_rule(Noc_Context *context, Noc_Rule rule)
+static bool noc__pattern_has_trigraph(const char *pattern)
 {
-    Noc_Rule *rules;
+    while (*pattern) {
+        if (pattern[0] == '?' && pattern[1] == '?' && pattern[2] != '\0' &&
+            strchr("=/'()!<>-", pattern[2]) != NULL) {
+            return true;
+        }
+        ++pattern;
+    }
+    return false;
+}
+
+static bool noc__patterns_equal(const char *left, const char *right)
+{
+    Noc_Lexer left_lexer;
+    Noc_Lexer right_lexer;
+    Noc_Token left_token;
+    Noc_Token right_token;
+    noc_lexer_init(&left_lexer, "<pattern>", left, strlen(left));
+    noc_lexer_init(&right_lexer, "<pattern>", right, strlen(right));
+    for (;;) {
+        do {
+            left_token = noc_lexer_next(&left_lexer);
+        } while (noc_token_is_trivia(left_token));
+        do {
+            right_token = noc_lexer_next(&right_lexer);
+        } while (noc_token_is_trivia(right_token));
+        if (left_token.kind != right_token.kind) break;
+        if (left_token.kind == NOC_TOKEN_EOF) return true;
+        if (!noc__slices_logically_equal(left_token.text, right_token.text)) break;
+    }
+    return false;
+}
+
+static bool noc__register_rule(Noc_Context *context, const char *pattern, Noc_Rule rule)
+{
+    Noc_Rule *rules = NULL;
+    const char **patterns = NULL;
+    bool *enabled = NULL;
     size_t capacity;
+    size_t i;
     Noc_Location no_location = {0};
+    Noc_Lexer lexer;
+    Noc_Token token;
+    bool saw_token = false;
+    if (context->active_transforms) {
+        noc__report(context,
+                    NOC_DIAGNOSTIC_ERROR,
+                    no_location,
+                    "cannot register a rule during an active transform");
+        return false;
+    }
     if (!rule.name || !rule.name[0]) {
         noc__report(context, NOC_DIAGNOSTIC_ERROR, no_location, "rule name cannot be empty");
         return false;
@@ -1558,10 +1674,49 @@ NOCDEF bool noc_register_rule(Noc_Context *context, Noc_Rule rule)
                     rule.name);
         return false;
     }
+    if (pattern) {
+        if (!pattern[0] || noc__pattern_has_trigraph(pattern)) goto invalid_pattern;
+        noc_lexer_init(&lexer, "<rule-pattern>", pattern, strlen(pattern));
+        for (;;) {
+            token = noc_lexer_next(&lexer);
+            if (token.kind == NOC_TOKEN_EOF) break;
+            if (noc_token_is_trivia(token)) continue;
+            if (!saw_token && noc_token_is_punct(token, "@")) goto invalid_pattern;
+            saw_token = true;
+            if (token.kind == NOC_TOKEN_INVALID ||
+                token.kind == NOC_TOKEN_PREPROCESSOR) {
+                goto invalid_pattern;
+            }
+        }
+        if (!saw_token) goto invalid_pattern;
+        for (i = 0; i < context->rules_count; ++i) {
+            if (context->rule_patterns[i] &&
+                noc__patterns_equal(pattern, context->rule_patterns[i])) {
+                noc__report(context,
+                            NOC_DIAGNOSTIC_ERROR,
+                            no_location,
+                            "rule pattern '%s' is already registered",
+                            pattern);
+                return false;
+            }
+        }
+    }
     if (context->rules_count == context->rules_capacity) {
+        if (context->rules_capacity > SIZE_MAX / 2) goto allocation_failed;
         capacity = context->rules_capacity ? context->rules_capacity * 2 : 8;
-        rules = (Noc_Rule *)realloc(context->rules, capacity * sizeof(*rules));
-        if (!rules) {
+        if (capacity > SIZE_MAX / sizeof(*rules) ||
+            capacity > SIZE_MAX / sizeof(*patterns) ||
+            capacity > SIZE_MAX / sizeof(*enabled)) {
+            goto allocation_failed;
+        }
+        rules = (Noc_Rule *)malloc(capacity * sizeof(*rules));
+        patterns = (const char **)malloc(capacity * sizeof(*patterns));
+        enabled = (bool *)malloc(capacity * sizeof(*enabled));
+        if (!rules || !patterns || !enabled) {
+allocation_failed:
+            free(rules);
+            free(patterns);
+            free(enabled);
             noc__report(context,
                         NOC_DIAGNOSTIC_ERROR,
                         no_location,
@@ -1569,11 +1724,99 @@ NOCDEF bool noc_register_rule(Noc_Context *context, Noc_Rule rule)
                         rule.name);
             return false;
         }
+        if (context->rules_count) {
+            memcpy(rules, context->rules, context->rules_count * sizeof(*rules));
+            memcpy(patterns,
+                   context->rule_patterns,
+                   context->rules_count * sizeof(*patterns));
+            memcpy(enabled,
+                   context->rule_enabled,
+                   context->rules_count * sizeof(*enabled));
+        }
+        free(context->rules);
+        free(context->rule_patterns);
+        free(context->rule_enabled);
         context->rules = rules;
+        context->rule_patterns = patterns;
+        context->rule_enabled = enabled;
         context->rules_capacity = capacity;
     }
-    context->rules[context->rules_count++] = rule;
+    context->rules[context->rules_count] = rule;
+    context->rule_patterns[context->rules_count] = pattern;
+    context->rule_enabled[context->rules_count] = true;
+    context->rules_count += 1;
     return true;
+
+invalid_pattern:
+    noc__report(context,
+                NOC_DIAGNOSTIC_ERROR,
+                no_location,
+                "invalid rule pattern for rule '%s'",
+                rule.name ? rule.name : "");
+    return false;
+}
+
+NOCDEF bool noc_register_rule(Noc_Context *context, Noc_Rule rule)
+{
+    return noc__register_rule(context, NULL, rule);
+}
+
+NOCDEF bool noc_register_rule_pattern(Noc_Context *context,
+                                      const char *pattern,
+                                      Noc_Rule rule)
+{
+    if (!pattern) {
+        Noc_Location none = {0};
+        noc__report(context, NOC_DIAGNOSTIC_ERROR, none, "rule pattern cannot be NULL");
+        return false;
+    }
+    return noc__register_rule(context, pattern, rule);
+}
+
+NOCDEF bool noc_rule_is_enabled(const Noc_Context *context, Noc_Slice name)
+{
+    size_t i;
+    if (!name.data && name.count != 0) return false;
+    for (i = 0; i < context->rules_count; ++i) {
+        if (noc_slice_equal_cstr(name, context->rules[i].name)) {
+            return context->rule_enabled[i];
+        }
+    }
+    return false;
+}
+
+NOCDEF bool noc_set_rule_enabled(Noc_Context *context, Noc_Slice name, bool value)
+{
+    size_t i;
+    Noc_Location none = {0};
+    if (context->active_transforms) {
+        noc__report(context,
+                    NOC_DIAGNOSTIC_ERROR,
+                    none,
+                    "cannot change rule enable state during an active transform");
+        return false;
+    }
+    if (!name.data && name.count != 0) {
+        noc__report(context,
+                    NOC_DIAGNOSTIC_ERROR,
+                    none,
+                    "rule name slice is invalid");
+        return false;
+    }
+    for (i = 0; i < context->rules_count; ++i) {
+        if (noc_slice_equal_cstr(name, context->rules[i].name)) {
+            context->rule_enabled[i] = value;
+            return true;
+        }
+    }
+    noc__report(context,
+                NOC_DIAGNOSTIC_ERROR,
+                none,
+                "unknown rule '%.*s%s'",
+                (int)(name.count < 80 ? name.count : 80),
+                name.data ? name.data : "",
+                name.count > 80 ? "..." : "");
+    return false;
 }
 
 NOCDEF const char *noc_rule_scope_name(Noc_Rule_Scope scope)
@@ -1597,7 +1840,11 @@ NOCDEF void noc_describe(const Noc_Context *context, FILE *stream)
             context->rules_count == 1 ? "" : "s");
     for (i = 0; i < context->rules_count; ++i) {
         const Noc_Rule *rule = &context->rules[i];
-        fprintf(stream, "\n  @%s [%s]\n", rule->name, noc_rule_scope_name(rule->scope));
+        fprintf(stream, "\n  %s%s [%s]%s\n",
+                context->rule_patterns[i] ? "" : "@",
+                context->rule_patterns[i] ? context->rule_patterns[i] : rule->name,
+                noc_rule_scope_name(rule->scope),
+                context->rule_enabled[i] ? "" : " (disabled)");
         if (rule->syntax) fprintf(stream, "    Syntax: %s\n", rule->syntax);
         if (rule->description) fprintf(stream, "    %s\n", rule->description);
     }
@@ -1653,7 +1900,7 @@ NOCDEF bool noc_generate_ide_metadata_header(
                             "/* Generated by noc.h %s. Do not edit. */\n"
                             "#ifndef %s\n"
                             "#define %s\n\n"
-                            "#define %s_SCHEMA_VERSION 1\n"
+                            "#define %s_SCHEMA_VERSION 2\n"
                             "#define %s_NOC_VERSION ",
                             NOC_VERSION,
                             guard,
@@ -1674,8 +1921,31 @@ NOCDEF bool noc_generate_ide_metadata_header(
         const char *syntax = rule->syntax ? rule->syntax : "";
         const char *description = rule->description ? rule->description : "";
         const char *scope = noc_rule_scope_name(rule->scope);
+        const char *pattern = context->rule_patterns[i];
+        Noc_Buffer trigger = {0};
+        if (pattern) {
+            if (!noc_buffer_append_cstr(&trigger, pattern)) {
+                noc_buffer_free(&trigger);
+                goto failed;
+            }
+        } else if (!noc_buffer_appendf(&trigger, "@%s", rule->name)) {
+            noc_buffer_free(&trigger);
+            goto failed;
+        }
         if (!noc_buffer_appendf(&generated, "\n#define %s_RULE_%zu_NAME ", prefix, i) ||
             !noc__buffer_append_c_string(&generated, rule->name, strlen(rule->name)) ||
+            !noc_buffer_appendf(&generated,
+                                "\n#define %s_RULE_%zu_TRIGGER_KIND %d"
+                                "\n#define %s_RULE_%zu_TRIGGER_KIND_NAME \"%s\""
+                                "\n#define %s_RULE_%zu_TRIGGER ",
+                                prefix, i,
+                                pattern ? NOC_RULE_TRIGGER_PATTERN
+                                        : NOC_RULE_TRIGGER_AT_NAME,
+                                prefix, i, pattern ? "pattern" : "at-name",
+                                prefix, i) ||
+            !noc__buffer_append_c_string(&generated, trigger.items, trigger.count) ||
+            !noc_buffer_appendf(&generated, "\n#define %s_RULE_%zu_ENABLED %d",
+                                prefix, i, context->rule_enabled[i] ? 1 : 0) ||
             !noc_buffer_appendf(&generated,
                                 "\n#define %s_RULE_%zu_SCOPE %d"
                                 "\n#define %s_RULE_%zu_SCOPE_NAME ",
@@ -1690,6 +1960,7 @@ NOCDEF bool noc_generate_ide_metadata_header(
                                 prefix,
                                 i) ||
             !noc__buffer_append_c_string(&generated, syntax, strlen(syntax))) {
+            noc_buffer_free(&trigger);
             goto failed;
         }
         if (!omit_descriptions &&
@@ -1700,8 +1971,10 @@ NOCDEF bool noc_generate_ide_metadata_header(
              !noc__buffer_append_c_string(&generated,
                                           description,
                                           strlen(description)))) {
+            noc_buffer_free(&trigger);
             goto failed;
         }
+        noc_buffer_free(&trigger);
         if (!noc_buffer_append_cstr(&generated, "\n")) goto failed;
     }
     if (!noc_buffer_appendf(&generated, "\n#endif /* %s */\n", guard) ||
@@ -1935,7 +2208,7 @@ NOCDEF bool noc_rw_expect_punct(Noc_Rewriter *rewriter, const char *punctuator)
     if (token) {
         noc_rw_error_at(rewriter,
                         token->location,
-                        "expected '%s' after @%s, got %s '%.*s%s'",
+                        "expected '%s' after trigger for rule '%s', got %s '%.*s%s'",
                         punctuator,
                         rewriter->rule->name,
                         noc_token_kind_name(token->kind),
@@ -1943,7 +2216,7 @@ NOCDEF bool noc_rw_expect_punct(Noc_Rewriter *rewriter, const char *punctuator)
                         token->text.data,
                         token->text.count > 80 ? "..." : "");
     } else {
-        noc_rw_error(rewriter, "expected '%s' after @%s", punctuator, rewriter->rule->name);
+        noc_rw_error(rewriter, "expected '%s' after trigger for rule '%s'", punctuator, rewriter->rule->name);
     }
     return false;
 }
@@ -1964,7 +2237,7 @@ NOCDEF bool noc_rw_expect_identifier(Noc_Rewriter *rewriter,
     if (next) {
         noc_rw_error_at(rewriter,
                         next->location,
-                        "expected %sidentifier after @%s, got %s '%.*s%s'",
+                        "expected %sidentifier after trigger for rule '%s', got %s '%.*s%s'",
                         identifier ? identifier : "",
                         rewriter->rule->name,
                         noc_token_kind_name(next->kind),
@@ -1972,7 +2245,7 @@ NOCDEF bool noc_rw_expect_identifier(Noc_Rewriter *rewriter,
                         next->text.data,
                         next->text.count > 80 ? "..." : "");
     } else {
-        noc_rw_error(rewriter, "expected identifier after @%s", rewriter->rule->name);
+        noc_rw_error(rewriter, "expected identifier after trigger for rule '%s'", rewriter->rule->name);
     }
     return false;
 }
@@ -2004,7 +2277,7 @@ NOCDEF bool noc_rw_capture_balanced(Noc_Rewriter *rewriter,
         }
     }
     noc_rw_error(rewriter,
-                 "unterminated '%s ... %s' after @%s",
+                 "unterminated '%s ... %s' after trigger for rule '%s'",
                  open,
                  close,
                  rewriter->rule->name);
@@ -2019,6 +2292,12 @@ NOCDEF const char *noc_rw_source_path(const Noc_Rewriter *rewriter)
 NOCDEF Noc_Location noc_rw_trigger_location(const Noc_Rewriter *rewriter)
 {
     return rewriter->trigger_location;
+}
+
+NOCDEF Noc_Token_Range noc_rw_trigger_range(const Noc_Rewriter *rewriter)
+{
+    Noc_Token_Range invalid = {NOC_TOKEN_INDEX_NONE, NOC_TOKEN_INDEX_NONE};
+    return rewriter ? rewriter->trigger_range : invalid;
 }
 
 NOCDEF const Noc_Token_Stream *noc_rw_token_stream(const Noc_Rewriter *rewriter)
@@ -2146,7 +2425,7 @@ NOCDEF bool noc_rw_add_dependency(Noc_Rewriter *rewriter, const char *path)
         !noc__string_list_append_unique(rewriter->dependencies, path)) {
         if (rewriter) {
             noc_rw_error(rewriter,
-                         "could not record dependency while expanding @%s",
+                         "could not record dependency while expanding rule '%s'",
                          rewriter->rule->name);
         }
         return false;
@@ -2157,7 +2436,7 @@ NOCDEF bool noc_rw_add_dependency(Noc_Rewriter *rewriter, const char *path)
 NOCDEF bool noc_rw_emit(Noc_Rewriter *rewriter, const void *data, size_t count)
 {
     if (!noc_buffer_append(rewriter->output, data, count)) {
-        noc_rw_error(rewriter, "out of memory while expanding @%s", rewriter->rule->name);
+        noc_rw_error(rewriter, "out of memory while expanding rule '%s'", rewriter->rule->name);
         return false;
     }
     return true;
@@ -2229,8 +2508,8 @@ NOCDEF bool noc_rw_emit_transformed(Noc_Rewriter *rewriter, Noc_Slice source)
     if ((source.count > 0 && !source.data) || rewriter->expansion_depth >= 64) {
         noc_rw_error(rewriter,
                      rewriter->expansion_depth >= 64
-                         ? "nested expansion limit reached while expanding @%s"
-                         : "invalid nested source while expanding @%s",
+                         ? "nested expansion limit reached while expanding rule '%s'"
+                         : "invalid nested source while expanding rule '%s'",
                      rewriter->rule->name);
         return false;
     }
@@ -2249,7 +2528,7 @@ NOCDEF bool noc_rw_emit_transformed(Noc_Rewriter *rewriter, Noc_Slice source)
         if (!noc__string_list_append_unique(rewriter->dependencies,
                                             nested.dependencies[i])) {
             noc_rw_error(rewriter,
-                         "could not merge nested dependencies while expanding @%s",
+                         "could not merge nested dependencies while expanding rule '%s'",
                          rewriter->rule->name);
             goto done;
         }
@@ -2269,7 +2548,7 @@ NOCDEF bool noc_rw_emitf(Noc_Rewriter *rewriter, const char *format, ...)
     va_start(arguments, format);
     result = noc__buffer_appendfv(rewriter->output, format, arguments);
     va_end(arguments);
-    if (!result) noc_rw_error(rewriter, "out of memory while expanding @%s", rewriter->rule->name);
+    if (!result) noc_rw_error(rewriter, "out of memory while expanding rule '%s'", rewriter->rule->name);
     return result;
 }
 
@@ -2281,7 +2560,7 @@ NOCDEF bool noc_rw_emit_c_string(Noc_Rewriter *rewriter,
         !noc__buffer_append_c_string(rewriter->output, data, count)) {
         if (rewriter) {
             noc_rw_error(rewriter,
-                         "could not emit a C string while expanding @%s",
+                         "could not emit a C string while expanding rule '%s'",
                          rewriter->rule->name);
         }
         return false;
@@ -4723,6 +5002,36 @@ NOCDEF void noc_edit_set_free(Noc_Edit_Set *edits)
     memset(edits, 0, sizeof(*edits));
 }
 
+static size_t noc__pattern_match(const char *pattern,
+                                 const Noc_Token *tokens,
+                                 size_t count,
+                                 size_t start,
+                                 size_t *significant_count)
+{
+    Noc_Lexer lexer;
+    Noc_Token expected;
+    size_t cursor = start;
+    size_t matched = 0;
+    noc_lexer_init(&lexer, "<rule-pattern>", pattern, strlen(pattern));
+    for (;;) {
+        do {
+            expected = noc_lexer_next(&lexer);
+        } while (noc_token_is_trivia(expected));
+        if (expected.kind == NOC_TOKEN_EOF) break;
+        if (matched) {
+            while (cursor < count && noc_token_is_trivia(tokens[cursor])) cursor += 1;
+        }
+        if (cursor >= count || tokens[cursor].kind != expected.kind ||
+            !noc__slices_logically_equal(expected.text, tokens[cursor].text)) {
+            return NOC_TOKEN_INDEX_NONE;
+        }
+        ++matched;
+        ++cursor;
+    }
+    *significant_count = matched;
+    return cursor;
+}
+
 static bool noc__transform_source(Noc_Context *context,
                                   const char *path,
                                   const char *source,
@@ -4744,6 +5053,7 @@ static bool noc__transform_source(Noc_Context *context,
     Noc_Location no_location = {0};
 
     memset(result, 0, sizeof(*result));
+    context->active_transforms += 1;
     if (!noc__reject_trigraphs(context, path, source, source_count)) {
         ok = false;
         goto done;
@@ -4795,19 +5105,71 @@ static bool noc__transform_source(Noc_Context *context,
 
     while (index < tokens.count && tokens.items[index].kind != NOC_TOKEN_EOF) {
         token = tokens.items[index];
-        if (noc_token_is_punct(token, "@") &&
+        if (!noc_token_is_trivia(token) && token.kind != NOC_TOKEN_PREPROCESSOR &&
             (!analyze_preprocessor_activity ||
              noc_preprocessor_activity_at(&preprocessor, index) !=
                  NOC_PREPROCESSOR_ACTIVITY_INACTIVE)) {
-            size_t name_index = index + 1;
-            const Noc_Rule *rule;
-            while (name_index < tokens.count && noc_token_is_trivia(tokens.items[name_index])) {
-                name_index += 1;
+            size_t selected = NOC_TOKEN_INDEX_NONE;
+            size_t trigger_end = 0;
+            size_t best_count = 0;
+            size_t r;
+            size_t legacy_name = index + 1;
+            if (noc_token_is_punct(token, "@")) {
+                while (legacy_name < tokens.count &&
+                       noc_token_is_trivia(tokens.items[legacy_name])) {
+                    legacy_name += 1;
+                }
+                if (legacy_name < tokens.count &&
+                    tokens.items[legacy_name].kind == NOC_TOKEN_IDENTIFIER) {
+                    r = noc__find_rule_token(context, tokens.items[legacy_name]);
+                    if (r != NOC_TOKEN_INDEX_NONE) {
+                        selected = r;
+                        trigger_end = legacy_name + 1;
+                        best_count = 2;
+                    }
+                }
             }
-            if (name_index < tokens.count &&
-                tokens.items[name_index].kind == NOC_TOKEN_IDENTIFIER) {
-                rule = noc__find_rule_token(context, tokens.items[name_index]);
-                if (rule) {
+            for (r = 0; r < context->rules_count; ++r) {
+                if (context->rule_patterns[r]) {
+                    size_t significant_count = 0;
+                    size_t end = noc__pattern_match(context->rule_patterns[r],
+                                                    tokens.items,
+                                                    tokens.count,
+                                                    index,
+                                                    &significant_count);
+                    if (end != NOC_TOKEN_INDEX_NONE &&
+                        significant_count > best_count) {
+                        selected = r;
+                        trigger_end = end;
+                        best_count = significant_count;
+                    }
+                }
+            }
+            if (selected != NOC_TOKEN_INDEX_NONE) {
+                const Noc_Rule *rule = &context->rules[selected];
+                if (!context->rule_enabled[selected]) {
+                    if (context->options.disabled_rule_is_error) {
+                        noc__report(context,
+                                    NOC_DIAGNOSTIC_ERROR,
+                                    token.location,
+                                    "rule '%s' is disabled",
+                                    rule->name);
+                        ok = false;
+                        goto done;
+                    }
+                    while (index < trigger_end) {
+                        if (!noc_buffer_append_slice(&output, tokens.items[index++].text)) {
+                            noc__report(context,
+                                        NOC_DIAGNOSTIC_ERROR,
+                                        token.location,
+                                        "out of memory while preserving disabled rule '%s'",
+                                        rule->name);
+                            ok = false;
+                            goto done;
+                        }
+                    }
+                    continue;
+                } else {
                     Noc_Rewriter rewriter;
                     size_t expansion_errors = context->error_count;
                     bool expanded;
@@ -4819,9 +5181,11 @@ static bool noc__transform_source(Noc_Context *context,
                     rewriter.source_count = source_count;
                     rewriter.tokens = tokens.items;
                     rewriter.tokens_count = tokens.count;
-                    rewriter.cursor = name_index + 1;
+                    rewriter.cursor = trigger_end;
                     rewriter.stream = &tokens;
                     rewriter.trigger_location = token.location;
+                    rewriter.trigger_range.begin = index;
+                    rewriter.trigger_range.end = trigger_end;
                     rewriter.output = &output;
                     rewriter.dependencies = &dependencies;
                     rewriter.expansion_depth = expansion_depth;
@@ -4829,7 +5193,7 @@ static bool noc__transform_source(Noc_Context *context,
                     noc_syntax_tree_free(&rewriter.syntax_tree);
                     if (!expanded && context->error_count == expansion_errors) {
                         noc_rw_error(&rewriter,
-                                     "expansion callback for @%s failed without reporting an error",
+                                     "expansion callback for rule '%s' failed without reporting an error",
                                      rule->name);
                     }
                     if (!expanded || context->error_count != expansion_errors) {
@@ -4842,19 +5206,32 @@ static bool noc__transform_source(Noc_Context *context,
                     index = rewriter.cursor;
                     continue;
                 }
+            } else if (noc_token_is_punct(token, "@") && legacy_name < tokens.count &&
+                       tokens.items[legacy_name].kind == NOC_TOKEN_IDENTIFIER) {
                 if (context->options.unknown_rule_is_error) {
                     noc__report(context,
                                 NOC_DIAGNOSTIC_ERROR,
                                 token.location,
                                 "unknown dialect rule '@%.*s%s'",
-                                (int)(tokens.items[name_index].text.count < 80
-                                          ? tokens.items[name_index].text.count
+                                (int)(tokens.items[legacy_name].text.count < 80
+                                          ? tokens.items[legacy_name].text.count
                                           : 80),
-                                tokens.items[name_index].text.data,
-                                tokens.items[name_index].text.count > 80 ? "..." : "");
+                                tokens.items[legacy_name].text.data,
+                                tokens.items[legacy_name].text.count > 80 ? "..." : "");
                     ok = false;
                     goto done;
                 }
+                while (index <= legacy_name) {
+                    if (!noc_buffer_append_slice(&output, tokens.items[index++].text)) {
+                        noc__report(context,
+                                    NOC_DIAGNOSTIC_ERROR,
+                                    token.location,
+                                    "out of memory while preserving an unknown dialect rule");
+                        ok = false;
+                        goto done;
+                    }
+                }
+                continue;
             }
         }
         if (!noc_buffer_append_slice(&output, token.text)) {
@@ -4899,6 +5276,7 @@ done:
     free(tokens.items);
     noc_buffer_free(&output);
     noc__string_list_free(&dependencies);
+    context->active_transforms -= 1;
     return ok && result->error_count == 0;
 }
 

@@ -44,6 +44,12 @@ static void test_phase2_splices(void)
         "#\\" "\n" "#\n"
         "%\\" "\r\n" ":%\\" "\r" ":\n"
         "%\\" "\n" ":define VALUE 1\n";
+    static const char literal_source[] =
+        "1\\" "\n" "e2 "
+        "0x1p\\" "\r\n" "-2 "
+        ".\\" "\r" "5 "
+        "u\\" "\n" "8\"text\" "
+        "L\\" "\n" "'x'";
     Noc_Lexer lexer;
     Noc_Token token;
     Noc_Buffer logical = {0};
@@ -103,6 +109,36 @@ static void test_phase2_splices(void)
     token = noc_lexer_next(&lexer);
     CHECK(token.kind == NOC_TOKEN_PREPROCESSOR);
     CHECK(token.location.line == 6);
+    CHECK(noc_lexer_next(&lexer).kind == NOC_TOKEN_EOF);
+
+    noc_lexer_init(&lexer,
+                   "literal-splices.c",
+                   literal_source,
+                   sizeof(literal_source) - 1);
+    token = noc_lexer_next(&lexer);
+    CHECK(token.kind == NOC_TOKEN_NUMBER);
+    CHECK(noc_token_logical_text(token, &logical));
+    CHECK(strcmp(logical.items, "1e2") == 0);
+    CHECK(noc_lexer_next(&lexer).kind == NOC_TOKEN_WHITESPACE);
+    token = noc_lexer_next(&lexer);
+    CHECK(token.kind == NOC_TOKEN_NUMBER);
+    CHECK(noc_token_logical_text(token, &logical));
+    CHECK(strcmp(logical.items, "0x1p-2") == 0);
+    CHECK(noc_lexer_next(&lexer).kind == NOC_TOKEN_WHITESPACE);
+    token = noc_lexer_next(&lexer);
+    CHECK(token.kind == NOC_TOKEN_NUMBER);
+    CHECK(noc_token_logical_text(token, &logical));
+    CHECK(strcmp(logical.items, ".5") == 0);
+    CHECK(noc_lexer_next(&lexer).kind == NOC_TOKEN_WHITESPACE);
+    token = noc_lexer_next(&lexer);
+    CHECK(token.kind == NOC_TOKEN_STRING);
+    CHECK(noc_token_logical_text(token, &logical));
+    CHECK(strcmp(logical.items, "u8\"text\"") == 0);
+    CHECK(noc_lexer_next(&lexer).kind == NOC_TOKEN_WHITESPACE);
+    token = noc_lexer_next(&lexer);
+    CHECK(token.kind == NOC_TOKEN_CHARACTER);
+    CHECK(noc_token_logical_text(token, &logical));
+    CHECK(strcmp(logical.items, "L'x'") == 0);
     CHECK(noc_lexer_next(&lexer).kind == NOC_TOKEN_EOF);
 
     CHECK(noc_buffer_append_cstr(&preserved, "preserved"));

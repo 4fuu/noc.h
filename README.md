@@ -104,15 +104,19 @@ Its source remains a normal `.c` file:
 static const char message[] = @embed("message.txt");
 ```
 
-Run `dialect --describe` to inspect every enabled rule and its declared scope,
-syntax, and description.
+Run `dialect --describe` to inspect every registered trigger, its enabled state,
+and its declared scope, syntax, and description.
 
 ## IDE metadata header
 
 `noc_generate_ide_metadata_header` serializes the same registry into a
 standalone C header for editor extensions, completion generators, and other
 tooling. The output records a schema version, the `noc.h` version, dialect name,
-rule count, and each rule's name, numeric/string scope, syntax, and description:
+rule count, and each rule's name, trigger kind/text, enabled state,
+numeric/string scope, syntax, and description:
+
+Schema 2 names the trigger kinds `at-name` and `pattern`, matching
+`NOC_RULE_TRIGGER_AT_NAME` and `NOC_RULE_TRIGGER_PATTERN`.
 
 ```c
 Noc_Ide_Metadata_Options options = {
@@ -138,7 +142,7 @@ Options may be `NULL` or zero-initialized for deterministic defaults;
 The include guard and macro prefix must be C identifiers, arbitrary metadata is
 escaped as C strings, and generation replaces the destination buffer only on
 success. This metadata enables integrations to discover the dialect, but a
-header alone cannot make an ordinary C parser understand `@name` syntax;
+header alone cannot make an ordinary C parser understand raw dialect syntax;
 indexers should consume transformed source/header overlays.
 
 ### clangd and transformed overlays
@@ -371,6 +375,41 @@ noc_register_rule(&noc, (Noc_Rule) {
     .expand = expand_twice,
 });
 ```
+
+`noc_register_rule` retains the legacy `@name` spelling. A rule can instead
+use an explicit C-lexer-token trigger:
+
+```c
+noc_register_rule_pattern(&noc, "checked add", checked_add_rule);
+noc_register_rule_pattern(&noc, "unless (", unless_rule);
+noc_set_rule_enabled(&noc, noc_slice_from_cstr("unless"), false);
+```
+
+Patterns match token kinds and phase-2 logical spellings. Trivia between their
+tokens is ignored (and remains available through `noc_rw_trigger_range`), but
+trivia outside the trigger is not consumed. At a token, the pattern containing
+the most significant tokens wins regardless of registration order or enabled
+state. Leading `@` is reserved for legacy registration. Pattern strings are
+borrowed and must outlive the context, like the other strings in `Noc_Rule`.
+Rule names remain globally unique identities and `noc_rule_is_enabled` queries
+their state.
+
+Pattern matching is deliberately lexical, not C scope-aware: a trigger such as
+`defer` also matches a label, member name, or any other identifier token with
+that spelling. `Noc_Rule.scope` is descriptive metadata, not a matching
+constraint. Patterns do not search inside comments, strings, or preprocessor
+tokens; a pattern can nevertheless explicitly match one complete string token.
+Definitely inactive preprocessor branches are skipped when that option is
+enabled. Generated C should be used for ordinary IDE C parsing; raw dialect
+spellings are not necessarily understood by C parsers.
+
+Rules begin enabled. With the default `disabled_rule_is_error = true`, use of a
+disabled selected rule fails transactionally. Setting it false preserves the
+complete matched trigger byte-for-byte and continues after it, without parsing
+its following arguments or body. Registry and enable changes are rejected
+during transforms, including nested transforms. Version 0.19 changes the public
+`Noc_Context` layout: rebuild applications and libraries together; it is not
+ABI-compatible with objects built against earlier headers.
 
 The rewriter API currently provides raw and trivia-skipping token lookahead,
 matching and expectation helpers, balanced delimiter capture, diagnostics, and

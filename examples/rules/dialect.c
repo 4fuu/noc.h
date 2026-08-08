@@ -82,7 +82,7 @@ int main(int argc, char **argv)
         {
             "repeat",
             NOC_RULE_STATEMENT,
-            "@repeat(count) { statements }",
+            "repeat(count) { statements }",
             "Repeat a statement block count times.",
             expand_repeat,
             NULL,
@@ -108,7 +108,9 @@ int main(int argc, char **argv)
 
     noc_context_init(&noc);
     for (i = 0; i < sizeof(rules) / sizeof(rules[0]); ++i) {
-        if (!noc_register_rule(&noc, rules[i])) {
+        if (!(strcmp(rules[i].name, "repeat") == 0
+                  ? noc_register_rule_pattern(&noc, "repeat", rules[i])
+                  : noc_register_rule(&noc, rules[i]))) {
             noc_context_deinit(&noc);
             return 1;
         }

@@ -69,10 +69,11 @@ passes, and the milestone has been committed and pushed.
 - [x] Add exact compiler-command signature API and CLI output.
 - [x] Add optional, conservative inactive-preprocessor-branch handling without
       guessing macro-dependent conditions.
-- [x] Normalize phase-2 splices inside identifiers and punctuators while
-      preserving exact source slices for lossless syntax APIs.
+- [x] Normalize phase-2 splices inside identifiers, preprocessing numbers,
+      literal prefixes, and punctuators while preserving exact source slices
+      for lossless syntax APIs.
 - [x] Fuzz lexer, token cursor, syntax tree/query, preprocessor activity, and
       rewrite callback APIs with deterministic smoke and Clang libFuzzer modes.
-- [ ] Add explicit token-pattern rule triggers and per-rule feature controls
+- [x] Add explicit token-pattern rule triggers and per-rule feature controls
       while preserving the existing `@name` registration contract.
 - [ ] Versioning, changelog, release packaging, and vendored `nob.h` update policy.

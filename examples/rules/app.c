@@ -9,7 +9,7 @@
 
 int main(void)
 {
-    @repeat(3) {
+    repeat(3) {
         total += @square(increment(2));
     }
     printf("rules example: %d\n", total);

@@ -5,6 +5,23 @@ typedef struct {
     char second[32];
 } Dependency_Paths;
 
+typedef struct {
+    const char *replacement;
+    const char *expected_trigger;
+    const char *expected_next;
+    size_t calls;
+    bool preserve_trigger_newlines;
+} Pattern_State;
+
+typedef struct {
+    Noc_Context *context;
+    Noc_Rule legacy_rule;
+    Noc_Rule pattern_rule;
+    bool registered_legacy;
+    bool registered_pattern;
+    bool changed_enabled;
+} Mutation_State;
+
 static bool expand_twice(Noc_Rewriter *rewriter,
                          const Noc_Rule *rule,
                          void *user_data)
@@ -28,6 +45,49 @@ static bool expand_optional(Noc_Rewriter *rewriter,
     (void)user_data;
     CHECK(!noc_rw_match_punct(rewriter, "("));
     return noc_rw_emit_cstr(rewriter, "long");
+}
+
+static bool expand_pattern_text(Noc_Rewriter *rewriter,
+                                const Noc_Rule *rule,
+                                void *user_data)
+{
+    Pattern_State *state = (Pattern_State *)user_data;
+    Noc_Token_Range trigger = noc_rw_trigger_range(rewriter);
+    const Noc_Token_Stream *stream = noc_rw_token_stream(rewriter);
+    Noc_Slice trigger_source = noc_token_range_source(stream, trigger);
+    const Noc_Token *next;
+    (void)rule;
+    state->calls += 1;
+    CHECK(stream != NULL);
+    CHECK(trigger.begin != NOC_TOKEN_INDEX_NONE && trigger.end > trigger.begin);
+    if (state->expected_trigger) {
+        CHECK(slice_equals(trigger_source, state->expected_trigger));
+    }
+    if (state->expected_next) {
+        next = noc_rw_peek_raw(rewriter, 0);
+        CHECK(next != NULL && noc_token_is_trivia(*next));
+        next = noc_rw_peek(rewriter, 0);
+        CHECK(next != NULL && noc_token_is_identifier(*next, state->expected_next));
+    }
+    if (state->preserve_trigger_newlines &&
+        !noc_rw_preserve_newlines(rewriter, trigger_source)) {
+        return false;
+    }
+    return noc_rw_emit_cstr(rewriter, state->replacement);
+}
+
+static bool expand_registry_mutation(Noc_Rewriter *rewriter,
+                                     const Noc_Rule *rule,
+                                     void *user_data)
+{
+    Mutation_State *state = (Mutation_State *)user_data;
+    state->registered_legacy = noc_register_rule(state->context, state->legacy_rule);
+    state->registered_pattern =
+        noc_register_rule_pattern(state->context, "late", state->pattern_rule);
+    state->changed_enabled = noc_set_rule_enabled(state->context,
+                                                  noc_slice_from_cstr(rule->name),
+                                                  false);
+    return noc_rw_emit_cstr(rewriter, "mutated");
 }
 
 static bool expand_failure(Noc_Rewriter *rewriter,
@@ -718,6 +778,15 @@ static void test_unknown_rule(void)
     Noc_Context context;
     Noc_Transform_Result result;
     Diagnostic_State diagnostics = {0};
+    Pattern_State pattern_state = {"MATCH", NULL, NULL, 0, false};
+    Noc_Rule pattern_rule = {
+        "missing-pattern",
+        NOC_RULE_TOKEN,
+        "missing",
+        "Ensure an unknown legacy range stays opaque.",
+        expand_pattern_text,
+        &pattern_state,
+    };
 
     noc_context_init(&context);
     noc_context_set_diagnostic(&context, count_diagnostics, &diagnostics);
@@ -728,6 +797,19 @@ static void test_unknown_rule(void)
                                 &result));
     CHECK(diagnostics.errors == 1);
     CHECK(result.error_count == 1);
+    noc_transform_result_free(&result);
+
+    context.options.emit_line_directives = false;
+    context.options.unknown_rule_is_error = false;
+    CHECK(noc_register_rule_pattern(&context, "missing", pattern_rule));
+    CHECK(noc_transform_source(&context,
+                               "unknown-passthrough.c",
+                               "@ /* gap */ missing + missing",
+                               sizeof("@ /* gap */ missing + missing") - 1,
+                               &result));
+    CHECK(strcmp(result.output, "@ /* gap */ missing + MATCH") == 0);
+    CHECK(pattern_state.calls == 1);
+    CHECK(diagnostics.errors == 1);
     noc_transform_result_free(&result);
     noc_context_deinit(&context);
 }
@@ -757,6 +839,426 @@ static void test_silent_callback_failure(void)
                                 &result));
     CHECK(diagnostics.errors == 1);
     CHECK(result.error_count == 1);
+    noc_transform_result_free(&result);
+    noc_context_deinit(&context);
+}
+
+static void test_rule_pattern_matching(void)
+{
+    static const char opaque_source[] =
+        "#define twice(x) x\n"
+        "const char *name = \"twice\"; int twice_more; int value = twice(2);\n";
+    static const char opaque_expected[] =
+        "#define twice(x) x\n"
+        "const char *name = \"twice\"; int twice_more; "
+        "int value = ((2) + (2));\n";
+    static const char spliced_source[] = "tw\\\nice(3)";
+    static const char trigger_source[] = "checked /* gap\n */ add tail";
+    static const char phase2_token_source[] =
+        "1\\" "\n" "e2 1e3 u\\" "\n" "8\"mark\" u8\"other\"";
+    Noc_Context context;
+    Noc_Transform_Result result = {0};
+    Noc_Rule legacy;
+    Noc_Rule bare;
+    Noc_Rule probe;
+    Noc_Rule number;
+    Noc_Rule string;
+    Noc_Rule contextual;
+    Pattern_State probe_state = {
+        "SUM", "checked /* gap\n */ add", "tail", 0, true,
+    };
+    Pattern_State number_state = {"ONE", NULL, NULL, 0, false};
+    Pattern_State string_state = {"TEXT", NULL, NULL, 0, false};
+    Pattern_State contextual_state = {"D", NULL, NULL, 0, false};
+    Noc_Token_Range invalid = noc_rw_trigger_range(NULL);
+
+    legacy.name = "legacy_twice";
+    legacy.scope = NOC_RULE_EXPRESSION;
+    legacy.syntax = "@legacy_twice(expression)";
+    legacy.description = "Exercise the unchanged legacy trigger.";
+    legacy.expand = expand_twice;
+    legacy.user_data = NULL;
+    bare.name = "bare_twice";
+    bare.scope = NOC_RULE_EXPRESSION;
+    bare.syntax = "twice(expression)";
+    bare.description = "Exercise a bare keyword trigger.";
+    bare.expand = expand_twice;
+    bare.user_data = NULL;
+    probe = (Noc_Rule){
+        "checked-add", NOC_RULE_TOKEN, "checked add value", "Inspect a trigger range.",
+        expand_pattern_text, &probe_state,
+    };
+    number = (Noc_Rule){
+        "one-literal", NOC_RULE_TOKEN, "1e2", "Match one complete number token.",
+        expand_pattern_text, &number_state,
+    };
+    string = (Noc_Rule){
+        "mark-literal", NOC_RULE_TOKEN, "u8\"mark\"", "Match one complete string token.",
+        expand_pattern_text, &string_state,
+    };
+    contextual = (Noc_Rule){
+        "defer-word", NOC_RULE_TOKEN, "defer", "Demonstrate lexical matching.",
+        expand_pattern_text, &contextual_state,
+    };
+
+    CHECK(NOC_RULE_TRIGGER_AT_NAME == 0);
+    CHECK(NOC_RULE_TRIGGER_PATTERN == 1);
+    CHECK(invalid.begin == NOC_TOKEN_INDEX_NONE && invalid.end == NOC_TOKEN_INDEX_NONE);
+    noc_context_init(&context);
+    context.options.emit_line_directives = false;
+    CHECK(noc_register_rule(&context, legacy));
+    CHECK(noc_register_rule_pattern(&context, "twice", bare));
+    CHECK(noc_register_rule_pattern(&context, "checked add", probe));
+    CHECK(noc_register_rule_pattern(&context, "1e2", number));
+    CHECK(noc_register_rule_pattern(&context, "u8\"mark\"", string));
+    CHECK(noc_register_rule_pattern(&context, "defer", contextual));
+
+    CHECK(noc_transform_source(&context,
+                               "legacy-pattern.c",
+                               "@ /* gap */ legacy_tw\\\nice(1)",
+                               sizeof("@ /* gap */ legacy_tw\\\nice(1)") - 1,
+                               &result));
+    CHECK(strcmp(result.output, "((1) + (1))") == 0);
+    noc_transform_result_free(&result);
+    CHECK(noc_transform_source(&context,
+                               "opaque-pattern.c",
+                               opaque_source,
+                               sizeof(opaque_source) - 1,
+                               &result));
+    CHECK(strcmp(result.output, opaque_expected) == 0);
+    noc_transform_result_free(&result);
+    CHECK(noc_transform_source(&context,
+                               "spliced-pattern.c",
+                               spliced_source,
+                               sizeof(spliced_source) - 1,
+                               &result));
+    CHECK(strcmp(result.output, "((3) + (3))") == 0);
+    noc_transform_result_free(&result);
+    CHECK(noc_transform_source(&context,
+                               "trigger-range.c",
+                               trigger_source,
+                               sizeof(trigger_source) - 1,
+                               &result));
+    CHECK(strcmp(result.output, "\nSUM tail") == 0);
+    CHECK(probe_state.calls == 1);
+    noc_transform_result_free(&result);
+    CHECK(noc_transform_source(&context,
+                               "token-kinds.c",
+                               phase2_token_source,
+                               sizeof(phase2_token_source) - 1,
+                               &result));
+    CHECK(strcmp(result.output, "ONE 1e3 TEXT u8\"other\"") == 0);
+    CHECK(number_state.calls == 1 && string_state.calls == 1);
+    noc_transform_result_free(&result);
+    CHECK(noc_transform_source(&context,
+                               "lexical-context.c",
+                               "object.defer deferred defer:",
+                               sizeof("object.defer deferred defer:") - 1,
+                               &result));
+    CHECK(strcmp(result.output, "object.D deferred D:") == 0);
+    CHECK(contextual_state.calls == 2);
+    noc_transform_result_free(&result);
+    noc_context_deinit(&context);
+}
+
+static void test_rule_pattern_registration(void)
+{
+    static const char spliced_duplicate[] = "checked\\\n add";
+    static const char spliced_number[] = "1\\\ne2";
+    static const char spliced_string[] = "u\\\n8\"x\"";
+    static const char trigraph[] = {'?', '?', '=', '\0'};
+    static const char two_questions[] = {'?', '?', '\0'};
+    static const char safe_questions[] = {'?', '?', 'x', '\0'};
+    Noc_Context context;
+    Noc_Transform_Result result = {0};
+    Diagnostic_State diagnostics = {0};
+    Pattern_State state = {"MATCH", NULL, NULL, 0, false};
+    Noc_Rule rule;
+    size_t errors;
+
+    rule.name = "checked";
+    rule.scope = NOC_RULE_TOKEN;
+    rule.syntax = "checked add";
+    rule.description = "Validate pattern registration.";
+    rule.expand = expand_pattern_text;
+    rule.user_data = &state;
+    noc_context_init(&context);
+    context.options.emit_line_directives = false;
+    noc_context_set_diagnostic(&context, count_diagnostics, &diagnostics);
+    CHECK(noc_register_rule_pattern(&context, "checked add", rule));
+    CHECK(context.rules_count == 1);
+    CHECK(noc_rule_is_enabled(&context, noc_slice_from_cstr("checked")));
+
+    rule.name = "duplicate-comment";
+    CHECK(!noc_register_rule_pattern(&context, "checked/* gap */add", rule));
+    rule.name = "duplicate-splice";
+    CHECK(!noc_register_rule_pattern(&context, spliced_duplicate, rule));
+    rule.name = "number";
+    CHECK(noc_register_rule_pattern(&context, "1e2", rule));
+    rule.name = "duplicate-number";
+    CHECK(!noc_register_rule_pattern(&context, spliced_number, rule));
+    rule.name = "string";
+    CHECK(noc_register_rule_pattern(&context, "u8\"x\"", rule));
+    rule.name = "duplicate-string";
+    CHECK(!noc_register_rule_pattern(&context, spliced_string, rule));
+    rule.name = "checked";
+    CHECK(!noc_register_rule_pattern(&context, "other", rule));
+    CHECK(!noc_register_rule(&context, rule));
+    rule.name = "invalid";
+    CHECK(!noc_register_rule_pattern(&context, NULL, rule));
+    CHECK(!noc_register_rule_pattern(&context, "", rule));
+    CHECK(!noc_register_rule_pattern(&context, " \n/* only trivia */", rule));
+    CHECK(!noc_register_rule_pattern(&context, "/* unterminated", rule));
+    CHECK(!noc_register_rule_pattern(&context, "#define VALUE 1", rule));
+    CHECK(!noc_register_rule_pattern(&context, trigraph, rule));
+    CHECK(!noc_register_rule_pattern(&context, "@invalid", rule));
+    CHECK(context.rules_count == 3);
+    CHECK(noc_rule_is_enabled(&context, noc_slice_from_cstr("checked")));
+
+    rule.name = "unless";
+    rule.syntax = "unless ( condition";
+    CHECK(noc_register_rule_pattern(&context, "unless (", rule));
+    rule.name = "safe-question";
+    rule.syntax = "??x";
+    CHECK(noc_register_rule_pattern(&context, safe_questions, rule));
+    rule.name = "two-questions";
+    rule.syntax = "two question marks";
+    CHECK(noc_register_rule_pattern(&context, two_questions, rule));
+    CHECK(context.rules_count == 6);
+    errors = diagnostics.errors;
+    CHECK(noc_transform_source(&context,
+                               "registration-transaction.c",
+                               "checked add",
+                               sizeof("checked add") - 1,
+                               &result));
+    CHECK(strcmp(result.output, "MATCH") == 0);
+    CHECK(diagnostics.errors == errors);
+    noc_transform_result_free(&result);
+    noc_context_deinit(&context);
+}
+
+static void check_longest_pattern_order(bool longer_first)
+{
+    Noc_Context context;
+    Noc_Transform_Result result = {0};
+    Pattern_State short_state = {"SHORT", NULL, NULL, 0, false};
+    Pattern_State long_state = {"LONG", NULL, NULL, 0, false};
+    Noc_Rule short_rule = {
+        "checked-short", NOC_RULE_TOKEN, "checked", "Short trigger.",
+        expand_pattern_text, &short_state,
+    };
+    Noc_Rule long_rule = {
+        "checked-long", NOC_RULE_TOKEN, "checked add", "Long trigger.",
+        expand_pattern_text, &long_state,
+    };
+    noc_context_init(&context);
+    context.options.emit_line_directives = false;
+    if (longer_first) {
+        CHECK(noc_register_rule_pattern(&context, "checked add", long_rule));
+        CHECK(noc_register_rule_pattern(&context, "checked", short_rule));
+    } else {
+        CHECK(noc_register_rule_pattern(&context, "checked", short_rule));
+        CHECK(noc_register_rule_pattern(&context, "checked add", long_rule));
+    }
+    CHECK(noc_transform_source(&context,
+                               "longest.c",
+                               "checked add",
+                               sizeof("checked add") - 1,
+                               &result));
+    CHECK(strcmp(result.output, "LONG") == 0);
+    CHECK(short_state.calls == 0 && long_state.calls == 1);
+    noc_transform_result_free(&result);
+    noc_context_deinit(&context);
+}
+
+static void test_rule_feature_controls(void)
+{
+    Noc_Context context;
+    Noc_Transform_Result result = {0};
+    Diagnostic_State diagnostics = {0};
+    Pattern_State short_state = {"SHORT", NULL, NULL, 0, false};
+    Pattern_State long_state = {"LONG", NULL, NULL, 0, false};
+    Pattern_State legacy_state = {"LEGACY", NULL, NULL, 0, false};
+    Noc_Rule short_rule = {
+        "checked-short", NOC_RULE_TOKEN, "checked", "Short trigger.",
+        expand_pattern_text, &short_state,
+    };
+    Noc_Rule long_rule = {
+        "checked-long", NOC_RULE_TOKEN, "checked add", "Long trigger.",
+        expand_pattern_text, &long_state,
+    };
+    Noc_Rule legacy_rule = {
+        "legacy", NOC_RULE_TOKEN, "@legacy", "Legacy feature control.",
+        expand_pattern_text, &legacy_state,
+    };
+    Noc_Slice invalid_name = {NULL, 1};
+    size_t errors;
+
+    check_longest_pattern_order(false);
+    check_longest_pattern_order(true);
+    noc_context_init(&context);
+    context.options.emit_line_directives = false;
+    noc_context_set_diagnostic(&context, count_diagnostics, &diagnostics);
+    CHECK(noc_register_rule_pattern(&context, "checked", short_rule));
+    CHECK(noc_register_rule_pattern(&context, "checked add", long_rule));
+    CHECK(noc_register_rule(&context, legacy_rule));
+    CHECK(noc_set_rule_enabled(&context, noc_slice_from_cstr("checked-long"), false));
+    CHECK(!noc_rule_is_enabled(&context, noc_slice_from_cstr("checked-long")));
+    CHECK(noc_find_rule(&context, noc_slice_from_cstr("checked-long")) != NULL);
+    CHECK(!noc_transform_source(&context,
+                                "disabled-strict.c",
+                                "checked /* exact\n */ add",
+                                sizeof("checked /* exact\n */ add") - 1,
+                                &result));
+    CHECK(result.output == NULL && result.error_count == 1);
+    CHECK(short_state.calls == 0 && long_state.calls == 0);
+    CHECK(strstr(diagnostics.last_message, "disabled") != NULL);
+    noc_transform_result_free(&result);
+
+    context.options.disabled_rule_is_error = false;
+    CHECK(noc_transform_source(&context,
+                               "disabled-passthrough.c",
+                               "che\\\ncked /* exact\n */ add + checked",
+                               sizeof("che\\\ncked /* exact\n */ add + checked") - 1,
+                               &result));
+    CHECK(strcmp(result.output, "che\\\ncked /* exact\n */ add + SHORT") == 0);
+    CHECK(short_state.calls == 1 && long_state.calls == 0);
+    noc_transform_result_free(&result);
+    CHECK(noc_set_rule_enabled(&context, noc_slice_from_cstr("checked-long"), true));
+    CHECK(noc_rule_is_enabled(&context, noc_slice_from_cstr("checked-long")));
+    CHECK(noc_transform_source(&context,
+                               "reenabled.c",
+                               "checked add + checked",
+                               sizeof("checked add + checked") - 1,
+                               &result));
+    CHECK(strcmp(result.output, "LONG + SHORT") == 0);
+    CHECK(long_state.calls == 1 && short_state.calls == 2);
+    noc_transform_result_free(&result);
+
+    CHECK(noc_set_rule_enabled(&context, noc_slice_from_cstr("legacy"), false));
+    CHECK(noc_transform_source(&context,
+                               "legacy-disabled.c",
+                               "@ /* gap */ legacy + checked",
+                               sizeof("@ /* gap */ legacy + checked") - 1,
+                               &result));
+    CHECK(strcmp(result.output, "@ /* gap */ legacy + SHORT") == 0);
+    CHECK(legacy_state.calls == 0);
+    noc_transform_result_free(&result);
+    errors = diagnostics.errors;
+    CHECK(!noc_rule_is_enabled(&context, noc_slice_from_cstr("missing")));
+    CHECK(diagnostics.errors == errors);
+    CHECK(!noc_set_rule_enabled(&context, noc_slice_from_cstr("missing"), false));
+    CHECK(diagnostics.errors == errors + 1);
+    CHECK(!noc_rule_is_enabled(&context, invalid_name));
+    CHECK(!noc_set_rule_enabled(&context, invalid_name, true));
+    CHECK(diagnostics.errors == errors + 2);
+    noc_context_deinit(&context);
+}
+
+static void test_registry_mutation_during_transform(void)
+{
+    Noc_Context context;
+    Noc_Transform_Result result = {0};
+    Diagnostic_State diagnostics = {0};
+    Mutation_State state;
+    Noc_Rule active;
+
+    memset(&state, 0, sizeof(state));
+    state.context = &context;
+    state.legacy_rule.name = "late-legacy";
+    state.legacy_rule.scope = NOC_RULE_TOKEN;
+    state.legacy_rule.syntax = "@late-legacy";
+    state.legacy_rule.description = "Register after a transform.";
+    state.legacy_rule.expand = expand_optional;
+    state.legacy_rule.user_data = NULL;
+    state.pattern_rule.name = "late-pattern";
+    state.pattern_rule.scope = NOC_RULE_TOKEN;
+    state.pattern_rule.syntax = "late";
+    state.pattern_rule.description = "Reject pattern registration in a callback.";
+    state.pattern_rule.expand = expand_optional;
+    state.pattern_rule.user_data = NULL;
+    active.name = "mutate";
+    active.scope = NOC_RULE_TOKEN;
+    active.syntax = "mutate";
+    active.description = "Attempt registry mutation during expansion.";
+    active.expand = expand_registry_mutation;
+    active.user_data = &state;
+
+    noc_context_init(&context);
+    context.options.emit_line_directives = false;
+    noc_context_set_diagnostic(&context, count_diagnostics, &diagnostics);
+    CHECK(noc_register_rule_pattern(&context, "mutate", active));
+    CHECK(!noc_transform_source(&context,
+                                "mutation.c",
+                                "mutate",
+                                sizeof("mutate") - 1,
+                                &result));
+    CHECK(!state.registered_legacy && !state.registered_pattern && !state.changed_enabled);
+    CHECK(diagnostics.errors == 3);
+    CHECK(result.output == NULL && context.active_transforms == 0);
+    CHECK(noc_rule_is_enabled(&context, noc_slice_from_cstr("mutate")));
+    noc_transform_result_free(&result);
+    CHECK(noc_register_rule(&context, state.legacy_rule));
+    CHECK(noc_register_rule_pattern(&context, "late", state.pattern_rule));
+    CHECK(noc_set_rule_enabled(&context, noc_slice_from_cstr("mutate"), false));
+    noc_context_deinit(&context);
+}
+
+static void test_pattern_preprocessor_and_nested_transform(void)
+{
+    static const char source[] =
+        "#define keyword ignored\n"
+        "#if 0\n"
+        "keyword inactive;\n"
+        "#endif\n"
+        "#if FLAG\n"
+        "keyword unknown;\n"
+        "#endif\n"
+        "keyword active;\n";
+    static const char expected[] =
+        "#define keyword ignored\n"
+        "#if 0\n"
+        "keyword inactive;\n"
+        "#endif\n"
+        "#if FLAG\n"
+        "long unknown;\n"
+        "#endif\n"
+        "long active;\n";
+    Noc_Context context;
+    Noc_Transform_Result result = {0};
+    Noc_Rule keyword = {
+        "keyword", NOC_RULE_TOKEN, "keyword", "Exercise preprocessor activity.",
+        expand_optional, NULL,
+    };
+    Noc_Rule value = {
+        "bare-value", NOC_RULE_EXPRESSION, "value()", "Nested bare value.",
+        expand_nested_value, NULL,
+    };
+    Noc_Rule group = {
+        "group", NOC_RULE_EXPRESSION, "@group(expression)", "Transform nested source.",
+        expand_nested_group, NULL,
+    };
+
+    noc_context_init(&context);
+    context.options.emit_line_directives = false;
+    context.options.skip_inactive_preprocessor_branches = true;
+    CHECK(noc_register_rule_pattern(&context, "keyword", keyword));
+    CHECK(noc_register_rule_pattern(&context, "value", value));
+    CHECK(noc_register_rule(&context, group));
+    CHECK(noc_transform_source(&context,
+                               "pattern-preprocessor.c",
+                               source,
+                               sizeof(source) - 1,
+                               &result));
+    CHECK(strcmp(result.output, expected) == 0);
+    noc_transform_result_free(&result);
+    CHECK(noc_transform_source(&context,
+                               "pattern-nested.c",
+                               "@group(value())",
+                               sizeof("@group(value())") - 1,
+                               &result));
+    CHECK(strcmp(result.output, "(42)") == 0);
+    CHECK(result.dependency_count == 1);
     noc_transform_result_free(&result);
     noc_context_deinit(&context);
 }
@@ -850,6 +1352,11 @@ int main(void)
     test_inactive_preprocessor_transformation();
     test_unknown_rule();
     test_silent_callback_failure();
+    test_rule_pattern_matching();
+    test_rule_pattern_registration();
+    test_rule_feature_controls();
+    test_registry_mutation_during_transform();
+    test_pattern_preprocessor_and_nested_transform();
     test_comment_and_preprocessor_opacity();
     test_trigraph_rejection();
     test_safe_c_string_and_line_path();

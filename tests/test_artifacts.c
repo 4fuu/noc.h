@@ -44,25 +44,65 @@ static void test_ide_metadata_header(void)
         expand_twice,
         NULL,
     };
+    Noc_Rule pattern_rule = {
+        "bare-word",
+        NOC_RULE_TOKEN,
+        "bare word",
+        "Describe a token-pattern trigger.",
+        expand_static_attribute,
+        NULL,
+    };
+    Noc_Rule disabled_rule = {
+        "optional-feature",
+        NOC_RULE_TOKEN,
+        "optional",
+        "Describe a disabled feature.",
+        expand_static_attribute,
+        NULL,
+    };
     char *preserved_items;
     size_t preserved_count;
 
     noc_context_init(&context);
     noc_context_set_diagnostic(&context, count_diagnostics, &diagnostics);
     CHECK(noc_register_rule(&context, rule));
+    CHECK(noc_register_rule_pattern(&context, "bare /* meta\n */ word", pattern_rule));
+    CHECK(noc_register_rule_pattern(&context, "optional", disabled_rule));
+    CHECK(noc_set_rule_enabled(&context,
+                               noc_slice_from_cstr("optional-feature"),
+                               false));
     CHECK(noc_generate_ide_metadata_header(&context, &options, &generated));
     CHECK(generated.items != NULL && generated.items[generated.count] == '\0');
     CHECK(strstr(generated.items, "#ifndef SAMPLE_DIALECT_METADATA_H\n") != NULL);
-    CHECK(strstr(generated.items, "#define SAMPLE_DIALECT_SCHEMA_VERSION 1\n") != NULL);
+    CHECK(strstr(generated.items, "#define SAMPLE_DIALECT_SCHEMA_VERSION 2\n") != NULL);
     CHECK(strstr(generated.items,
                  "#define SAMPLE_DIALECT_DIALECT_NAME \"sample\\?\\\" dialect\"\n") != NULL);
-    CHECK(strstr(generated.items, "#define SAMPLE_DIALECT_RULE_COUNT 1\n") != NULL);
+    CHECK(strstr(generated.items, "#define SAMPLE_DIALECT_RULE_COUNT 3\n") != NULL);
     CHECK(strstr(generated.items, "#define SAMPLE_DIALECT_RULE_0_NAME \"twice\"\n") != NULL);
+    CHECK(strstr(generated.items, "#define SAMPLE_DIALECT_RULE_0_TRIGGER_KIND 0\n") != NULL);
+    CHECK(strstr(generated.items,
+                 "#define SAMPLE_DIALECT_RULE_0_TRIGGER_KIND_NAME \"at-name\"\n") != NULL);
+    CHECK(strstr(generated.items,
+                 "#define SAMPLE_DIALECT_RULE_0_TRIGGER \"@twice\"\n") != NULL);
+    CHECK(strstr(generated.items, "#define SAMPLE_DIALECT_RULE_0_ENABLED 1\n") != NULL);
     CHECK(strstr(generated.items, "#define SAMPLE_DIALECT_RULE_0_SCOPE 1\n") != NULL);
     CHECK(strstr(generated.items,
                  "#define SAMPLE_DIALECT_RULE_0_SCOPE_NAME \"expression\"\n") != NULL);
     CHECK(strstr(generated.items,
                  "#define SAMPLE_DIALECT_RULE_0_SYNTAX \"@twice(line\\n\\?)\"\n") != NULL);
+    CHECK(strstr(generated.items, "#define SAMPLE_DIALECT_RULE_1_NAME \"bare-word\"\n") != NULL);
+    CHECK(strstr(generated.items, "#define SAMPLE_DIALECT_RULE_1_TRIGGER_KIND 1\n") != NULL);
+    CHECK(strstr(generated.items,
+                 "#define SAMPLE_DIALECT_RULE_1_TRIGGER_KIND_NAME \"pattern\"\n") != NULL);
+    CHECK(strstr(generated.items,
+                 "#define SAMPLE_DIALECT_RULE_1_TRIGGER "
+                 "\"bare /* meta\\n */ word\"\n") != NULL);
+    CHECK(strstr(generated.items, "#define SAMPLE_DIALECT_RULE_1_ENABLED 1\n") != NULL);
+    CHECK(strstr(generated.items,
+                 "#define SAMPLE_DIALECT_RULE_2_NAME \"optional-feature\"\n") != NULL);
+    CHECK(strstr(generated.items,
+                 "#define SAMPLE_DIALECT_RULE_2_TRIGGER \"optional\"\n") != NULL);
+    CHECK(strstr(generated.items, "#define SAMPLE_DIALECT_RULE_2_ENABLED 0\n") != NULL);
     CHECK(strstr(generated.items, "_DESCRIPTION") == NULL);
 
     CHECK(noc_buffer_append_cstr(&defaults, "old contents"));
@@ -75,6 +115,12 @@ static void test_ide_metadata_header(void)
     CHECK(strstr(defaults.items,
                  "#define NOC_IDE_RULE_0_DESCRIPTION "
                  "\"Duplicate \\\"values\\\"\\tcarefully\\?\"\n") != NULL);
+    CHECK(strstr(defaults.items, "#define NOC_IDE_RULE_2_ENABLED 0\n") != NULL);
+    CHECK(noc_set_rule_enabled(&context,
+                               noc_slice_from_cstr("optional-feature"),
+                               true));
+    CHECK(noc_generate_ide_metadata_header(&context, NULL, &defaults));
+    CHECK(strstr(defaults.items, "#define NOC_IDE_RULE_2_ENABLED 1\n") != NULL);
 
     preserved_items = generated.items;
     preserved_count = generated.count;
