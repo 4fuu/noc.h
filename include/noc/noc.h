@@ -29,9 +29,9 @@
 #define NOC_H_INCLUDED
 
 #define NOC_VERSION_MAJOR 0
-#define NOC_VERSION_MINOR 34
+#define NOC_VERSION_MINOR 35
 #define NOC_VERSION_PATCH 0
-#define NOC_VERSION "0.34.0"
+#define NOC_VERSION "0.35.0"
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -640,14 +640,6 @@ typedef struct {
 } Noc_Macro_Environment;
 
 typedef enum {
-    NOC_MACRO_BUILTIN_NONE = 0,
-    NOC_MACRO_BUILTIN_FILE,
-    NOC_MACRO_BUILTIN_LINE,
-    NOC_MACRO_BUILTIN_STDC,
-    NOC_MACRO_BUILTIN_STDC_VERSION,
-} Noc_Macro_Builtin_Kind;
-
-typedef enum {
     NOC_MACRO_EXPANSION_OK = 0,
     NOC_MACRO_EXPANSION_INVALID_ARGUMENT,
     NOC_MACRO_EXPANSION_STALE,
@@ -677,6 +669,126 @@ typedef enum {
     NOC_PREPROCESSOR_EXPRESSION_DEPTH_LIMIT,
     NOC_PREPROCESSOR_EXPRESSION_OUT_OF_MEMORY,
 } Noc_Preprocessor_Expression_Status;
+
+typedef enum {
+    NOC_CONDITIONAL_GROUP_COMPLETE = 0,
+    NOC_CONDITIONAL_GROUP_INCOMPLETE,
+    NOC_CONDITIONAL_GROUP_MALFORMED,
+    NOC_CONDITIONAL_GROUP_MALFORMED_INCOMPLETE,
+} Noc_Conditional_Group_Status;
+typedef enum {
+    NOC_CONDITIONAL_CONDITION_NOT_APPLICABLE = 0,
+    NOC_CONDITIONAL_CONDITION_EVALUATED,
+    NOC_CONDITIONAL_CONDITION_NOT_EVALUATED,
+    NOC_CONDITIONAL_CONDITION_MALFORMED,
+    NOC_CONDITIONAL_CONDITION_EXPANSION_FAILED,
+    NOC_CONDITIONAL_CONDITION_EVALUATION_FAILED,
+} Noc_Conditional_Condition_Status;
+typedef enum {
+    NOC_CONDITIONAL_ISSUE_UNMATCHED_ELIF = 0,
+    NOC_CONDITIONAL_ISSUE_UNMATCHED_ELSE,
+    NOC_CONDITIONAL_ISSUE_UNMATCHED_ENDIF,
+    NOC_CONDITIONAL_ISSUE_ELIF_AFTER_ELSE,
+    NOC_CONDITIONAL_ISSUE_DUPLICATE_ELSE,
+    NOC_CONDITIONAL_ISSUE_MISSING_ENDIF,
+    NOC_CONDITIONAL_ISSUE_UNEXPECTED_TOKENS,
+    NOC_CONDITIONAL_ISSUE_UNRESOLVED_CONDITION,
+    NOC_CONDITIONAL_ISSUE_UNSUPPORTED_DIRECTIVE,
+} Noc_Conditional_Issue_Kind;
+typedef enum {
+    NOC_CONDITIONAL_GROUPS_OK = 0,
+    NOC_CONDITIONAL_GROUPS_INVALID_ARGUMENT,
+    NOC_CONDITIONAL_GROUPS_STALE,
+    NOC_CONDITIONAL_GROUPS_GENERATION_EXHAUSTED,
+    NOC_CONDITIONAL_GROUPS_OUT_OF_MEMORY,
+} Noc_Conditional_Groups_Build_Status;
+
+typedef struct {
+    /* The branch containing this nested group, or NONE at file scope. */
+    size_t parent_branch_index;
+    size_t opener_directive_index;
+    size_t closer_directive_index;
+    size_t first_branch_index;
+    size_t last_branch_index;
+    /* Includes the opening and matched closing directives. An incomplete
+       group's range ends immediately before the terminal EOF token. */
+    Noc_Token_Range preprocessing_tokens;
+    Noc_Conditional_Group_Status status;
+} Noc_Preprocessor_Conditional_Group;
+
+typedef struct {
+    size_t group_index;
+    size_t previous_branch_index;
+    size_t next_branch_index;
+    size_t directive_index;
+    Noc_Preprocessor_Directive_Kind directive_kind;
+    Noc_Token_Range condition_tokens;
+    /* Excludes this branch directive and the next peer/closing directive. */
+    Noc_Token_Range content_tokens;
+    /* Concrete macro prefix used to evaluate the condition, or NONE when the
+       branch was not evaluated or macro state was already uncertain. */
+    size_t condition_environment_entry_limit;
+    Noc_Preprocessor_Activity condition_activity;
+    Noc_Preprocessor_Activity content_activity;
+    Noc_Conditional_Condition_Status condition_status;
+    Noc_Macro_Expansion_Status expansion_status;
+    Noc_Preprocessor_Expression_Status expression_status;
+    /* Optional stable source coordinate for an expression problem. Expansion
+       failures may only identify the condition's physical anchor. */
+    const Noc_Preprocessor_Unit *problem_unit;
+    size_t problem_unit_stream_generation;
+    size_t problem_token_index;
+} Noc_Preprocessor_Conditional_Branch;
+
+typedef struct {
+    Noc_Conditional_Issue_Kind kind;
+    size_t directive_index;
+    size_t group_index;
+    size_t branch_index;
+    size_t problem_token_index;
+} Noc_Preprocessor_Conditional_Issue;
+
+/* Owning, recoverable balanced analysis. Initialize to {0}, do not
+   shallow-copy, and release with noc_preprocessor_conditional_groups_free. It
+   borrows the input unit and units referenced by its cloned initial macro
+   prefix. The inline environment records definitely-active events; it is a
+   complete concrete macro state only while macro_state_complete is true.
+   Successful rebuild replaces the result and invalidates every borrowed
+   pointer/expansion; operational failure preserves it. */
+typedef struct {
+    const Noc_Preprocessor_Unit *unit;
+    size_t unit_stream_generation;
+    Noc_Preprocessor_Conditional_Group *groups;
+    size_t group_count;
+    size_t group_capacity;
+    Noc_Preprocessor_Conditional_Branch *branches;
+    size_t branch_count;
+    size_t branch_capacity;
+    Noc_Preprocessor_Conditional_Issue *issues;
+    size_t issue_count;
+    size_t issue_capacity;
+    size_t *directive_owned_groups;
+    size_t *directive_introduced_branches;
+    Noc_Preprocessor_Activity *token_activities;
+    /* Each entry is a concrete prefix in environment, or NONE after macro
+       state becomes uncertain due to an unknown-path macro event. */
+    size_t *token_macro_entry_limits;
+    size_t directive_count;
+    size_t preprocessing_token_count;
+    Noc_Macro_Environment environment;
+    size_t published_environment_generation;
+    size_t published_environment_count;
+    size_t generation;
+    bool macro_state_complete;
+} Noc_Preprocessor_Conditional_Groups;
+
+typedef enum {
+    NOC_MACRO_BUILTIN_NONE = 0,
+    NOC_MACRO_BUILTIN_FILE,
+    NOC_MACRO_BUILTIN_LINE,
+    NOC_MACRO_BUILTIN_STDC,
+    NOC_MACRO_BUILTIN_STDC_VERSION,
+} Noc_Macro_Builtin_Kind;
 
 typedef enum {
     NOC_MACRO_EXPANSION_TOKEN_INPUT = 0,
@@ -834,6 +946,62 @@ NOCDEF const Noc_Macro_Environment_Entry *noc_macro_environment_lookup_before(
 NOCDEF const Noc_Macro_Environment_Entry *noc_macro_environment_lookup(
     const Noc_Macro_Environment *environment,
     Noc_Slice logical_name);
+NOCDEF const char *noc_conditional_group_status_name(
+    Noc_Conditional_Group_Status status);
+NOCDEF const char *noc_conditional_condition_status_name(
+    Noc_Conditional_Condition_Status status);
+NOCDEF const char *noc_conditional_issue_kind_name(
+    Noc_Conditional_Issue_Kind kind);
+NOCDEF const char *noc_conditional_groups_build_status_name(
+    Noc_Conditional_Groups_Build_Status status);
+NOCDEF void noc_preprocessor_conditional_groups_free(
+    Noc_Preprocessor_Conditional_Groups *groups);
+NOCDEF bool noc_preprocessor_conditional_groups_is_valid(
+    const Noc_Preprocessor_Conditional_Groups *groups);
+/* True only for a valid result with complete, well-formed structure, no
+   unresolved condition, and a concrete final macro state. */
+NOCDEF bool noc_preprocessor_conditional_groups_is_fully_resolved(
+    const Noc_Preprocessor_Conditional_Groups *groups);
+/* Clone initial_environment entries [0, initial_entry_limit), scan unit in
+   source order, and append only definitely-active local macro events. The
+   inline environment no longer borrows the initial environment object itself.
+   Recoverable source issues are published in a successful result. */
+NOCDEF Noc_Conditional_Groups_Build_Status noc_preprocessor_conditional_groups_build(
+    const Noc_Macro_Environment *initial_environment,
+    size_t initial_entry_limit,
+    const Noc_Preprocessor_Unit *unit,
+    Noc_Macro_Expansion_Limits limits,
+    Noc_Preprocessor_Conditional_Groups *output);
+NOCDEF const Noc_Preprocessor_Conditional_Group *
+noc_preprocessor_conditional_group_at(
+    const Noc_Preprocessor_Conditional_Groups *groups,
+    size_t index);
+NOCDEF const Noc_Preprocessor_Conditional_Branch *
+noc_preprocessor_conditional_branch_at(
+    const Noc_Preprocessor_Conditional_Groups *groups,
+    size_t index);
+NOCDEF const Noc_Preprocessor_Conditional_Issue *
+noc_preprocessor_conditional_issue_at(
+    const Noc_Preprocessor_Conditional_Groups *groups,
+    size_t index);
+/* Openers, peers, and matched closers map to their group. */
+NOCDEF size_t noc_preprocessor_conditional_owned_group(
+    const Noc_Preprocessor_Conditional_Groups *groups,
+    size_t directive_index);
+/* Openers, #elif, and #else map to the branch they introduce. */
+NOCDEF size_t noc_preprocessor_conditional_introduced_branch(
+    const Noc_Preprocessor_Conditional_Groups *groups,
+    size_t directive_index);
+NOCDEF Noc_Preprocessor_Activity noc_preprocessor_conditional_token_activity(
+    const Noc_Preprocessor_Conditional_Groups *groups,
+    size_t preprocessing_token_index);
+/* Returns NONE when no sound concrete macro state exists at the token. */
+NOCDEF size_t noc_preprocessor_conditional_token_macro_entry_limit(
+    const Noc_Preprocessor_Conditional_Groups *groups,
+    size_t preprocessing_token_index);
+/* Read-only: mutating this environment invalidates the enclosing result. */
+NOCDEF const Noc_Macro_Environment *noc_preprocessor_conditional_environment(
+    const Noc_Preprocessor_Conditional_Groups *groups);
 NOCDEF const char *noc_macro_builtin_kind_name(Noc_Macro_Builtin_Kind kind);
 /* Classifies phase-2 logical predefined names. NONE is returned for ordinary
    identifiers and built-ins that require target/translation configuration. */

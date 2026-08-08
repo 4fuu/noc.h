@@ -166,8 +166,10 @@ static void fuzz_preprocessor(Noc_Context *context,
     Noc_Document_Snapshot snapshot = {0};
     Noc_Preprocessor_Unit unit = {0};
     Noc_Macro_Environment environment = {0};
+    Noc_Macro_Environment conditional_initial = {0};
     Noc_Macro_Expansion expansion = {0};
     Noc_Macro_Invocation invocation = {0};
+    Noc_Preprocessor_Conditional_Groups groups = {0};
     size_t index;
     noc_workspace_init(&workspace);
     FUZZ_CHECK(noc_workspace_open_document(
@@ -448,7 +450,68 @@ static void fuzz_preprocessor(Noc_Context *context,
         }
         (void)noc_preprocessor_unit_validate_macro_policy(context, &unit);
         (void)noc_preprocessor_unit_validate_macro_directives(context, &unit);
+        {
+            Noc_Conditional_Groups_Build_Status status =
+                noc_preprocessor_conditional_groups_build(
+                    &conditional_initial, 0, &unit,
+                    noc_macro_expansion_default_limits(), &groups);
+            FUZZ_CHECK(status >= NOC_CONDITIONAL_GROUPS_OK &&
+                       status <= NOC_CONDITIONAL_GROUPS_OUT_OF_MEMORY);
+            if (status == NOC_CONDITIONAL_GROUPS_OK) {
+                FUZZ_CHECK(noc_preprocessor_conditional_groups_is_valid(&groups));
+                FUZZ_CHECK(noc_preprocessor_conditional_environment(&groups) ==
+                           &groups.environment);
+                for (index = 0; index < groups.group_count; ++index) {
+                    const Noc_Preprocessor_Conditional_Group *group =
+                        noc_preprocessor_conditional_group_at(&groups, index);
+                    FUZZ_CHECK(group && group->preprocessing_tokens.begin <=
+                                           group->preprocessing_tokens.end);
+                    FUZZ_CHECK(group->preprocessing_tokens.end <=
+                               unit.preprocessing_token_count);
+                    FUZZ_CHECK(group->opener_directive_index < unit.count);
+                    FUZZ_CHECK(group->first_branch_index < groups.branch_count);
+                    FUZZ_CHECK(group->last_branch_index < groups.branch_count);
+                }
+                for (index = 0; index < groups.branch_count; ++index) {
+                    const Noc_Preprocessor_Conditional_Branch *branch =
+                        noc_preprocessor_conditional_branch_at(&groups, index);
+                    FUZZ_CHECK(branch != NULL);
+                    FUZZ_CHECK(branch->group_index < groups.group_count);
+                    FUZZ_CHECK(branch->directive_index < unit.count);
+                    FUZZ_CHECK(branch->content_tokens.begin <=
+                               branch->content_tokens.end);
+                    FUZZ_CHECK(branch->content_tokens.end <=
+                               unit.preprocessing_token_count);
+                    FUZZ_CHECK(branch->condition_environment_entry_limit ==
+                                   NOC_TOKEN_INDEX_NONE ||
+                               branch->condition_environment_entry_limit <=
+                                   groups.environment.count);
+                    if (branch->problem_unit) {
+                        FUZZ_CHECK(branch->problem_token_index <
+                                   branch->problem_unit->
+                                       preprocessing_token_count);
+                    }
+                }
+                for (index = 0;
+                     index < groups.preprocessing_token_count;
+                     ++index) {
+                    Noc_Preprocessor_Activity activity =
+                        noc_preprocessor_conditional_token_activity(&groups,
+                                                                    index);
+                    size_t entry_limit =
+                        noc_preprocessor_conditional_token_macro_entry_limit(
+                            &groups,
+                            index);
+                    FUZZ_CHECK(activity >= NOC_PREPROCESSOR_ACTIVITY_UNKNOWN &&
+                               activity <= NOC_PREPROCESSOR_ACTIVITY_INACTIVE);
+                    FUZZ_CHECK(entry_limit == NOC_TOKEN_INDEX_NONE ||
+                               entry_limit <= groups.environment.count);
+                }
+            }
+        }
     }
+    noc_preprocessor_conditional_groups_free(&groups);
+    noc_macro_environment_free(&conditional_initial);
     noc_macro_invocation_free(&invocation);
     noc_macro_expansion_free(&expansion);
     noc_macro_environment_free(&environment);
@@ -586,6 +649,10 @@ int main(void)
         "/* comment */ // line\\\ncontinued\n",
         "#if 0\n@missing\n#elif 1\n@fuzz(42)\n#endif\n",
         "#if FLAG\n@fuzz(\n#endif\n42\n#if FLAG\n)\n#endif\n",
+        ("#define FLAG 1\n#if 'A'\n#undef FLAG\n#else\n"
+         "#define OTHER 2\n#endif\n#if FLAG\nvalue\n#endif\n"),
+        ("#else\n#if 1\n#else junk\n#if 0\n#endif\n"
+         "#elifdef FEATURE\n#endif trailing\n#if 1\n"),
         "F(a, (b, c),) G(unterminated\n",
         ("#define ID(x) x\n#define CALL(f,x) f(x)\n"
          "#define OPEN ID(\n#define V(...) __VA_ARGS__\n"

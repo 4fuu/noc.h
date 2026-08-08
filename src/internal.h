@@ -100,6 +100,10 @@ NOC__PRIVATE Noc_Macro_Invocation_Build_Status noc__macro_invocation_collect(
     Noc__Macro_Invocation_Collection *);
 NOC__PRIVATE const Noc_Macro_Directive *noc__macro_environment_entry_directive(
     const Noc_Macro_Environment_Entry *);
+NOC__PRIVATE Noc_Macro_Environment_Status noc__macro_environment_clone_prefix(
+    const Noc_Macro_Environment *, size_t, size_t, Noc_Macro_Environment *);
+NOC__PRIVATE bool noc__macro_expansion_limits_are_valid(
+    Noc_Macro_Expansion_Limits);
 NOC__PRIVATE Noc_Macro_Expansion_Status noc__macro_expansion_build(
     const Noc_Macro_Environment *, size_t, const Noc_Preprocessor_Unit *,
     Noc_Token_Range, Noc_Macro_Expansion_Limits, bool, Noc_Macro_Expansion *);

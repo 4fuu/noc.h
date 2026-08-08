@@ -22,6 +22,35 @@ NOCDEF const char *noc_macro_environment_status_name(
     return "unknown";
 }
 
+NOC__PRIVATE Noc_Macro_Environment_Status noc__macro_environment_clone_prefix(
+    const Noc_Macro_Environment *source,
+    size_t limit,
+    size_t generation,
+    Noc_Macro_Environment *output)
+{
+    Noc_Macro_Environment copy = {0};
+    if (!source || !output || limit > source->count) {
+        return NOC_MACRO_ENVIRONMENT_INVALID_ARGUMENT;
+    }
+    if (!noc_macro_environment_is_valid(source)) {
+        return NOC_MACRO_ENVIRONMENT_STALE;
+    }
+    if (limit > SIZE_MAX / sizeof(*copy.items)) {
+        return NOC_MACRO_ENVIRONMENT_OUT_OF_MEMORY;
+    }
+    if (limit) {
+        copy.items = (Noc_Macro_Environment_Entry *)malloc(
+            limit * sizeof(*copy.items));
+        if (!copy.items) return NOC_MACRO_ENVIRONMENT_OUT_OF_MEMORY;
+        memcpy(copy.items, source->items, limit * sizeof(*copy.items));
+        copy.count = limit;
+        copy.capacity = limit;
+    }
+    copy.generation = generation;
+    *output = copy;
+    return NOC_MACRO_ENVIRONMENT_OK;
+}
+
 NOC__PRIVATE const Noc_Macro_Directive *noc__macro_environment_entry_directive(
     const Noc_Macro_Environment_Entry *entry)
 {

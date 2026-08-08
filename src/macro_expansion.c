@@ -120,6 +120,14 @@ NOCDEF Noc_Macro_Expansion_Limits noc_macro_expansion_default_limits(void)
     return limits;
 }
 
+NOC__PRIVATE bool noc__macro_expansion_limits_are_valid(
+    Noc_Macro_Expansion_Limits limits)
+{
+    return limits.max_depth > 0 &&
+           limits.max_depth <= NOC__MACRO_EXPANSION_HARD_MAX_DEPTH &&
+           limits.max_output_tokens > 0 && limits.max_expansions > 0;
+}
+
 NOCDEF void noc_macro_expansion_free(Noc_Macro_Expansion *expansion)
 {
     size_t generation;
@@ -1671,9 +1679,7 @@ NOC__PRIVATE Noc_Macro_Expansion_Status noc__macro_expansion_build(
     if (!environment || !input_unit || !output ||
         entry_limit > environment->count ||
         input_tokens.begin > input_tokens.end ||
-        limits.max_depth == 0 ||
-        limits.max_depth > NOC__MACRO_EXPANSION_HARD_MAX_DEPTH ||
-        limits.max_output_tokens == 0 || limits.max_expansions == 0) {
+        !noc__macro_expansion_limits_are_valid(limits)) {
         return NOC_MACRO_EXPANSION_INVALID_ARGUMENT;
     }
     if (!noc_macro_environment_is_valid(environment) ||

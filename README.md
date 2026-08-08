@@ -43,8 +43,9 @@ The suite names are `header-c`, `header-cpp`, `public-header-c`,
 `preprocessing-tokens`, `macro-directives`, `macro-environment`,
 `macro-invocations`, `macro-expansion`, `function-macro-expansion`,
 `variadic-macro-expansion`, `macro-stringification`, `macro-token-paste`,
-`macro-builtins`, `preprocessor-expressions`, `preprocessor`, `lexing`, `syntax`,
-`c-analysis`, `rewriter`, and `artifacts`, for example:
+`macro-builtins`, `preprocessor-expressions`, `conditional-groups`,
+`preprocessor`, `lexing`, `syntax`, `c-analysis`, `rewriter`, and `artifacts`, for
+example:
 
 ```console
 $ ./nob test c-analysis
@@ -105,6 +106,7 @@ be declared by `src/internal.h`; module-local helpers remain static. Current own
 | `src/macro_directives.c` | Recoverable `#define`/`#undef` grammar and queries |
 | `src/macro_invocations.c` | Lossless, recoverable function-like invocation/argument syntax |
 | `src/macro_environment.c`, `src/macro_expansion.c` | Effective macro state and bounded expansion |
+| `src/conditional.c`, `src/conditional_groups.c` | C11 condition evaluation and recoverable balanced conditional analysis |
 | `src/parser.c`, `src/ast.c` | Token cursors/arguments and syntax/C structure analysis |
 | `src/features.c` | Context, rules, feature controls, and metadata interfaces |
 | `src/lower.c`, `src/emit_c.c` | Rewrite/edit lowering and transformation/artifact/CLI emission |
@@ -307,6 +309,18 @@ set constants and negative signed right shifts remain target-dependent until
 translation-target options exist. Run this layer independently with
 `./nob test preprocessor-expressions`.
 
+`noc_preprocessor_conditional_groups_build` layers recoverable balanced
+`#if`/`#ifdef`/`#ifndef`/`#elif`/`#else`/`#endif` groups over that evaluator. It
+publishes exact group and branch ranges, parent-branch relationships, structural
+issues, per-preprocessing-token activity, and the concrete macro prefix visible
+at each token. The result owns a cloned initial macro prefix and appends only
+definitely active `#define`/`#undef` events. If an unknown path can change macro
+state, later concrete-prefix queries return `NOC_TOKEN_INDEX_NONE` and conditions
+are not guessed. This distinction lets IDEs inspect incomplete source without
+presenting uncertain branches as semantic success. C23 `#elifdef`/`#elifndef`
+are inventoried but reported as unsupported by the current C11 analysis. Run
+this layer independently with `./nob test conditional-groups`.
+
 Macro definition permission is explicit:
 
 - `NOC_MACROS_DISABLED`: no source class may define or undefine macros.
@@ -319,9 +333,8 @@ validation are separate: the inventory always records a recognized `#define` or
 `#undef`, including when disabled, while
 `noc_preprocessor_unit_validate_macro_policy` emits precise feature-disabled
 diagnostics. This prevents tooling from reporting a policy violation as a parse
-error. Conditional-group activity/policy application, target/time-configured
-built-in macros, include loading, and broader expansion provenance queries
-remain subsequent preprocessor milestones.
+error. Target/time-configured built-in macros, include loading, and broader
+expansion provenance queries remain subsequent preprocessor milestones.
 Run the token and recovery coverage independently with
 `./nob test preprocessing-tokens`, or the directive/policy coverage with
 `./nob test preprocessor`.
@@ -835,9 +848,10 @@ object/fixed-arity/C11-variadic macro inspection expansion. It does not provide 
 complete integrated preprocessor, complete built-in macro expansion, a semantic
 C AST, typedef resolution, or a C type system. C11 macro stringification, token
 pasting, deterministic file/line/standard built-ins, and preprocessing integer-
-expression evaluation are supported; conditional-group execution, target
-semantics, and translation-time built-ins are not. Rules inside preprocessor
-directives are left untouched. More
+expression evaluation are supported. Recoverable conditional-group execution
+and active-only macro state are available as an explicit analysis API; include
+traversal, target semantics, and translation-time built-ins are not. Rules
+inside preprocessor directives are left untouched. More
 structured statement and declaration helpers can be added without changing the
 registration model.
 
