@@ -29,12 +29,13 @@
 #define NOC_H_INCLUDED
 
 #define NOC_VERSION_MAJOR 0
-#define NOC_VERSION_MINOR 33
+#define NOC_VERSION_MINOR 34
 #define NOC_VERSION_PATCH 0
-#define NOC_VERSION "0.33.0"
+#define NOC_VERSION "0.34.0"
 
 #include <stdbool.h>
 #include <stddef.h>
+#include <stdint.h>
 #include <stdio.h>
 
 #define NOC_TOKEN_INDEX_NONE ((size_t)-1)
@@ -665,6 +666,19 @@ typedef enum {
 } Noc_Macro_Expansion_Status;
 
 typedef enum {
+    NOC_PREPROCESSOR_EXPRESSION_OK = 0,
+    NOC_PREPROCESSOR_EXPRESSION_INVALID_ARGUMENT,
+    NOC_PREPROCESSOR_EXPRESSION_STALE,
+    NOC_PREPROCESSOR_EXPRESSION_MALFORMED,
+    NOC_PREPROCESSOR_EXPRESSION_DIVISION_BY_ZERO,
+    NOC_PREPROCESSOR_EXPRESSION_SIGNED_OVERFLOW,
+    NOC_PREPROCESSOR_EXPRESSION_SHIFT_OUT_OF_RANGE,
+    NOC_PREPROCESSOR_EXPRESSION_TARGET_DEPENDENT,
+    NOC_PREPROCESSOR_EXPRESSION_DEPTH_LIMIT,
+    NOC_PREPROCESSOR_EXPRESSION_OUT_OF_MEMORY,
+} Noc_Preprocessor_Expression_Status;
+
+typedef enum {
     NOC_MACRO_EXPANSION_TOKEN_INPUT = 0,
     NOC_MACRO_EXPANSION_TOKEN_ARGUMENT,
     NOC_MACRO_EXPANSION_TOKEN_REPLACEMENT,
@@ -748,6 +762,11 @@ NOCDEF bool noc_preprocessor_unit_is_valid(const Noc_Preprocessor_Unit *unit);
 NOCDEF const Noc_Preprocessor_Directive *noc_preprocessor_directive_at(
     const Noc_Preprocessor_Unit *unit,
     size_t index);
+/* Significant directive-body span with internal trivia preserved. Directives
+   without a body return {NONE, NONE}. */
+NOCDEF Noc_Token_Range noc_preprocessor_directive_body_tokens(
+    const Noc_Preprocessor_Unit *unit,
+    size_t directive_index);
 NOCDEF const Noc_Preprocessing_Token *noc_preprocessor_token_at(
     const Noc_Preprocessor_Unit *unit,
     size_t index);
@@ -821,6 +840,8 @@ NOCDEF const char *noc_macro_builtin_kind_name(Noc_Macro_Builtin_Kind kind);
 NOCDEF Noc_Macro_Builtin_Kind noc_macro_builtin_kind_from_name(Noc_Slice name);
 NOCDEF const char *noc_macro_expansion_status_name(
     Noc_Macro_Expansion_Status status);
+NOCDEF const char *noc_preprocessor_expression_status_name(
+    Noc_Preprocessor_Expression_Status status);
 NOCDEF const char *noc_macro_expansion_token_origin_name(
     Noc_Macro_Expansion_Token_Origin origin);
 NOCDEF Noc_Macro_Expansion_Limits noc_macro_expansion_default_limits(void);
@@ -852,6 +873,17 @@ NOCDEF Noc_Macro_Expansion_Status noc_macro_expansion_build(
     Noc_Token_Range input_tokens,
     Noc_Macro_Expansion_Limits limits,
     Noc_Macro_Expansion *output);
+/* As above, but preserves the defined operator and its identifier operand for
+   #if/#elif evaluation while expanding every other eligible macro normally.
+   If macro replacement generates defined, it is treated as the operator; this
+   is a deterministic GCC/Clang-compatible extension to undefined C11 input. */
+NOCDEF Noc_Macro_Expansion_Status noc_macro_expansion_build_condition(
+    const Noc_Macro_Environment *environment,
+    size_t entry_limit,
+    const Noc_Preprocessor_Unit *input_unit,
+    Noc_Token_Range input_tokens,
+    Noc_Macro_Expansion_Limits limits,
+    Noc_Macro_Expansion *output);
 NOCDEF const Noc_Macro_Expansion_Token *noc_macro_expansion_token_at(
     const Noc_Macro_Expansion *expansion,
     size_t index);
@@ -863,6 +895,19 @@ NOCDEF const Noc_Macro_Expansion_Frame *noc_macro_expansion_frame_at(
    owned by the expansion. Success replaces output; failure preserves it. */
 NOCDEF bool noc_macro_expansion_render(const Noc_Macro_Expansion *expansion,
                                        Noc_Buffer *output);
+/* Evaluate a condition-mode macro expansion as a bounded C11 preprocessing
+   integer constant expression. Remaining identifiers become zero and defined
+   queries the expansion's selected environment prefix, including deterministic
+   predefined macros. Character constants requiring execution-character-set
+   semantics and negative signed right shifts are reported as target-dependent;
+   bounded numeric octal/hexadecimal character escapes are deterministic. On
+   success value is replaced and problem_token_index is NONE. Syntax/evaluation
+   failures report an expansion-token index when one is available and preserve
+   value. Nesting is limited to 256 parser frames. */
+NOCDEF Noc_Preprocessor_Expression_Status noc_preprocessor_expression_evaluate(
+    const Noc_Macro_Expansion *expansion,
+    bool *value,
+    size_t *problem_token_index);
 
 /* Slices and tokens */
 NOCDEF Noc_Slice noc_slice_from_cstr(const char *text);

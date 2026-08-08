@@ -1129,6 +1129,30 @@ NOCDEF const Noc_Preprocessor_Directive *noc_preprocessor_directive_at(
     return &unit->items[index];
 }
 
+NOCDEF Noc_Token_Range noc_preprocessor_directive_body_tokens(
+    const Noc_Preprocessor_Unit *unit,
+    size_t directive_index)
+{
+    Noc_Token_Range result = {NOC_TOKEN_INDEX_NONE, NOC_TOKEN_INDEX_NONE};
+    const Noc_Preprocessor_Directive *directive;
+    size_t index;
+    if (!noc_preprocessor_unit_is_valid(unit) || directive_index >= unit->count) {
+        return result;
+    }
+    directive = &unit->items[directive_index];
+    for (index = directive->preprocessing_tokens.begin;
+         index < directive->preprocessing_tokens.end;
+         ++index) {
+        if (unit->preprocessing_tokens[index].role !=
+            NOC_PREPROCESSING_TOKEN_DIRECTIVE_BODY) {
+            continue;
+        }
+        if (result.begin == NOC_TOKEN_INDEX_NONE) result.begin = index;
+        result.end = index + 1;
+    }
+    return result;
+}
+
 NOCDEF const Noc_Preprocessing_Token *noc_preprocessor_token_at(
     const Noc_Preprocessor_Unit *unit,
     size_t index)

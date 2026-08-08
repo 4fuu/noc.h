@@ -31,6 +31,7 @@ typedef struct {
     Noc__Macro_Hide_Set *hide_sets;
     size_t hide_set_count;
     size_t hide_set_capacity;
+    bool preserve_defined_operands;
 } Noc__Macro_Expansion_Builder;
 
 typedef struct {
@@ -1556,6 +1557,24 @@ static Noc_Macro_Expansion_Status noc__macro_expand_sequence(
         Noc_Macro_Builtin_Kind builtin_kind = NOC_MACRO_BUILTIN_NONE;
         size_t environment_entry_index = NOC_TOKEN_INDEX_NONE;
         Noc_Macro_Expansion_Status status;
+        if (builder->preserve_defined_operands &&
+            noc_token_is_identifier(token->token, "defined")) {
+            size_t operand = cursor + 1;
+            while (operand < sequence->count &&
+                   noc_token_is_trivia(sequence->items[operand].token)) {
+                operand += 1;
+            }
+            if (operand < sequence->count &&
+                noc_token_is_punct(sequence->items[operand].token, "(")) {
+                operand += 1;
+                while (operand < sequence->count &&
+                       noc_token_is_trivia(sequence->items[operand].token)) {
+                    operand += 1;
+                }
+            }
+            cursor = operand < sequence->count ? operand + 1 : cursor + 1;
+            continue;
+        }
         if (token->token.kind == NOC_TOKEN_IDENTIFIER) {
             entry = noc_macro_environment_lookup_before(builder->environment,
                                                         token->token.text,
@@ -1634,12 +1653,13 @@ static Noc_Macro_Expansion_Status noc__macro_expand_sequence(
     return NOC_MACRO_EXPANSION_OK;
 }
 
-NOCDEF Noc_Macro_Expansion_Status noc_macro_expansion_build(
+NOC__PRIVATE Noc_Macro_Expansion_Status noc__macro_expansion_build(
     const Noc_Macro_Environment *environment,
     size_t entry_limit,
     const Noc_Preprocessor_Unit *input_unit,
     Noc_Token_Range input_tokens,
     Noc_Macro_Expansion_Limits limits,
+    bool preserve_defined_operands,
     Noc_Macro_Expansion *output)
 {
     Noc_Macro_Expansion parsed;
@@ -1678,6 +1698,7 @@ NOCDEF Noc_Macro_Expansion_Status noc_macro_expansion_build(
     builder.entry_limit = entry_limit;
     builder.limits = limits;
     builder.output = &parsed;
+    builder.preserve_defined_operands = preserve_defined_operands;
     for (token_index = input_tokens.begin;
          token_index < input_tokens.end;
          ++token_index) {
@@ -1714,6 +1735,40 @@ fail:
     free(builder.hide_sets);
     noc_macro_expansion_free(&parsed);
     return status;
+}
+
+NOCDEF Noc_Macro_Expansion_Status noc_macro_expansion_build(
+    const Noc_Macro_Environment *environment,
+    size_t entry_limit,
+    const Noc_Preprocessor_Unit *input_unit,
+    Noc_Token_Range input_tokens,
+    Noc_Macro_Expansion_Limits limits,
+    Noc_Macro_Expansion *output)
+{
+    return noc__macro_expansion_build(environment,
+                                      entry_limit,
+                                      input_unit,
+                                      input_tokens,
+                                      limits,
+                                      false,
+                                      output);
+}
+
+NOCDEF Noc_Macro_Expansion_Status noc_macro_expansion_build_condition(
+    const Noc_Macro_Environment *environment,
+    size_t entry_limit,
+    const Noc_Preprocessor_Unit *input_unit,
+    Noc_Token_Range input_tokens,
+    Noc_Macro_Expansion_Limits limits,
+    Noc_Macro_Expansion *output)
+{
+    return noc__macro_expansion_build(environment,
+                                      entry_limit,
+                                      input_unit,
+                                      input_tokens,
+                                      limits,
+                                      true,
+                                      output);
 }
 
 NOCDEF const Noc_Macro_Expansion_Token *noc_macro_expansion_token_at(

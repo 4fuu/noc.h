@@ -16,9 +16,9 @@ typedef struct {
     Diagnostic_State diagnostics;
 } Macro_Expansion_Fixture;
 
-static void macro_fixture_init(Macro_Expansion_Fixture *fixture,
-                               const char *definitions,
-                               const char *input)
+static inline void macro_fixture_init(Macro_Expansion_Fixture *fixture,
+                                      const char *definitions,
+                                      const char *input)
 {
     size_t index;
     memset(fixture, 0, sizeof(*fixture));
@@ -58,7 +58,7 @@ static void macro_fixture_init(Macro_Expansion_Fixture *fixture,
     }
 }
 
-static void macro_fixture_deinit(Macro_Expansion_Fixture *fixture)
+static inline void macro_fixture_deinit(Macro_Expansion_Fixture *fixture)
 {
     noc_buffer_free(&fixture->rendered);
     noc_macro_expansion_free(&fixture->expansion);
@@ -71,7 +71,7 @@ static void macro_fixture_deinit(Macro_Expansion_Fixture *fixture)
     noc_context_deinit(&fixture->context);
 }
 
-static Noc_Token_Range macro_fixture_full_input(
+static inline Noc_Token_Range macro_fixture_full_input(
     const Macro_Expansion_Fixture *fixture)
 {
     Noc_Token_Range range;
@@ -80,7 +80,7 @@ static Noc_Token_Range macro_fixture_full_input(
     return range;
 }
 
-static Noc_Token_Range macro_fixture_input_line(
+static inline Noc_Token_Range macro_fixture_input_line(
     const Macro_Expansion_Fixture *fixture,
     size_t line)
 {
@@ -96,7 +96,7 @@ static Noc_Token_Range macro_fixture_input_line(
     return range;
 }
 
-static Noc_Macro_Expansion_Status macro_fixture_expand(
+static inline Noc_Macro_Expansion_Status macro_fixture_expand(
     Macro_Expansion_Fixture *fixture,
     Noc_Token_Range range)
 {
@@ -108,8 +108,8 @@ static Noc_Macro_Expansion_Status macro_fixture_expand(
                                      &fixture->expansion);
 }
 
-static bool macro_fixture_render_equals(Macro_Expansion_Fixture *fixture,
-                                        const char *expected)
+static inline bool macro_fixture_render_equals(Macro_Expansion_Fixture *fixture,
+                                               const char *expected)
 {
     if (!noc_macro_expansion_render(&fixture->expansion, &fixture->rendered)) {
         return false;

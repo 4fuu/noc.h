@@ -4,7 +4,7 @@ This file is the long-running implementation checklist. A milestone is checked
 only after its interfaces have tests or examples, the complete local suite
 passes, and the milestone has been committed and pushed.
 
-The 0.19 public API remains the compatibility baseline while the 0.33
+The 0.19 public API remains the compatibility baseline while the 0.34
 compiler frontend is built. Dialect inputs continue to use ordinary `.c` and
 `.h` names. Development code may be split into normal C modules, but releases
 must be generated reproducibly as one self-contained `noc.h`.
@@ -171,6 +171,13 @@ must be generated reproducibly as one self-contained `noc.h`.
         `__STDC_HOSTED__`, reproducible `__DATE__`, and reproducible `__TIME__`.
 - [ ] Implement includes, include guards/pragma-once behavior, conditionals,
       integer constant evaluation, diagnostics, and target predefined macros.
+  - [x] Publish significant directive-body token ranges and add condition-mode
+        macro expansion that preserves `defined` operands with full provenance.
+  - [x] Add a bounded C11 preprocessing integer-expression evaluator with
+        intmax/uintmax conversions, all conditional operators, short-circuiting,
+        explicit target-dependent results, and exact problem-token indices.
+  - [ ] Build balanced conditional groups and per-token activity from evaluator
+        results, including active-only macro environment updates and IDE recovery.
 - [ ] Implement disabled, trusted-only, project, and full macro policies without
       leaking system-header implementation macros into project source by default.
 - [ ] Add directive/expansion query APIs for IDE hover, definition, references,

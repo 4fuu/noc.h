@@ -32,6 +32,7 @@ static const char *amalgamation_sources[] = {
     "src/macro_invocations.c",
     "src/macro_environment.c",
     "src/macro_expansion.c",
+    "src/conditional.c",
     "src/parser.c",
     "src/ast.c",
     "src/lower.c",
@@ -41,8 +42,8 @@ static const char *amalgamation_sources[] = {
 static const char *implementation_modules[] = {
     "src/lexer.c", "src/source.c", "src/features.c", "src/macro_directives.c",
     "src/preprocessor.c", "src/macro_invocations.c", "src/macro_environment.c",
-    "src/macro_expansion.c", "src/parser.c", "src/ast.c", "src/lower.c",
-    "src/emit_c.c",
+    "src/macro_expansion.c", "src/conditional.c", "src/parser.c", "src/ast.c",
+    "src/lower.c", "src/emit_c.c",
 };
 
 typedef struct {
@@ -68,6 +69,7 @@ static const Test_Suite test_suites[] = {
     {"macro-stringification", "tests/test_macro_stringification.c", "build/noc-test-macro-stringification" NOC_EXE, false},
     {"macro-token-paste", "tests/test_macro_token_paste.c", "build/noc-test-macro-token-paste" NOC_EXE, false},
     {"macro-builtins", "tests/test_macro_builtins.c", "build/noc-test-macro-builtins" NOC_EXE, false},
+    {"preprocessor-expressions", "tests/test_preprocessor_expressions.c", "build/noc-test-preprocessor-expressions" NOC_EXE, false},
     {"preprocessor", "tests/test_preprocessor.c", "build/noc-test-preprocessor" NOC_EXE, false},
     {"lexing", "tests/test_lexing.c", "build/noc-test-lexing" NOC_EXE, false},
     {"syntax", "tests/test_syntax.c", "build/noc-test-syntax" NOC_EXE, false},

@@ -43,8 +43,8 @@ The suite names are `header-c`, `header-cpp`, `public-header-c`,
 `preprocessing-tokens`, `macro-directives`, `macro-environment`,
 `macro-invocations`, `macro-expansion`, `function-macro-expansion`,
 `variadic-macro-expansion`, `macro-stringification`, `macro-token-paste`,
-`macro-builtins`, `preprocessor`, `lexing`, `syntax`, `c-analysis`, `rewriter`,
-and `artifacts`, for example:
+`macro-builtins`, `preprocessor-expressions`, `preprocessor`, `lexing`, `syntax`,
+`c-analysis`, `rewriter`, and `artifacts`, for example:
 
 ```console
 $ ./nob test c-analysis
@@ -291,6 +291,22 @@ inspection. Run the coverage independently with
 `./nob test macro-token-paste`; predefined-macro coverage is
 `./nob test macro-builtins`.
 
+Conditional preprocessing is staged rather than hidden inside a monolithic
+driver. `noc_preprocessor_directive_body_tokens` returns the significant
+`#if`/`#elif` body span while retaining internal trivia.
+`noc_macro_expansion_build_condition` expands that range with ordinary macro
+provenance and limits but protects `defined` operands. Expansion-generated
+`defined` follows the deterministic GCC/Clang extension for otherwise undefined
+C11 input. `noc_preprocessor_expression_evaluate` then applies C11 precedence,
+intmax/uintmax conversions, remaining-identifier-to-zero behavior,
+short-circuiting, and the conditional operator. It reports malformed input,
+division by zero, signed overflow, invalid shifts, bounded-depth failures, and
+target-dependent operations at exact expansion-token indices. Numeric octal and
+hexadecimal character escapes up to 127 are deterministic; execution-character-
+set constants and negative signed right shifts remain target-dependent until
+translation-target options exist. Run this layer independently with
+`./nob test preprocessor-expressions`.
+
 Macro definition permission is explicit:
 
 - `NOC_MACROS_DISABLED`: no source class may define or undefine macros.
@@ -303,9 +319,9 @@ validation are separate: the inventory always records a recognized `#define` or
 `#undef`, including when disabled, while
 `noc_preprocessor_unit_validate_macro_policy` emits precise feature-disabled
 diagnostics. This prevents tooling from reporting a policy violation as a parse
-error. Conditional policy application, target/time-configured built-in macros,
-include loading, and broader expansion provenance queries remain subsequent
-preprocessor milestones.
+error. Conditional-group activity/policy application, target/time-configured
+built-in macros, include loading, and broader expansion provenance queries
+remain subsequent preprocessor milestones.
 Run the token and recovery coverage independently with
 `./nob test preprocessing-tokens`, or the directive/policy coverage with
 `./nob test preprocessor`.
@@ -817,10 +833,11 @@ This version handles explicit token/AST-assisted transformations, a lossless
 delimiter tree, lightweight C structure discovery, and bounded
 object/fixed-arity/C11-variadic macro inspection expansion. It does not provide a
 complete integrated preprocessor, complete built-in macro expansion, a semantic
-C AST, typedef resolution, or a C type system. C11 macro stringification and token
-pasting plus deterministic file/line/standard built-ins are supported; target
-and translation-time built-ins are not. Rules inside preprocessor directives are
-left untouched. More
+C AST, typedef resolution, or a C type system. C11 macro stringification, token
+pasting, deterministic file/line/standard built-ins, and preprocessing integer-
+expression evaluation are supported; conditional-group execution, target
+semantics, and translation-time built-ins are not. Rules inside preprocessor
+directives are left untouched. More
 structured statement and declaration helpers can be added without changing the
 registration model.
 
@@ -830,7 +847,8 @@ preprocessor directives, identifiers, and multi-character punctuators. Raw
 `noc_token_is_identifier` and `noc_token_is_punct` compare the phase-2 logical
 spelling, and `noc_token_logical_text` copies that spelling into a transactional
 NUL-terminated buffer. C trigraphs are rejected explicitly. Preprocessor
-activity analysis is conservative and does not expand macros; it can skip only
+activity analysis used by the legacy transform path remains conservative and
+does not yet call the new macro-aware expression evaluator; it can skip only
 literal, definitely inactive branches when explicitly enabled. Expansion
 callbacks should preserve physical newline counts when exact diagnostics after
 an expansion matter; the rewriter source-mapping helpers make that policy

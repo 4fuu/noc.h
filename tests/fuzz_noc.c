@@ -407,6 +407,43 @@ static void fuzz_preprocessor(Noc_Context *context,
                                    token->unit->preprocessing_token_count);
                     }
                 }
+                for (index = 0; index < unit.count; ++index) {
+                    const Noc_Preprocessor_Directive *directive =
+                        noc_preprocessor_directive_at(&unit, index);
+                    Noc_Token_Range body =
+                        noc_preprocessor_directive_body_tokens(&unit, index);
+                    FUZZ_CHECK(directive != NULL);
+                    if (body.begin == NOC_TOKEN_INDEX_NONE) {
+                        FUZZ_CHECK(body.end == NOC_TOKEN_INDEX_NONE);
+                        continue;
+                    }
+                    FUZZ_CHECK(body.begin < body.end);
+                    FUZZ_CHECK(body.end <= unit.preprocessing_token_count);
+                    if (directive->kind == NOC_PREPROCESSOR_DIRECTIVE_IF ||
+                        directive->kind == NOC_PREPROCESSOR_DIRECTIVE_ELIF) {
+                        bool value = false;
+                        size_t problem = NOC_TOKEN_INDEX_NONE;
+                        status = noc_macro_expansion_build_condition(
+                            &environment,
+                            environment.count,
+                            &unit,
+                            body,
+                            limits,
+                            &expansion);
+                        if (status == NOC_MACRO_EXPANSION_OK) {
+                            Noc_Preprocessor_Expression_Status expression_status =
+                                noc_preprocessor_expression_evaluate(&expansion,
+                                                                     &value,
+                                                                     &problem);
+                            FUZZ_CHECK(expression_status >=
+                                           NOC_PREPROCESSOR_EXPRESSION_OK &&
+                                       expression_status <=
+                                           NOC_PREPROCESSOR_EXPRESSION_OUT_OF_MEMORY);
+                            FUZZ_CHECK(problem == NOC_TOKEN_INDEX_NONE ||
+                                       problem < expansion.count);
+                        }
+                    }
+                }
             }
         }
         (void)noc_preprocessor_unit_validate_macro_policy(context, &unit);

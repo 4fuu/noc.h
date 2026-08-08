@@ -100,6 +100,9 @@ NOC__PRIVATE Noc_Macro_Invocation_Build_Status noc__macro_invocation_collect(
     Noc__Macro_Invocation_Collection *);
 NOC__PRIVATE const Noc_Macro_Directive *noc__macro_environment_entry_directive(
     const Noc_Macro_Environment_Entry *);
+NOC__PRIVATE Noc_Macro_Expansion_Status noc__macro_expansion_build(
+    const Noc_Macro_Environment *, size_t, const Noc_Preprocessor_Unit *,
+    Noc_Token_Range, Noc_Macro_Expansion_Limits, bool, Noc_Macro_Expansion *);
 NOC__PRIVATE void noc__string_list_free(Noc__String_List *);
 NOC__PRIVATE bool noc__string_list_append_unique(Noc__String_List *, const char *);
 NOC__PRIVATE bool noc__transform_source(Noc_Context *, const char *, const char *, size_t,
