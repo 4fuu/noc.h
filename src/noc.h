@@ -29,9 +29,9 @@
 #define NOC_H_INCLUDED
 
 #define NOC_VERSION_MAJOR 0
-#define NOC_VERSION_MINOR 24
+#define NOC_VERSION_MINOR 25
 #define NOC_VERSION_PATCH 0
-#define NOC_VERSION "0.24.0"
+#define NOC_VERSION "0.25.0"
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -490,12 +490,49 @@ typedef struct {
     size_t directive_index;
 } Noc_Preprocessing_Token;
 
+typedef enum {
+    NOC_MACRO_DIRECTIVE_DEFINE_OBJECT = 0,
+    NOC_MACRO_DIRECTIVE_DEFINE_FUNCTION,
+    NOC_MACRO_DIRECTIVE_UNDEF,
+} Noc_Macro_Directive_Kind;
+
+typedef enum {
+    NOC_MACRO_DIRECTIVE_STATUS_VALID = 0,
+    NOC_MACRO_DIRECTIVE_STATUS_INCOMPLETE,
+    NOC_MACRO_DIRECTIVE_STATUS_MALFORMED,
+} Noc_Macro_Directive_Status;
+
+typedef struct {
+    /* Identifier token, or the ellipsis token for an unnamed variadic slot. */
+    size_t token_index;
+    bool variadic;
+} Noc_Macro_Parameter;
+
+typedef struct {
+    Noc_Macro_Directive_Kind kind;
+    Noc_Macro_Directive_Status status;
+    size_t directive_index;
+    size_t name_token_index;
+    /* Function-like parameter contents, excluding parentheses. Object-like
+       definitions and #undef use {NOC_TOKEN_INDEX_NONE, NOC_TOKEN_INDEX_NONE}. */
+    Noc_Token_Range parameter_tokens;
+    /* Significant replacement span with internal trivia preserved. #undef uses
+       the absent range above; an empty definition uses {position, position}. */
+    Noc_Token_Range replacement_tokens;
+    size_t parameter_begin;
+    size_t parameter_count;
+    size_t problem_token_index;
+    bool variadic;
+} Noc_Macro_Directive;
+
 typedef struct {
     Noc_Preprocessor_Directive_Kind kind;
     /* Index of the original opaque directive in stream. */
     size_t token_index;
     /* Half-open range in Noc_Preprocessor_Unit.preprocessing_tokens. */
     Noc_Token_Range preprocessing_tokens;
+    /* Index in Noc_Preprocessor_Unit.macro_directives, or NONE. */
+    size_t macro_directive_index;
     Noc_Slice spelling;
     Noc_Slice keyword;
     Noc_Slice payload;
@@ -508,9 +545,16 @@ typedef struct {
    derived views borrowed from the old unit; failed rebuild preserves them. */
 typedef struct {
     Noc_Token_Stream stream;
+    size_t token_stream_generation;
     Noc_Preprocessing_Token *preprocessing_tokens;
     size_t preprocessing_token_count;
     size_t preprocessing_token_capacity;
+    Noc_Macro_Directive *macro_directives;
+    size_t macro_directive_count;
+    size_t macro_directive_capacity;
+    Noc_Macro_Parameter *macro_parameters;
+    size_t macro_parameter_count;
+    size_t macro_parameter_capacity;
     Noc_Preprocessor_Directive *items;
     size_t count;
     size_t capacity;
@@ -519,6 +563,7 @@ typedef struct {
     Noc_Source_Class source_class;
     Noc_Macro_Policy macro_policy;
     size_t disabled_macro_definition_count;
+    size_t invalid_macro_directive_count;
 } Noc_Preprocessor_Unit;
 
 NOCDEF const char *noc_source_class_name(Noc_Source_Class source_class);
@@ -527,6 +572,9 @@ NOCDEF const char *noc_preprocessor_directive_kind_name(
     Noc_Preprocessor_Directive_Kind kind);
 NOCDEF const char *noc_preprocessing_token_role_name(
     Noc_Preprocessing_Token_Role role);
+NOCDEF const char *noc_macro_directive_kind_name(Noc_Macro_Directive_Kind kind);
+NOCDEF const char *noc_macro_directive_status_name(
+    Noc_Macro_Directive_Status status);
 NOCDEF bool noc_macro_policy_allows_definition(Noc_Macro_Policy policy,
                                                Noc_Source_Class source_class);
 NOCDEF bool noc_preprocessor_unit_build(Noc_Context *context,
@@ -541,8 +589,19 @@ NOCDEF const Noc_Preprocessor_Directive *noc_preprocessor_directive_at(
 NOCDEF const Noc_Preprocessing_Token *noc_preprocessor_token_at(
     const Noc_Preprocessor_Unit *unit,
     size_t index);
+NOCDEF const Noc_Macro_Directive *noc_macro_directive_at(
+    const Noc_Preprocessor_Unit *unit,
+    size_t index);
+NOCDEF const Noc_Macro_Parameter *noc_macro_parameter_at(
+    const Noc_Preprocessor_Unit *unit,
+    const Noc_Macro_Directive *directive,
+    size_t index);
 /* Reports every disabled #define/#undef through context but leaves unit valid. */
 NOCDEF bool noc_preprocessor_unit_validate_macro_policy(
+    Noc_Context *context,
+    const Noc_Preprocessor_Unit *unit);
+/* Reports malformed/incomplete #define/#undef records but preserves the unit. */
+NOCDEF bool noc_preprocessor_unit_validate_macro_directives(
     Noc_Context *context,
     const Noc_Preprocessor_Unit *unit);
 
@@ -3046,11 +3105,12 @@ NOCDEF bool noc_token_stream_is_valid(const Noc_Token_Stream *stream)
            stream->items[stream->count - 1].kind == NOC_TOKEN_EOF;
 }
 
-NOCDEF bool noc_tokenize(Noc_Context *context,
-                         const char *path,
-                         const char *source,
-                         size_t source_count,
-                         Noc_Token_Stream *stream)
+static bool noc__tokenize(Noc_Context *context,
+                          const char *path,
+                          const char *source,
+                          size_t source_count,
+                          bool recover_incomplete_directive,
+                          Noc_Token_Stream *stream)
 {
     const char *display_path = path ? path : "<memory>";
     size_t path_count;
@@ -3095,6 +3155,12 @@ NOCDEF bool noc_tokenize(Noc_Context *context,
     noc_lexer_init(&lexer, parsed.path, parsed.source, parsed.source_count);
     do {
         token = noc_lexer_next(&lexer);
+        if (recover_incomplete_directive && token.kind == NOC_TOKEN_INVALID &&
+            token.text.count == 0 && lexer.cursor == lexer.source_count &&
+            parsed.count > 0 &&
+            parsed.items[parsed.count - 1].kind == NOC_TOKEN_PREPROCESSOR) {
+            continue;
+        }
         if (!noc__tokens_append(&parsed, token)) {
             noc__report(context,
                         NOC_DIAGNOSTIC_ERROR,
@@ -3123,6 +3189,20 @@ NOCDEF bool noc_tokenize(Noc_Context *context,
     noc_token_stream_free(stream);
     *stream = parsed;
     return true;
+}
+
+NOCDEF bool noc_tokenize(Noc_Context *context,
+                         const char *path,
+                         const char *source,
+                         size_t source_count,
+                         Noc_Token_Stream *stream)
+{
+    return noc__tokenize(context,
+                         path,
+                         source,
+                         source_count,
+                         false,
+                         stream);
 }
 
 NOCDEF Noc_Slice noc_token_stream_source(const Noc_Token_Stream *stream)

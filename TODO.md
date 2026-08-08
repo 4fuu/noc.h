@@ -85,6 +85,10 @@ must be generated reproducibly as one self-contained `noc.h`.
 
 ## Compiler rewrite contract
 
+- The editable implementation is organized by compiler phase even though the
+  release is one header. `header_sources` is the private dependency order; new
+  macro expansion, include, parser, semantic, lowering/emitter, and IDE/index
+  work belongs in separate domain modules with separate focused test suites.
 - The first complete language target is ISO C11. ISO C17 and C23 are explicit
   follow-up input/output profiles; GCC, Clang, and MSVC extensions are explicit
   target profiles rather than silently accepted syntax.
@@ -136,6 +140,9 @@ must be generated reproducibly as one self-contained `noc.h`.
       directive into one opaque token; preserve whitespace/comments/provenance.
 - [ ] Implement object/function macros, variadics, argument prescan, recursive
       expansion with hide sets, stringification, token pasting, and built-ins.
+  - [x] Publish recoverable object/function `#define` and `#undef` structure,
+        parameter/replacement ranges, C11 variadic slots, and syntax status.
+  - [ ] Build the macro environment and implement expansion semantics.
 - [ ] Implement includes, include guards/pragma-once behavior, conditionals,
       integer constant evaluation, diagnostics, and target predefined macros.
 - [ ] Implement disabled, trusted-only, project, and full macro policies without

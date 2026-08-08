@@ -39,8 +39,8 @@ $ ./nob test
 
 Run one independently buildable suite on demand with `./nob test <suite>`.
 The suite names are `header-c`, `header-cpp`, `workspace`,
-`preprocessing-tokens`, `preprocessor`, `lexing`, `syntax`, `c-analysis`,
-`rewriter`, and `artifacts`, for example:
+`preprocessing-tokens`, `macro-directives`, `preprocessor`, `lexing`, `syntax`,
+`c-analysis`, `rewriter`, and `artifacts`, for example:
 
 ```console
 $ ./nob test c-analysis
@@ -83,6 +83,25 @@ definitions and subsystem modules belong below it. Add a source module to the
 ordered `header_sources` manifest, regenerate, run its focused suite and the full
 suite, and commit both source and generated header together. The published file
 remains self-contained and dialect inputs keep normal `.c` and `.h` suffixes.
+
+The manifest is also the implementation dependency order. A module may use the
+public API declared by `src/noc.h` and private helpers from an earlier module; it
+must not create a private dependency back to a later module. Current ownership is:
+
+| Module | Responsibility |
+| --- | --- |
+| `src/noc.h` | Public API plus the compatibility lexer/syntax/rewriter core |
+| `src/workspace.h` | Workspace identities, immutable snapshots, edits, and line maps |
+| `src/macro_directives.h` | Recoverable `#define`/`#undef` grammar and macro query APIs |
+| `src/preprocessor.h` | Macro policy, directive inventory, lossless token construction, and unit transactions |
+
+New compiler phases get their own domain module and focused test suite; they are
+not appended to `src/noc.h` or an unrelated implementation merely because the
+release is amalgamated. In particular, macro environment/expansion, includes,
+C parsing, semantic analysis, lowering, emission, and IDE indexing remain
+separate ownership boundaries. Shared helpers move downward only when at least
+two modules genuinely own the same primitive—one-use wrappers and circular
+private dependencies are not accepted.
 
 ## Incremental workspace snapshots
 
@@ -161,6 +180,22 @@ document generation. Null, unknown, C11, and selected newer directive names are
 recognized without pretending to expand macros yet. The unit owns its copied
 source and token storage, so queries remain valid after the source snapshot or
 workspace is released.
+
+Every `#define` and `#undef` also has a structured `Noc_Macro_Directive` record
+queryable through `noc_macro_directive_at`. It distinguishes object-like,
+function-like, and undef operations; exposes the macro name, parameter and
+replacement ranges, C11 variadic slots, and a valid/incomplete/malformed syntax
+status. Function-like detection follows phase 2: a line splice alone between a
+name and `(` is accepted, while a comment or actual whitespace makes the macro
+object-like. `noc_macro_parameter_at` exposes each identifier or unnamed `...`
+slot without copying source text.
+
+Building a unit does not diagnose recoverable macro syntax, so IDEs retain the
+partial record. Batch callers may invoke
+`noc_preprocessor_unit_validate_macro_directives` to report those statuses.
+This is structural parsing only: expansion, duplicate-parameter constraints,
+replacement `#`/`##` validation, hide sets, and built-ins remain later work. Run
+this coverage independently with `./nob test macro-directives`.
 
 Macro definition permission is explicit:
 

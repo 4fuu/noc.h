@@ -182,7 +182,7 @@ static void test_directive_inventory(void)
 
 static void test_policy_validation_and_transactionality(void)
 {
-    static const char macros[] = "#define VALUE 1\n#undef VALUE\n";
+    static const char macros[] = "#define VALUE(x) (x)\n#undef VALUE\n";
     static const char plain[] = "int value;\n";
     static const char trigraph[] = {'?', '?', '=', 'x', '\n'};
     Noc_Context context;
@@ -196,6 +196,8 @@ static void test_policy_validation_and_transactionality(void)
     Diagnostic_State diagnostics = {0};
     Noc_Preprocessor_Directive *preserved_items;
     Noc_Preprocessing_Token *preserved_tokens;
+    Noc_Macro_Directive *preserved_macros;
+    Noc_Macro_Parameter *preserved_parameters;
     Noc_File_Id preserved_file;
     size_t preserved_generation;
     noc_context_init(&context);
@@ -219,6 +221,8 @@ static void test_policy_validation_and_transactionality(void)
 
     preserved_items = unit.items;
     preserved_tokens = unit.preprocessing_tokens;
+    preserved_macros = unit.macro_directives;
+    preserved_parameters = unit.macro_parameters;
     preserved_file = unit.file_id;
     preserved_generation = unit.stream.generation;
     CHECK(!noc_preprocessor_unit_build(&context,
@@ -227,6 +231,8 @@ static void test_policy_validation_and_transactionality(void)
                                        &unit));
     CHECK(unit.items == preserved_items && unit.file_id == preserved_file);
     CHECK(unit.preprocessing_tokens == preserved_tokens);
+    CHECK(unit.macro_directives == preserved_macros);
+    CHECK(unit.macro_parameters == preserved_parameters);
     CHECK(unit.stream.generation == preserved_generation);
     CHECK(noc_syntax_tree_is_valid(&borrowed_tree));
     CHECK(diagnostics.errors == 1);
@@ -236,6 +242,8 @@ static void test_policy_validation_and_transactionality(void)
                                        &unit));
     CHECK(unit.items == preserved_items && unit.file_id == preserved_file);
     CHECK(unit.preprocessing_tokens == preserved_tokens);
+    CHECK(unit.macro_directives == preserved_macros);
+    CHECK(unit.macro_parameters == preserved_parameters);
     CHECK(unit.stream.generation == preserved_generation);
     CHECK(noc_syntax_tree_is_valid(&borrowed_tree));
 
@@ -304,10 +312,83 @@ static void test_policy_validation_and_transactionality(void)
     noc_context_deinit(&context);
 }
 
+static void test_nested_stream_generation_invalidation(void)
+{
+    static const char source[] = "#define VALUE(x) (x)\n";
+    Noc_Context context;
+    Noc_Workspace workspace = {0};
+    Noc_Document_Snapshot snapshot = {0};
+    Noc_Preprocessor_Unit unit = {0};
+    Noc_Syntax_Tree tree_before_free = {0};
+    Noc_Syntax_Tree tree_before_retokenize = {0};
+    Diagnostic_State diagnostics = {0};
+    char *preserved_source;
+    size_t preserved_generation;
+
+    noc_context_init(&context);
+    noc_context_set_diagnostic(&context, count_diagnostics, &diagnostics);
+    noc_workspace_init(&workspace);
+    CHECK(noc_workspace_open_document(&workspace,
+                                      "generation.h",
+                                      source,
+                                      sizeof(source) - 1,
+                                      NOC_SOURCE_CLASS_TRUSTED,
+                                      &snapshot) == NOC_WORKSPACE_OK);
+    CHECK(noc_preprocessor_unit_build(&context,
+                                      &snapshot,
+                                      NOC_MACROS_FULL,
+                                      &unit));
+    CHECK(noc_syntax_tree_build(&context, &unit.stream, &tree_before_free));
+    preserved_generation = unit.stream.generation;
+    noc_preprocessor_unit_free(&unit);
+    CHECK(!noc_syntax_tree_is_valid(&tree_before_free));
+    CHECK(noc_preprocessor_unit_build(&context,
+                                      &snapshot,
+                                      NOC_MACROS_FULL,
+                                      &unit));
+    CHECK(unit.stream.generation == preserved_generation + 1);
+    CHECK(!noc_syntax_tree_is_valid(&tree_before_free));
+    noc_syntax_tree_free(&tree_before_free);
+    CHECK(noc_syntax_tree_build(&context,
+                                &unit.stream,
+                                &tree_before_retokenize));
+    preserved_source = unit.stream.source;
+    preserved_generation = unit.stream.generation;
+    CHECK(!noc_tokenize(&context,
+                        "invalid.c",
+                        "/*",
+                        sizeof("/*") - 1,
+                        &unit.stream));
+    CHECK(unit.stream.source == preserved_source);
+    CHECK(unit.stream.generation == preserved_generation);
+    CHECK(noc_preprocessor_unit_is_valid(&unit));
+    CHECK(noc_syntax_tree_is_valid(&tree_before_retokenize));
+    CHECK(noc_tokenize(&context,
+                       "replacement.c",
+                       "int replacement;\n",
+                       sizeof("int replacement;\n") - 1,
+                       &unit.stream));
+    CHECK(unit.stream.generation == preserved_generation + 1);
+    CHECK(!noc_preprocessor_unit_is_valid(&unit));
+    CHECK(!noc_syntax_tree_is_valid(&tree_before_retokenize));
+    CHECK(noc_preprocessor_directive_at(&unit, 0) == NULL);
+    CHECK(noc_preprocessor_token_at(&unit, 0) == NULL);
+    CHECK(noc_macro_directive_at(&unit, 0) == NULL);
+    CHECK(!noc_preprocessor_unit_validate_macro_policy(&context, &unit));
+    CHECK(!noc_preprocessor_unit_validate_macro_directives(&context, &unit));
+
+    noc_syntax_tree_free(&tree_before_retokenize);
+    noc_preprocessor_unit_free(&unit);
+    noc_document_snapshot_free(&snapshot);
+    noc_workspace_deinit(&workspace);
+    noc_context_deinit(&context);
+}
+
 int main(void)
 {
     test_macro_policy_matrix();
     test_directive_inventory();
     test_policy_validation_and_transactionality();
+    test_nested_stream_generation_invalidation();
     return finish_suite("preprocessor");
 }

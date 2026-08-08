@@ -21,6 +21,7 @@
 static const char *header_sources[] = {
     "src/noc.h",
     "src/workspace.h",
+    "src/macro_directives.h",
     "src/preprocessor.h",
 };
 
@@ -36,6 +37,7 @@ static const Test_Suite test_suites[] = {
     {"header-cpp", "tests/test_header.c", "build/noc-test-header-cpp" NOC_EXE, true},
     {"workspace", "tests/test_workspace.c", "build/noc-test-workspace" NOC_EXE, false},
     {"preprocessing-tokens", "tests/test_preprocessing_tokens.c", "build/noc-test-preprocessing-tokens" NOC_EXE, false},
+    {"macro-directives", "tests/test_macro_directives.c", "build/noc-test-macro-directives" NOC_EXE, false},
     {"preprocessor", "tests/test_preprocessor.c", "build/noc-test-preprocessor" NOC_EXE, false},
     {"lexing", "tests/test_lexing.c", "build/noc-test-lexing" NOC_EXE, false},
     {"syntax", "tests/test_syntax.c", "build/noc-test-syntax" NOC_EXE, false},

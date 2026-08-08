@@ -174,6 +174,7 @@ static void noc__preprocessor_inventory_parse(
     memset(directive, 0, sizeof(*directive));
     directive->kind = NOC_PREPROCESSOR_DIRECTIVE_UNKNOWN;
     directive->token_index = token_index;
+    directive->macro_directive_index = NOC_TOKEN_INDEX_NONE;
     directive->spelling = token.text;
     directive->location = token.location;
     directive->macro_definition_allowed = true;
@@ -379,16 +380,22 @@ static bool noc__preprocessor_tokenize_directive(
 
 NOCDEF void noc_preprocessor_unit_free(Noc_Preprocessor_Unit *unit)
 {
+    size_t stream_generation;
     if (!unit) return;
+    stream_generation = unit->stream.generation;
+    free(unit->macro_parameters);
+    free(unit->macro_directives);
     free(unit->preprocessing_tokens);
     free(unit->items);
     noc_token_stream_free(&unit->stream);
     memset(unit, 0, sizeof(*unit));
+    unit->stream.generation = stream_generation;
 }
 
 NOCDEF bool noc_preprocessor_unit_is_valid(const Noc_Preprocessor_Unit *unit)
 {
     return unit && noc_token_stream_is_valid(&unit->stream) &&
+           unit->token_stream_generation == unit->stream.generation &&
            unit->file_id != NOC_FILE_ID_NONE && unit->document_generation != 0 &&
            noc__source_class_is_valid(unit->source_class) &&
            noc__macro_policy_is_valid(unit->macro_policy) &&
@@ -398,6 +405,11 @@ NOCDEF bool noc_preprocessor_unit_is_valid(const Noc_Preprocessor_Unit *unit)
            unit->preprocessing_tokens &&
            unit->preprocessing_tokens[
                unit->preprocessing_token_count - 1].token.kind == NOC_TOKEN_EOF &&
+           unit->macro_directive_count <= unit->macro_directive_capacity &&
+           (unit->macro_directive_count == 0 || unit->macro_directives) &&
+           unit->macro_parameter_count <= unit->macro_parameter_capacity &&
+           (unit->macro_parameter_count == 0 || unit->macro_parameters) &&
+           unit->invalid_macro_directive_count <= unit->macro_directive_count &&
            unit->count <= unit->capacity && (unit->count == 0 || unit->items);
 }
 
@@ -423,13 +435,15 @@ NOCDEF bool noc_preprocessor_unit_build(Noc_Context *context,
     }
     source = noc_document_snapshot_source(snapshot);
     parsed.stream.generation = unit->stream.generation;
-    if (!noc_tokenize(context,
-                      noc_document_snapshot_path(snapshot),
-                      source.data,
-                      source.count,
-                      &parsed.stream)) {
+    if (!noc__tokenize(context,
+                       noc_document_snapshot_path(snapshot),
+                       source.data,
+                       source.count,
+                       true,
+                       &parsed.stream)) {
         return false;
     }
+    parsed.token_stream_generation = parsed.stream.generation;
     parsed.file_id = noc_document_snapshot_file_id(snapshot);
     parsed.document_generation = noc_document_snapshot_generation(snapshot);
     parsed.source_class = noc_document_snapshot_source_class(snapshot);
@@ -470,6 +484,16 @@ NOCDEF bool noc_preprocessor_unit_build(Noc_Context *context,
             return false;
         }
         directive.preprocessing_tokens.end = parsed.preprocessing_token_count;
+        if ((directive.kind == NOC_PREPROCESSOR_DIRECTIVE_DEFINE ||
+             directive.kind == NOC_PREPROCESSOR_DIRECTIVE_UNDEF) &&
+            !noc__macro_parse_directive(&parsed, &directive, parsed.count)) {
+            noc__report(context,
+                        NOC_DIAGNOSTIC_ERROR,
+                        token.location,
+                        "out of memory while recording macro directives");
+            noc_preprocessor_unit_free(&parsed);
+            return false;
+        }
         if (!directive.macro_definition_allowed) {
             parsed.disabled_macro_definition_count += 1;
         }

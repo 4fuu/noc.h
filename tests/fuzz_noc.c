@@ -250,7 +250,73 @@ static void fuzz_preprocessor(Noc_Context *context,
                                directive_token_index].directive_index == index);
             }
         }
+        {
+            size_t invalid_macro_count = 0;
+            for (index = 0; index < unit.macro_directive_count; ++index) {
+                const Noc_Macro_Directive *macro =
+                    noc_macro_directive_at(&unit, index);
+                const Noc_Preprocessor_Directive *directive;
+                size_t parameter_index;
+                bool found_variadic = false;
+                FUZZ_CHECK(macro != NULL);
+                FUZZ_CHECK(macro->kind >= NOC_MACRO_DIRECTIVE_DEFINE_OBJECT &&
+                           macro->kind <= NOC_MACRO_DIRECTIVE_UNDEF);
+                FUZZ_CHECK(macro->status >= NOC_MACRO_DIRECTIVE_STATUS_VALID &&
+                           macro->status <= NOC_MACRO_DIRECTIVE_STATUS_MALFORMED);
+                FUZZ_CHECK(macro->directive_index < unit.count);
+                directive = &unit.items[macro->directive_index];
+                FUZZ_CHECK(directive->kind == NOC_PREPROCESSOR_DIRECTIVE_DEFINE ||
+                           directive->kind == NOC_PREPROCESSOR_DIRECTIVE_UNDEF);
+                FUZZ_CHECK(directive->macro_directive_index == index);
+                FUZZ_CHECK(macro->parameter_begin <= unit.macro_parameter_count);
+                FUZZ_CHECK(macro->parameter_count <=
+                           unit.macro_parameter_count - macro->parameter_begin);
+                if (macro->name_token_index != NOC_TOKEN_INDEX_NONE) {
+                    FUZZ_CHECK(macro->name_token_index <
+                               unit.preprocessing_token_count);
+                }
+                if (macro->parameter_tokens.begin != NOC_TOKEN_INDEX_NONE) {
+                    FUZZ_CHECK(macro->parameter_tokens.begin <=
+                               macro->parameter_tokens.end);
+                    FUZZ_CHECK(macro->parameter_tokens.end <=
+                               unit.preprocessing_token_count);
+                } else {
+                    FUZZ_CHECK(macro->parameter_tokens.end == NOC_TOKEN_INDEX_NONE);
+                }
+                if (macro->replacement_tokens.begin != NOC_TOKEN_INDEX_NONE) {
+                    FUZZ_CHECK(macro->replacement_tokens.begin <=
+                               macro->replacement_tokens.end);
+                    FUZZ_CHECK(macro->replacement_tokens.end <=
+                               unit.preprocessing_token_count);
+                } else {
+                    FUZZ_CHECK(macro->replacement_tokens.end ==
+                               NOC_TOKEN_INDEX_NONE);
+                }
+                for (parameter_index = 0;
+                     parameter_index < macro->parameter_count;
+                     ++parameter_index) {
+                    const Noc_Macro_Parameter *parameter =
+                        noc_macro_parameter_at(&unit, macro, parameter_index);
+                    FUZZ_CHECK(parameter != NULL);
+                    FUZZ_CHECK(parameter->token_index <
+                               unit.preprocessing_token_count);
+                    FUZZ_CHECK(unit.preprocessing_tokens[
+                                   parameter->token_index].token.kind ==
+                                   NOC_TOKEN_IDENTIFIER ||
+                               noc_token_is_punct(unit.preprocessing_tokens[
+                                                      parameter->token_index].token,
+                                                  "..."));
+                    found_variadic = found_variadic || parameter->variadic;
+                }
+                FUZZ_CHECK(found_variadic == macro->variadic);
+                if (macro->status != NOC_MACRO_DIRECTIVE_STATUS_VALID) {
+                    invalid_macro_count += 1;
+                }
+            }
+            FUZZ_CHECK(invalid_macro_count == unit.invalid_macro_directive_count);
+        }
         (void)noc_preprocessor_unit_validate_macro_policy(context, &unit);
+        (void)noc_preprocessor_unit_validate_macro_directives(context, &unit);
     }
     noc_preprocessor_unit_free(&unit);
     noc_document_snapshot_free(&snapshot);
