@@ -10,13 +10,26 @@
 #define NOC_EXE ""
 #endif
 
-#define NOC_TESTS "build/noc-tests" NOC_EXE
 #define NOC_FUZZ "build/noc-fuzz" NOC_EXE
 #define NOC_EMBED_DIALECT "build/embed-dialect" NOC_EXE
 #define NOC_EMBED_EXAMPLE "build/embed-example" NOC_EXE
 #define NOC_RULES_DIALECT "build/rules-dialect" NOC_EXE
 #define NOC_RULES_EXAMPLE "build/rules-example" NOC_EXE
 #define NOC_IDE_EXAMPLE "build/ide-example" NOC_EXE
+
+typedef struct {
+    const char *key;
+    const char *source;
+    const char *output;
+} Test_Suite;
+
+static const Test_Suite test_suites[] = {
+    {"lexing", "tests/test_lexing.c", "build/noc-test-lexing" NOC_EXE},
+    {"syntax", "tests/test_syntax.c", "build/noc-test-syntax" NOC_EXE},
+    {"c-analysis", "tests/test_c_analysis.c", "build/noc-test-c-analysis" NOC_EXE},
+    {"rewriter", "tests/test_rewriter.c", "build/noc-test-rewriter" NOC_EXE},
+    {"artifacts", "tests/test_artifacts.c", "build/noc-test-artifacts" NOC_EXE},
+};
 
 #if !defined(_MSC_VER) || defined(__clang__)
 static const char *compiler(void)
@@ -109,9 +122,47 @@ static bool build_binary(const char *output, const char *source)
     return nob_cmd_run(&command);
 }
 
-static bool build_tests(void)
+static bool build_test_suite(const Test_Suite *suite)
 {
-    return build_binary(NOC_TESTS, "tests/test_noc.c");
+    const char *inputs[] = {
+        suite->source,
+        "tests/test_support.h",
+        "noc.h",
+        "nob.c",
+    };
+    Nob_Cmd command = {0};
+    int rebuild = output_rebuild_state(suite->output, inputs, NOB_ARRAY_LEN(inputs));
+    if (rebuild < 0) return false;
+    if (rebuild == 0) return nob_file_exists(suite->output) > 0;
+    append_compile_command(&command, suite->output, suite->source);
+    return nob_cmd_run(&command);
+}
+
+static bool run_test_suite(const Test_Suite *suite)
+{
+    Nob_Cmd command = {0};
+    if (!build_test_suite(suite)) return false;
+    nob_cmd_append(&command, suite->output);
+    return nob_cmd_run(&command);
+}
+
+static const Test_Suite *find_test_suite(const char *key)
+{
+    size_t i;
+    for (i = 0; i < NOB_ARRAY_LEN(test_suites); ++i) {
+        if (strcmp(test_suites[i].key, key) == 0) return &test_suites[i];
+    }
+    return NULL;
+}
+
+static void print_test_suites(void)
+{
+    size_t i;
+    fprintf(stderr, "Valid test suites:");
+    for (i = 0; i < NOB_ARRAY_LEN(test_suites); ++i) {
+        fprintf(stderr, " %s", test_suites[i].key);
+    }
+    fputc('\n', stderr);
 }
 
 static bool build_fuzz(void)
@@ -332,7 +383,7 @@ static bool clean(void)
 static void usage(const char *program)
 {
     fprintf(stderr,
-            "Usage: %s [test|fuzz|example|describe|clean]\n",
+            "Usage: %s [test [suite]|fuzz|example|describe|clean]\n",
             program);
 }
 
@@ -346,12 +397,21 @@ int main(int argc, char **argv)
 
     if (strcmp(target, "test") == 0) {
         Nob_Cmd command = {0};
-        if (!build_tests() || !build_fuzz() || !build_embed_example() ||
-            !build_rules_example() || !build_ide_example()) {
-            return 1;
+        size_t i;
+        if (argc > 2) {
+            const Test_Suite *suite = find_test_suite(argv[2]);
+            if (!suite) {
+                fprintf(stderr, "Unknown test suite: %s\n", argv[2]);
+                print_test_suites();
+                return 2;
+            }
+            return run_test_suite(suite) ? 0 : 1;
         }
-        nob_cmd_append(&command, NOC_TESTS);
-        if (!nob_cmd_run(&command)) return 1;
+        for (i = 0; i < NOB_ARRAY_LEN(test_suites); ++i) {
+            if (!run_test_suite(&test_suites[i])) return 1;
+        }
+        if (!build_fuzz() || !build_embed_example() || !build_rules_example() ||
+            !build_ide_example()) return 1;
         nob_cmd_append(&command, NOC_FUZZ);
         if (!nob_cmd_run(&command)) return 1;
         nob_cmd_append(&command, NOC_EMBED_EXAMPLE);

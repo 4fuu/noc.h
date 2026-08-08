@@ -62,6 +62,8 @@ passes, and the milestone has been committed and pushed.
 
 ## Later work
 
+- [x] Split unit coverage into independently buildable lexer, syntax, C analysis,
+      rewriter, and artifact/file-I/O suites with on-demand build targets.
 - [x] Multi-file API/CLI and mirrored source/output directory trees.
 - [x] Add Make/Ninja depfile API and CLI output.
 - [x] Add exact compiler-command signature API and CLI output.
@@ -71,4 +73,6 @@ passes, and the milestone has been committed and pushed.
       preserving exact source slices for lossless syntax APIs.
 - [x] Fuzz lexer, token cursor, syntax tree/query, preprocessor activity, and
       rewrite callback APIs with deterministic smoke and Clang libFuzzer modes.
+- [ ] Add explicit token-pattern rule triggers and per-rule feature controls
+      while preserving the existing `@name` registration contract.
 - [ ] Versioning, changelog, release packaging, and vendored `nob.h` update policy.

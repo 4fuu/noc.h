@@ -37,6 +37,14 @@ $ cc -o nob nob.c
 $ ./nob test
 ```
 
+Run one independently buildable suite on demand with `./nob test <suite>`.
+The suite names are `lexing`, `syntax`, `c-analysis`, `rewriter`, and
+`artifacts`, for example:
+
+```console
+$ ./nob test c-analysis
+```
+
 Other targets:
 
 ```console
