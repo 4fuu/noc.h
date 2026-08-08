@@ -29,9 +29,9 @@
 #define NOC_H_INCLUDED
 
 #define NOC_VERSION_MAJOR 0
-#define NOC_VERSION_MINOR 22
+#define NOC_VERSION_MINOR 23
 #define NOC_VERSION_PATCH 0
-#define NOC_VERSION "0.22.0"
+#define NOC_VERSION "0.23.0"
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -440,6 +440,79 @@ NOCDEF Noc_Workspace_Status noc_document_snapshot_offset(
     size_t line,
     size_t byte_column,
     size_t *output);
+
+/* Policy-aware preprocessor inventory. Building an inventory recognizes source
+   directives regardless of whether policy permits them. Validation is a
+   separate operation so IDEs can still inspect disabled constructs. Macro
+   expansion itself is implemented by later preprocessor milestones. */
+typedef enum {
+    NOC_MACROS_DISABLED = 0,
+    NOC_MACROS_TRUSTED_ONLY,
+    NOC_MACROS_PROJECT,
+    NOC_MACROS_FULL,
+} Noc_Macro_Policy;
+
+typedef enum {
+    NOC_PREPROCESSOR_DIRECTIVE_NULL = 0,
+    NOC_PREPROCESSOR_DIRECTIVE_DEFINE,
+    NOC_PREPROCESSOR_DIRECTIVE_UNDEF,
+    NOC_PREPROCESSOR_DIRECTIVE_INCLUDE,
+    NOC_PREPROCESSOR_DIRECTIVE_IF,
+    NOC_PREPROCESSOR_DIRECTIVE_IFDEF,
+    NOC_PREPROCESSOR_DIRECTIVE_IFNDEF,
+    NOC_PREPROCESSOR_DIRECTIVE_ELIF,
+    NOC_PREPROCESSOR_DIRECTIVE_ELIFDEF,
+    NOC_PREPROCESSOR_DIRECTIVE_ELIFNDEF,
+    NOC_PREPROCESSOR_DIRECTIVE_ELSE,
+    NOC_PREPROCESSOR_DIRECTIVE_ENDIF,
+    NOC_PREPROCESSOR_DIRECTIVE_LINE,
+    NOC_PREPROCESSOR_DIRECTIVE_ERROR,
+    NOC_PREPROCESSOR_DIRECTIVE_WARNING,
+    NOC_PREPROCESSOR_DIRECTIVE_PRAGMA,
+    NOC_PREPROCESSOR_DIRECTIVE_UNKNOWN,
+} Noc_Preprocessor_Directive_Kind;
+
+typedef struct {
+    Noc_Preprocessor_Directive_Kind kind;
+    size_t token_index;
+    Noc_Slice spelling;
+    Noc_Slice keyword;
+    Noc_Slice payload;
+    Noc_Location location;
+    bool macro_definition_allowed;
+} Noc_Preprocessor_Directive;
+
+typedef struct {
+    Noc_Token_Stream stream;
+    Noc_Preprocessor_Directive *items;
+    size_t count;
+    size_t capacity;
+    Noc_File_Id file_id;
+    size_t document_generation;
+    Noc_Source_Class source_class;
+    Noc_Macro_Policy macro_policy;
+    size_t disabled_macro_definition_count;
+} Noc_Preprocessor_Unit;
+
+NOCDEF const char *noc_source_class_name(Noc_Source_Class source_class);
+NOCDEF const char *noc_macro_policy_name(Noc_Macro_Policy policy);
+NOCDEF const char *noc_preprocessor_directive_kind_name(
+    Noc_Preprocessor_Directive_Kind kind);
+NOCDEF bool noc_macro_policy_allows_definition(Noc_Macro_Policy policy,
+                                               Noc_Source_Class source_class);
+NOCDEF bool noc_preprocessor_unit_build(Noc_Context *context,
+                                        const Noc_Document_Snapshot *snapshot,
+                                        Noc_Macro_Policy macro_policy,
+                                        Noc_Preprocessor_Unit *unit);
+NOCDEF void noc_preprocessor_unit_free(Noc_Preprocessor_Unit *unit);
+NOCDEF bool noc_preprocessor_unit_is_valid(const Noc_Preprocessor_Unit *unit);
+NOCDEF const Noc_Preprocessor_Directive *noc_preprocessor_directive_at(
+    const Noc_Preprocessor_Unit *unit,
+    size_t index);
+/* Reports every disabled #define/#undef through context but leaves unit valid. */
+NOCDEF bool noc_preprocessor_unit_validate_macro_policy(
+    Noc_Context *context,
+    const Noc_Preprocessor_Unit *unit);
 
 /* Slices and tokens */
 NOCDEF Noc_Slice noc_slice_from_cstr(const char *text);

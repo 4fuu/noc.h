@@ -157,6 +157,43 @@ static void fuzz_workspace(const uint8_t *data, size_t size, unsigned int select
     noc_document_snapshot_free(&current);
 }
 
+static void fuzz_preprocessor(Noc_Context *context,
+                              const uint8_t *data,
+                              size_t size,
+                              unsigned int selector)
+{
+    Noc_Workspace workspace = {0};
+    Noc_Document_Snapshot snapshot = {0};
+    Noc_Preprocessor_Unit unit = {0};
+    size_t index;
+    noc_workspace_init(&workspace);
+    FUZZ_CHECK(noc_workspace_open_document(
+                   &workspace,
+                   "memory://preprocessor-fuzz.c",
+                   (const char *)data,
+                   size,
+                   (Noc_Source_Class)(selector % 4u),
+                   &snapshot) == NOC_WORKSPACE_OK);
+    if (noc_preprocessor_unit_build(context,
+                                    &snapshot,
+                                    (Noc_Macro_Policy)(selector % 4u),
+                                    &unit)) {
+        FUZZ_CHECK(noc_preprocessor_unit_is_valid(&unit));
+        for (index = 0; index < unit.count; ++index) {
+            const Noc_Preprocessor_Directive *directive =
+                noc_preprocessor_directive_at(&unit, index);
+            FUZZ_CHECK(directive != NULL);
+            FUZZ_CHECK(directive->token_index < unit.stream.count);
+            FUZZ_CHECK(unit.stream.items[directive->token_index].kind ==
+                       NOC_TOKEN_PREPROCESSOR);
+        }
+        (void)noc_preprocessor_unit_validate_macro_policy(context, &unit);
+    }
+    noc_preprocessor_unit_free(&unit);
+    noc_document_snapshot_free(&snapshot);
+    noc_workspace_deinit(&workspace);
+}
+
 static void fuzz_token_apis(Noc_Context *context,
                             const uint8_t *data,
                             size_t size,
@@ -242,6 +279,7 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
     noc_context_init(&context);
     noc_context_set_diagnostic(&context, ignore_diagnostic, NULL);
     state.selector = size > 0 ? data[0] : 0;
+    fuzz_preprocessor(&context, data, size, state.selector);
     memset(&rule, 0, sizeof(rule));
     rule.name = "fuzz";
     rule.scope = NOC_RULE_TOKEN;

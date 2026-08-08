@@ -38,8 +38,8 @@ $ ./nob test
 ```
 
 Run one independently buildable suite on demand with `./nob test <suite>`.
-The suite names are `header-c`, `header-cpp`, `workspace`, `lexing`, `syntax`,
-`c-analysis`, `rewriter`, and `artifacts`, for example:
+The suite names are `header-c`, `header-cpp`, `workspace`, `preprocessor`,
+`lexing`, `syntax`, `c-analysis`, `rewriter`, and `artifacts`, for example:
 
 ```console
 $ ./nob test c-analysis
@@ -136,6 +136,31 @@ borrow bytes from that old snapshot. Invalid/overlapping edits, allocation
 failure, and stale snapshots leave both the workspace and output unchanged. An
 empty batch intentionally creates a new generation with identical content. The
 focused suite is available as `./nob test workspace`.
+
+## Macro policy and directive inventory
+
+`noc_preprocessor_unit_build` inventories every directive from an immutable
+document snapshot while retaining exact directive spelling, keyword, payload,
+physical location, source class, file ID, and generation. It recognizes null,
+unknown, C11, and selected newer directive names without pretending to expand
+macros yet. The unit owns its copied token stream, so IDE queries remain valid
+after the source snapshot or workspace is released.
+
+Macro definition permission is explicit:
+
+- `NOC_MACROS_DISABLED`: no source class may define or undefine macros.
+- `NOC_MACROS_TRUSTED_ONLY`: trusted preludes and system headers may do so.
+- `NOC_MACROS_PROJECT`: project, trusted, and system sources may do so.
+- `NOC_MACROS_FULL`: all source classes may do so.
+
+Generated source is deliberately not trusted by implication. Build and policy
+validation are separate: the inventory always records a recognized `#define` or
+`#undef`, including when disabled, while
+`noc_preprocessor_unit_validate_macro_policy` emits precise feature-disabled
+diagnostics. This prevents tooling from reporting a policy violation as a parse
+error. Expansion policy, recursive hide sets, `#`/`##`, includes, and provenance
+remain subsequent preprocessor milestones. Run this suite independently with
+`./nob test preprocessor`.
 
 ## Fuzzing
 
