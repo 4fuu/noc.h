@@ -134,6 +134,7 @@ static bool generate_header(const char *path)
     if (rebuild != 0) {
 #if defined(_MSC_VER) && !defined(__clang__)
         nob_cmd_append(&command, "cl.exe", "/std:c11", "/W4", "/WX", "/nologo",
+                       "/D_CRT_SECURE_NO_WARNINGS",
                        nob_temp_sprintf("/Fe:%s", NOC_AMALGAMATE),
                        "tools/amalgamate.c");
 #else
