@@ -196,6 +196,8 @@ static void append_compile_command(Nob_Cmd *command,
                    "-Werror",
                    "-Ibuild/generated",
                    "-I.",
+                   "-x",
+                   compile_as_cpp ? "c++" : "c",
                    "-o",
                    output,
                    source);
