@@ -38,8 +38,8 @@ $ ./nob test
 ```
 
 Run one independently buildable suite on demand with `./nob test <suite>`.
-The suite names are `lexing`, `syntax`, `c-analysis`, `rewriter`, and
-`artifacts`, for example:
+The suite names are `header-c`, `header-cpp`, `lexing`, `syntax`, `c-analysis`,
+`rewriter`, and `artifacts`, for example:
 
 ```console
 $ ./nob test c-analysis
@@ -51,6 +51,7 @@ Other targets:
 $ ./nob example
 $ ./nob describe
 $ ./nob fuzz
+$ ./nob verify-header
 $ ./nob clean
 ```
 
@@ -58,6 +59,29 @@ The test target transforms, compiles, and runs both examples. `examples/embed`
 shows a built-in expression rule with a file dependency; `examples/rules` is a
 single project dialect covering expression, statement, declaration, and
 attribute scopes. Both dialect inputs and applications use ordinary `.c` files.
+
+## Developing the single header
+
+The root `noc.h` is a checked-in release artifact. Its editable source is listed
+by `header_sources` in `nob.c`; this starts with `src/noc.h` and allows compiler
+subsystems to move into focused ordinary `.c`/`.h` modules as the frontend grows.
+Do not edit the generated root header directly.
+
+```console
+$ ./nob header          # regenerate noc.h and build/generated/noc.h
+$ ./nob verify-header   # fail if the checked-in noc.h is stale
+```
+
+Generation has no timestamp or host-specific data. `verify-header` generates
+the payload twice and compares both byte-for-byte before checking the release
+artifact. Normal tests compile against `build/generated/noc.h`, not accidentally
+against a stale root copy. CI checks the root artifact before running tests.
+
+Public declarations remain above the `NOC_IMPLEMENTATION` section; internal
+definitions and subsystem modules belong below it. Add a source module to the
+ordered `header_sources` manifest, regenerate, run its focused suite and the full
+suite, and commit both source and generated header together. The published file
+remains self-contained and dialect inputs keep normal `.c` and `.h` suffixes.
 
 ## Fuzzing
 

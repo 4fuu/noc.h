@@ -1,5 +1,5 @@
 #define NOC_IMPLEMENTATION
-#include "../noc.h"
+#include "noc.h"
 
 #include <stdint.h>
 #include <stdlib.h>

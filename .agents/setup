@@ -8,7 +8,9 @@ started_at=$SECONDS
 echo "[orb setup] preparing noc.h in $repo_root"
 
 missing_packages=()
-command -v cc >/dev/null 2>&1 || missing_packages+=(build-essential)
+if ! command -v cc >/dev/null 2>&1 || ! command -v c++ >/dev/null 2>&1; then
+    missing_packages+=(build-essential)
+fi
 command -v git >/dev/null 2>&1 || missing_packages+=(git)
 
 if ((${#missing_packages[@]} > 0)); then
@@ -26,7 +28,7 @@ if ((${#missing_packages[@]} > 0)); then
     "${apt_command[@]}" install -y --no-install-recommends "${missing_packages[@]}"
     echo "[orb setup] packages ready in $((SECONDS - package_started_at))s"
 else
-    echo "[orb setup] C toolchain and Git already available"
+    echo "[orb setup] C/C++ toolchain and Git already available"
 fi
 
 build_started_at=$SECONDS

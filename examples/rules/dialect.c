@@ -1,5 +1,5 @@
 #define NOC_IMPLEMENTATION
-#include "../../noc.h"
+#include "noc.h"
 
 static bool expand_square(Noc_Rewriter *rewriter,
                           const Noc_Rule *rule,

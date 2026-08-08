@@ -2,7 +2,7 @@
 #define NOC_TEST_SUPPORT_H_INCLUDED
 
 #define NOC_IMPLEMENTATION
-#include "../noc.h"
+#include "noc.h"
 
 #include <stdio.h>
 #include <stdlib.h>
