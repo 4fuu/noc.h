@@ -129,7 +129,13 @@ byte identity on every platform—callers choose any filesystem canonicalization
 physical byte positions including EOF. Lines and columns are 1-based; CRLF is
 one newline while its two original bytes keep separate columns. This is a byte
 source map, not the UTF-16 position conversion that an LSP transport will add.
-The focused suite is available as `./nob test workspace`.
+
+`noc_workspace_edit_document` applies an ordered, non-overlapping batch of
+half-open byte edits against one expected generation. Replacement slices may
+borrow bytes from that old snapshot. Invalid/overlapping edits, allocation
+failure, and stale snapshots leave both the workspace and output unchanged. An
+empty batch intentionally creates a new generation with identical content. The
+focused suite is available as `./nob test workspace`.
 
 ## Fuzzing
 

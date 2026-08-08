@@ -122,7 +122,7 @@ must be generated reproducibly as one self-contained `noc.h`.
 
 - [ ] Add stable file identities, immutable document snapshots, physical/logical
       locations, line maps, include stacks, and generated-to-source mappings.
-- [ ] Add in-memory document open/update/close APIs and generation-aware handles.
+- [x] Add in-memory document open/update/close APIs and generation-aware handles.
 - [ ] Add include search paths, trusted/system/project file classification, and
       a dependency graph usable by the build system and IDE index.
 - [ ] Define allocator, ownership, thread-safety, cancellation, and bounded-work

@@ -15,6 +15,7 @@ static void test_status_and_empty_handles(void)
         "not current",
         "not found",
         "out of range",
+        "invalid edit",
         "out of memory",
         "limit exceeded",
     };
@@ -155,6 +156,107 @@ static void test_shared_revision_update(void)
     CHECK(offset == 5);
     noc_document_snapshot_free(&output);
     noc_document_snapshot_free(&expected);
+}
+
+static void test_transactional_text_edits(void)
+{
+    static const char initial_source[] = "abcdef";
+    Noc_Workspace workspace = {0};
+    Noc_Document_Snapshot current = {0};
+    Noc_Document_Snapshot old = {0};
+    Noc_Document_Snapshot preserved = {0};
+    Noc_Document_Snapshot_Impl *preserved_pointer;
+    Noc_Slice source;
+    Noc_Text_Edit edits[5];
+    Noc_Text_Edit invalid[2];
+    noc_workspace_init(&workspace);
+    CHECK_STATUS(noc_workspace_open_document(&workspace,
+                                             "memory://edits.c",
+                                             initial_source,
+                                             sizeof(initial_source) - 1,
+                                             NOC_SOURCE_CLASS_PROJECT,
+                                             &current),
+                 NOC_WORKSPACE_OK);
+    CHECK_STATUS(noc_document_snapshot_clone(&current, &old), NOC_WORKSPACE_OK);
+    source = noc_document_snapshot_source(&current);
+    edits[0] = (Noc_Text_Edit){0, 0, {">", 1}};
+    edits[1] = (Noc_Text_Edit){0, 0, {"[", 1}};
+    edits[2] = (Noc_Text_Edit){1, 3, {source.data, 1}};
+    edits[3] = (Noc_Text_Edit){5, 6, {NULL, 0}};
+    edits[4] = (Noc_Text_Edit){6, 6, {"<", 1}};
+    CHECK_STATUS(noc_workspace_edit_document(&workspace,
+                                             &current,
+                                             edits,
+                                             sizeof(edits) / sizeof(edits[0]),
+                                             &current),
+                 NOC_WORKSPACE_OK);
+    CHECK(noc_document_snapshot_generation(&current) == 2);
+    CHECK(slice_equals(noc_document_snapshot_source(&current), ">[aade<"));
+    CHECK(slice_equals(noc_document_snapshot_source(&old), initial_source));
+    CHECK_STATUS(noc_document_snapshot_clone(&current, &preserved), NOC_WORKSPACE_OK);
+    preserved_pointer = preserved.impl;
+
+    invalid[0] = (Noc_Text_Edit){2, 3, {"x", 1}};
+    invalid[1] = (Noc_Text_Edit){1, 1, {"y", 1}};
+    CHECK_STATUS(noc_workspace_edit_document(&workspace,
+                                             &current,
+                                             invalid,
+                                             2,
+                                             &preserved),
+                 NOC_WORKSPACE_INVALID_EDIT);
+    CHECK(preserved.impl == preserved_pointer);
+    invalid[0] = (Noc_Text_Edit){1, 4, {"x", 1}};
+    invalid[1] = (Noc_Text_Edit){3, 5, {"y", 1}};
+    CHECK_STATUS(noc_workspace_edit_document(&workspace,
+                                             &current,
+                                             invalid,
+                                             2,
+                                             &preserved),
+                 NOC_WORKSPACE_INVALID_EDIT);
+    CHECK(preserved.impl == preserved_pointer);
+    invalid[0] = (Noc_Text_Edit){0, 100, {NULL, 0}};
+    CHECK_STATUS(noc_workspace_edit_document(&workspace,
+                                             &current,
+                                             invalid,
+                                             1,
+                                             &preserved),
+                 NOC_WORKSPACE_INVALID_EDIT);
+    invalid[0] = (Noc_Text_Edit){0, 0, {NULL, 1}};
+    CHECK_STATUS(noc_workspace_edit_document(&workspace,
+                                             &current,
+                                             invalid,
+                                             1,
+                                             &preserved),
+                 NOC_WORKSPACE_INVALID_EDIT);
+    CHECK(preserved.impl == preserved_pointer);
+    CHECK(noc_document_snapshot_generation(&current) == 2);
+    CHECK_STATUS(noc_workspace_edit_document(&workspace,
+                                             &old,
+                                             edits,
+                                             1,
+                                             &preserved),
+                 NOC_WORKSPACE_NOT_CURRENT);
+    CHECK(preserved.impl == preserved_pointer);
+    CHECK_STATUS(noc_workspace_edit_document(&workspace,
+                                             &current,
+                                             NULL,
+                                             1,
+                                             &preserved),
+                 NOC_WORKSPACE_INVALID_ARGUMENT);
+    CHECK(preserved.impl == preserved_pointer);
+
+    CHECK_STATUS(noc_workspace_edit_document(&workspace,
+                                             &current,
+                                             NULL,
+                                             0,
+                                             &current),
+                 NOC_WORKSPACE_OK);
+    CHECK(noc_document_snapshot_generation(&current) == 3);
+    CHECK(slice_equals(noc_document_snapshot_source(&current), ">[aade<"));
+    noc_document_snapshot_free(&preserved);
+    noc_document_snapshot_free(&old);
+    noc_document_snapshot_free(&current);
+    noc_workspace_deinit(&workspace);
 }
 
 static void test_snapshot_lifecycle(void)
@@ -358,6 +460,7 @@ int main(void)
     test_status_and_empty_handles();
     test_physical_locations();
     test_shared_revision_update();
+    test_transactional_text_edits();
     test_snapshot_lifecycle();
     return finish_suite("workspace");
 }

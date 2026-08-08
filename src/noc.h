@@ -29,9 +29,9 @@
 #define NOC_H_INCLUDED
 
 #define NOC_VERSION_MAJOR 0
-#define NOC_VERSION_MINOR 21
+#define NOC_VERSION_MINOR 22
 #define NOC_VERSION_PATCH 0
-#define NOC_VERSION "0.21.0"
+#define NOC_VERSION "0.22.0"
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -341,6 +341,7 @@ typedef enum {
     NOC_WORKSPACE_NOT_CURRENT,
     NOC_WORKSPACE_NOT_FOUND,
     NOC_WORKSPACE_OUT_OF_RANGE,
+    NOC_WORKSPACE_INVALID_EDIT,
     NOC_WORKSPACE_OUT_OF_MEMORY,
     NOC_WORKSPACE_LIMIT_EXCEEDED,
 } Noc_Workspace_Status;
@@ -355,6 +356,14 @@ typedef struct {
 typedef struct {
     Noc_Document_Snapshot_Impl *impl;
 } Noc_Document_Snapshot;
+
+/* Text edit ranges are half-open byte offsets in one expected snapshot. The
+   replacement is borrowed for the duration of noc_workspace_edit_document(). */
+typedef struct {
+    size_t begin;
+    size_t end;
+    Noc_Slice replacement;
+} Noc_Text_Edit;
 
 NOCDEF const char *noc_workspace_status_name(Noc_Workspace_Status status);
 /* init requires an uninitialized or deinitialized workspace. Workspace and
@@ -378,6 +387,14 @@ NOCDEF Noc_Workspace_Status noc_workspace_update_document(
     const Noc_Document_Snapshot *expected,
     const char *source,
     size_t source_count,
+    Noc_Document_Snapshot *output);
+/* Edits must be ordered by begin and non-overlapping in expected-snapshot byte
+   coordinates. Adjacent edits and multiple insertions at one offset are valid. */
+NOCDEF Noc_Workspace_Status noc_workspace_edit_document(
+    Noc_Workspace *workspace,
+    const Noc_Document_Snapshot *expected,
+    const Noc_Text_Edit *edits,
+    size_t edits_count,
     Noc_Document_Snapshot *output);
 NOCDEF Noc_Workspace_Status noc_workspace_close_document(
     Noc_Workspace *workspace,

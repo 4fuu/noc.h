@@ -297,6 +297,7 @@ NOCDEF const char *noc_workspace_status_name(Noc_Workspace_Status status)
     case NOC_WORKSPACE_NOT_CURRENT: return "not current";
     case NOC_WORKSPACE_NOT_FOUND: return "not found";
     case NOC_WORKSPACE_OUT_OF_RANGE: return "out of range";
+    case NOC_WORKSPACE_INVALID_EDIT: return "invalid edit";
     case NOC_WORKSPACE_OUT_OF_MEMORY: return "out of memory";
     case NOC_WORKSPACE_LIMIT_EXCEEDED: return "limit exceeded";
     }
@@ -413,6 +414,78 @@ NOCDEF Noc_Workspace_Status noc_workspace_update_document(
     noc__document_snapshot_release(previous);
     noc__document_snapshot_replace(output, snapshot);
     return NOC_WORKSPACE_OK;
+}
+
+NOCDEF Noc_Workspace_Status noc_workspace_edit_document(
+    Noc_Workspace *workspace,
+    const Noc_Document_Snapshot *expected,
+    const Noc_Text_Edit *edits,
+    size_t edits_count,
+    Noc_Document_Snapshot *output)
+{
+    Noc_Slice source;
+    Noc_Workspace_Status status;
+    char *edited;
+    size_t edited_count;
+    size_t source_cursor = 0;
+    size_t output_cursor = 0;
+    size_t index;
+    if (!workspace || !expected || !expected->impl || !output ||
+        (!edits && edits_count != 0)) {
+        return NOC_WORKSPACE_INVALID_ARGUMENT;
+    }
+    if (!noc_document_snapshot_is_current(workspace, expected)) {
+        return NOC_WORKSPACE_NOT_CURRENT;
+    }
+    source = noc_document_snapshot_source(expected);
+    edited_count = source.count;
+    for (index = 0; index < edits_count; ++index) {
+        const Noc_Text_Edit *edit = &edits[index];
+        size_t removed;
+        if (edit->begin > edit->end || edit->end > source.count ||
+            edit->begin < source_cursor ||
+            (!edit->replacement.data && edit->replacement.count != 0)) {
+            return NOC_WORKSPACE_INVALID_EDIT;
+        }
+        removed = edit->end - edit->begin;
+        if (edit->replacement.count > SIZE_MAX - (edited_count - removed)) {
+            return NOC_WORKSPACE_LIMIT_EXCEEDED;
+        }
+        edited_count = edited_count - removed + edit->replacement.count;
+        source_cursor = edit->end;
+    }
+    if (edited_count == SIZE_MAX) return NOC_WORKSPACE_LIMIT_EXCEEDED;
+    edited = (char *)malloc(edited_count + 1);
+    if (!edited) return NOC_WORKSPACE_OUT_OF_MEMORY;
+    source_cursor = 0;
+    for (index = 0; index < edits_count; ++index) {
+        const Noc_Text_Edit *edit = &edits[index];
+        size_t unchanged = edit->begin - source_cursor;
+        if (unchanged != 0) {
+            memcpy(edited + output_cursor, source.data + source_cursor, unchanged);
+            output_cursor += unchanged;
+        }
+        if (edit->replacement.count != 0) {
+            memcpy(edited + output_cursor,
+                   edit->replacement.data,
+                   edit->replacement.count);
+            output_cursor += edit->replacement.count;
+        }
+        source_cursor = edit->end;
+    }
+    if (source_cursor < source.count) {
+        size_t unchanged = source.count - source_cursor;
+        memcpy(edited + output_cursor, source.data + source_cursor, unchanged);
+        output_cursor += unchanged;
+    }
+    edited[output_cursor] = '\0';
+    status = noc_workspace_update_document(workspace,
+                                           expected,
+                                           edited,
+                                           output_cursor,
+                                           output);
+    free(edited);
+    return status;
 }
 
 NOCDEF Noc_Workspace_Status noc_workspace_close_document(
