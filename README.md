@@ -44,7 +44,7 @@ The suite names are `header-c`, `header-cpp`, `public-header-c`,
 `macro-invocations`, `macro-expansion`, `function-macro-expansion`,
 `variadic-macro-expansion`, `macro-stringification`, `macro-token-paste`,
 `macro-builtins`, `configured-builtins`, `preprocessor-expressions`,
-`conditional-groups`,
+`conditional-groups`, `include-operands`, `include-resolver`,
 `preprocessor`, `lexing`, `syntax`, `c-analysis`, `rewriter`, and `artifacts`, for
 example:
 
@@ -108,6 +108,7 @@ be declared by `src/internal.h`; module-local helpers remain static. Current own
 | `src/macro_invocations.c` | Lossless, recoverable function-like invocation/argument syntax |
 | `src/macro_environment.c`, `src/macro_expansion.c` | Effective macro state and bounded expansion |
 | `src/conditional.c`, `src/conditional_groups.c` | C11 condition evaluation and recoverable balanced conditional analysis |
+| `src/include_resolver.c` | Recoverable include operands and host-configurable snapshot resolution |
 | `src/parser.c`, `src/ast.c` | Token cursors/arguments and syntax/C structure analysis |
 | `src/features.c` | Context, rules, feature controls, and metadata interfaces |
 | `src/lower.c`, `src/emit_c.c` | Rewrite/edit lowering and transformation/artifact/CLI emission |
@@ -336,6 +337,19 @@ are not guessed. This distinction lets IDEs inspect incomplete source without
 presenting uncertain branches as semantic success. C23 `#elifdef`/`#elifndef`
 are inventoried but reported as unsupported by the current C11 analysis. Run
 this layer independently with `./nob test conditional-groups`.
+
+Physical include syntax and host resolution are separate APIs.
+`noc_include_operand_build` classifies each inventoried `#include` as a direct
+quoted/angled header, macro-expansion-required input, or a recoverable
+empty/missing/malformed/incomplete editor state. Direct logical names own their
+phase-2-splice-normalized bytes while retaining the exact physical token range
+and problem index. `noc_include_resolve` then passes only valid direct operands
+to a host callback. The host owns search order, path canonicalization, unsaved
+overlays, virtual filesystems, and source classification; Noc performs no hidden
+filesystem access and validates the returned owning snapshot transactionally.
+Run these layers independently with `./nob test include-operands` and
+`./nob test include-resolver`. Macro-expanded include names, recursive include
+graphs, cycle handling, and guards remain later preprocessing stages.
 
 Macro definition permission is explicit:
 

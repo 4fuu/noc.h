@@ -29,9 +29,9 @@
 #define NOC_H_INCLUDED
 
 #define NOC_VERSION_MAJOR 0
-#define NOC_VERSION_MINOR 36
+#define NOC_VERSION_MINOR 37
 #define NOC_VERSION_PATCH 0
-#define NOC_VERSION "0.36.0"
+#define NOC_VERSION "0.37.0"
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -587,6 +587,120 @@ typedef struct {
     size_t invalid_macro_directive_count;
 } Noc_Preprocessor_Unit;
 
+/* Recoverable syntax for one physical #include operand:
+   - DIRECT is exactly one nonempty physical HEADER_NAME token.
+   - EXPANSION_REQUIRED means macro replacement or expanded end-of-directive
+     checking can still determine validity. This includes ordinary macro bodies,
+     <NAME without a physical close, and a direct header followed by an
+     identifier that may expand away.
+   - EMPTY is exactly "" or <>; MISSING has no significant directive body.
+   - MALFORMED is known invalid without expansion, such as a direct header
+     followed by a number or second header name.
+   - INCOMPLETE contains an invalid/unterminated lexical token. In particular,
+     an unterminated quoted name is INCOMPLETE while <NAME can require expansion.
+   Every source state is published for diagnostics/IDE recovery, but only DIRECT
+   can be passed to noc_include_resolve. */
+typedef enum {
+    NOC_INCLUDE_OPERAND_DIRECT = 0,
+    NOC_INCLUDE_OPERAND_EXPANSION_REQUIRED,
+    NOC_INCLUDE_OPERAND_EMPTY,
+    NOC_INCLUDE_OPERAND_MISSING,
+    NOC_INCLUDE_OPERAND_MALFORMED,
+    NOC_INCLUDE_OPERAND_INCOMPLETE,
+} Noc_Include_Operand_Status;
+
+typedef enum {
+    NOC_INCLUDE_FORM_NONE = 0,
+    NOC_INCLUDE_FORM_QUOTED,
+    NOC_INCLUDE_FORM_ANGLED,
+} Noc_Include_Form;
+
+typedef enum {
+    NOC_INCLUDE_OPERAND_BUILD_OK = 0,
+    NOC_INCLUDE_OPERAND_BUILD_INVALID_ARGUMENT,
+    NOC_INCLUDE_OPERAND_BUILD_STALE,
+    NOC_INCLUDE_OPERAND_BUILD_GENERATION_EXHAUSTED,
+    NOC_INCLUDE_OPERAND_BUILD_OUT_OF_MEMORY,
+} Noc_Include_Operand_Build_Status;
+
+/* Owning logical-name query borrowing one preprocessing unit. Initialize to
+   {0}, do not shallow-copy, treat fields as read-only, and free with
+   noc_include_operand_free. The unit object must remain alive; a successful
+   unit rebuild makes this result stale.
+
+   body_tokens is {NONE,NONE} for MISSING; otherwise it spans the first through
+   last significant body token and retains internal trivia. DIRECT and EMPTY
+   publish header_token_index/form. DIRECT alone owns a nonempty logical_name and
+   has no problem token; EMPTY points problem_token_index at its header. Other
+   statuses use form NONE, header NONE, and an empty name; MISSING has no problem
+   token while the other states identify the first token needing attention.
+
+   logical_name is a counted byte slice with delimiters and phase-2 line splices
+   removed. C escapes are not decoded, and no encoding validation, separator
+   conversion, or path normalization occurs. Hosts must honor count rather than
+   relying on NUL termination. Recoverable source states are successful builds;
+   operational failure preserves the previous output. */
+typedef struct {
+    const Noc_Preprocessor_Unit *unit;
+    size_t unit_stream_generation;
+    size_t directive_index;
+    Noc_Token_Range body_tokens;
+    size_t header_token_index;
+    size_t problem_token_index;
+    Noc_Slice logical_name;
+    Noc_Include_Operand_Status status;
+    Noc_Include_Form form;
+    size_t generation;
+} Noc_Include_Operand;
+
+/* A resolver request borrows every pointer for one callback invocation. The
+   host decides quote/angle search order, path normalization, overlays, virtual
+   filesystems, and source classification; Noc never infers these from its own
+   process or accesses the filesystem here. File IDs are local to the workspace
+   selected by resolver.user_data rather than globally meaningful. */
+typedef struct {
+    const char *including_path;
+    Noc_File_Id including_file_id;
+    size_t including_document_generation;
+    Noc_Source_Class including_source_class;
+    size_t directive_index;
+    Noc_Location directive_location;
+    Noc_Include_Form form;
+    Noc_Slice logical_name;
+} Noc_Include_Request;
+
+typedef enum {
+    NOC_INCLUDE_RESOLVE_FOUND = 0,
+    NOC_INCLUDE_RESOLVE_NOT_FOUND,
+    NOC_INCLUDE_RESOLVE_AMBIGUOUS,
+    NOC_INCLUDE_RESOLVE_DENIED,
+    NOC_INCLUDE_RESOLVE_CANCELLED,
+    NOC_INCLUDE_RESOLVE_FAILED,
+    NOC_INCLUDE_RESOLVE_INVALID_ARGUMENT,
+    NOC_INCLUDE_RESOLVE_STALE,
+    NOC_INCLUDE_RESOLVE_OUT_OF_MEMORY,
+    NOC_INCLUDE_RESOLVE_INVALID_RESULT,
+} Noc_Include_Resolve_Status;
+
+/* The callback output is initially empty. On FOUND, the callback transfers one
+   valid owning snapshot to the wrapper. NOT_FOUND, AMBIGUOUS, DENIED,
+   CANCELLED, FAILED, and OUT_OF_MEMORY must leave it empty. The wrapper frees a
+   snapshot returned in violation of that rule and preserves the caller's
+   destination. INVALID_ARGUMENT, STALE, and INVALID_RESULT are wrapper-only.
+
+   The target snapshot path and source class are host-authoritative. Noc neither
+   inherits class from the including file nor infers trust from quote/angle form
+   or path spelling; later macro policy consumes the returned class verbatim. */
+typedef Noc_Include_Resolve_Status (*Noc_Include_Resolve_Fn)(
+    void *user_data,
+    const Noc_Include_Request *request,
+    Noc_Document_Snapshot *resolved_snapshot);
+
+typedef struct {
+    Noc_Include_Resolve_Fn resolve;
+    void *user_data;
+} Noc_Include_Resolver;
+
 /* Owning, lossless physical-source function-like invocation syntax. Initialize
    to {0}, do not shallow-copy, and release with noc_macro_invocation_free. The
    source unit must remain alive and unchanged. Complete and incomplete editor
@@ -919,6 +1033,31 @@ NOCDEF Noc_Token_Range noc_preprocessor_directive_body_tokens(
 NOCDEF const Noc_Preprocessing_Token *noc_preprocessor_token_at(
     const Noc_Preprocessor_Unit *unit,
     size_t index);
+NOCDEF const char *noc_include_operand_status_name(
+    Noc_Include_Operand_Status status);
+NOCDEF const char *noc_include_form_name(Noc_Include_Form form);
+NOCDEF const char *noc_include_operand_build_status_name(
+    Noc_Include_Operand_Build_Status status);
+NOCDEF const char *noc_include_resolve_status_name(
+    Noc_Include_Resolve_Status status);
+NOCDEF void noc_include_operand_free(Noc_Include_Operand *operand);
+NOCDEF bool noc_include_operand_is_valid(const Noc_Include_Operand *operand);
+/* Parse one inventoried #include directive. Exactly one nonempty physical
+   HEADER_NAME token produces DIRECT; other statuses retain enough range/problem
+   information for diagnostics, highlighting, and completion. */
+NOCDEF Noc_Include_Operand_Build_Status noc_include_operand_build(
+    const Noc_Preprocessor_Unit *unit,
+    size_t directive_index,
+    Noc_Include_Operand *output);
+/* Resolve a valid DIRECT operand through host policy. FOUND transactionally
+   replaces resolved_snapshot. Every other status preserves it. The wrapper
+   rejects stale operands and callback/result contract violations. This API
+   resolves one edge only: it does not expand an operand, recursively traverse
+   includes, detect cycles/guards, or apply conditional activity. */
+NOCDEF Noc_Include_Resolve_Status noc_include_resolve(
+    Noc_Include_Resolver resolver,
+    const Noc_Include_Operand *operand,
+    Noc_Document_Snapshot *resolved_snapshot);
 NOCDEF const Noc_Macro_Directive *noc_macro_directive_at(
     const Noc_Preprocessor_Unit *unit,
     size_t index);

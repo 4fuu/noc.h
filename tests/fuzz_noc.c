@@ -170,6 +170,7 @@ static void fuzz_preprocessor(Noc_Context *context,
     Noc_Macro_Expansion expansion = {0};
     Noc_Macro_Invocation invocation = {0};
     Noc_Preprocessor_Conditional_Groups groups = {0};
+    Noc_Include_Operand include_operand = {0};
     size_t index;
     noc_workspace_init(&workspace);
     FUZZ_CHECK(noc_workspace_open_document(
@@ -289,6 +290,29 @@ static void fuzz_preprocessor(Noc_Context *context,
                  ++directive_token_index) {
                 FUZZ_CHECK(unit.preprocessing_tokens[
                                directive_token_index].directive_index == index);
+            }
+            if (directive->kind == NOC_PREPROCESSOR_DIRECTIVE_INCLUDE) {
+                Noc_Include_Operand_Build_Status include_status =
+                    noc_include_operand_build(&unit, index, &include_operand);
+                FUZZ_CHECK(include_status == NOC_INCLUDE_OPERAND_BUILD_OK ||
+                           include_status ==
+                               NOC_INCLUDE_OPERAND_BUILD_OUT_OF_MEMORY);
+                if (include_status == NOC_INCLUDE_OPERAND_BUILD_OK) {
+                    FUZZ_CHECK(noc_include_operand_is_valid(&include_operand));
+                    FUZZ_CHECK(include_operand.directive_index == index);
+                    FUZZ_CHECK(include_operand.status >=
+                                   NOC_INCLUDE_OPERAND_DIRECT &&
+                               include_operand.status <=
+                                   NOC_INCLUDE_OPERAND_INCOMPLETE);
+                    FUZZ_CHECK(include_operand.form >= NOC_INCLUDE_FORM_NONE &&
+                               include_operand.form <= NOC_INCLUDE_FORM_ANGLED);
+                    if (include_operand.status == NOC_INCLUDE_OPERAND_DIRECT) {
+                        FUZZ_CHECK(include_operand.logical_name.data != NULL);
+                        FUZZ_CHECK(include_operand.logical_name.count > 0);
+                        FUZZ_CHECK(include_operand.header_token_index <
+                                   unit.preprocessing_token_count);
+                    }
+                }
             }
         }
         {
@@ -569,6 +593,8 @@ static void fuzz_preprocessor(Noc_Context *context,
     noc_macro_expansion_free(&expansion);
     noc_macro_environment_free(&environment);
     noc_preprocessor_unit_free(&unit);
+    FUZZ_CHECK(!noc_include_operand_is_valid(&include_operand));
+    noc_include_operand_free(&include_operand);
     noc_document_snapshot_free(&snapshot);
     noc_workspace_deinit(&workspace);
 }
