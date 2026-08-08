@@ -41,8 +41,9 @@ Run one independently buildable suite on demand with `./nob test <suite>`.
 The suite names are `header-c`, `header-cpp`, `public-header-c`,
 `public-header-cpp`, `modules`, `workspace`,
 `preprocessing-tokens`, `macro-directives`, `macro-environment`,
-`macro-invocations`, `macro-expansion`, `preprocessor`, `lexing`, `syntax`,
-`c-analysis`, `rewriter`, and `artifacts`, for example:
+`macro-invocations`, `macro-expansion`, `function-macro-expansion`,
+`preprocessor`, `lexing`, `syntax`, `c-analysis`, `rewriter`, and `artifacts`,
+for example:
 
 ```console
 $ ./nob test c-analysis
@@ -206,14 +207,15 @@ Building a unit does not diagnose recoverable macro syntax, so IDEs retain the
 partial record. Batch callers may invoke
 `noc_preprocessor_unit_validate_macro_directives` to report those statuses.
 This is structural parsing only: expansion, duplicate-parameter constraints,
-replacement `#`/`##` validation, hide sets, and built-ins remain later work. Run
-this coverage independently with `./nob test macro-directives`.
+replacement `#`/`##` validation, and built-ins remain separate semantic or
+expansion work. Run this coverage independently with
+`./nob test macro-directives`.
 
 `noc_macro_invocation_parse` is the corresponding physical-source syntax query.
 Given an identifier and an exclusive token bound, it recognizes a following `(`
 across trivia, balances nested parentheses, and publishes exact argument token ranges.
-Empty parentheses have zero syntactic arguments; the future substitution layer
-will interpret that spelling against the selected macro definition. Missing `)`
+Empty parentheses have zero syntactic arguments; expansion interprets that
+spelling against the selected macro definition. Missing `)`
 is a successful `INCOMPLETE` editor result with partial arguments, not a fabricated
 complete invocation. The owning result borrows its preprocessing unit, rejects a
 rebuilt/stale owner, and is replaced only on successful parsing. Run this layer
@@ -222,8 +224,9 @@ independently with `./nob test macro-invocations`.
 The caller must bound a query to its containing source/directive range; this API
 does not infer that boundary. It also deliberately does not represent invocations
 assembled during macro rescan, where a name, `(`, and argument tokens may have
-different provenance owners. Function expansion will use a logical-token
-collector and retain per-token provenance while applying the same balancing rules.
+different provenance owners. Function expansion therefore uses a shared private
+logical-token collector and retains per-token provenance while applying the same
+balancing rules.
 
 `Noc_Macro_Environment` is the separate state layer used by future conditional,
 include, and expansion processing. A caller applies valid, policy-enabled macro
@@ -243,21 +246,25 @@ without changing prior state. Run this layer independently with
 `./nob test macro-environment`. It still does not perform macro expansion or
 conditional evaluation.
 
-`noc_macro_expansion_build` currently performs bounded object-like macro
-substitution and recursive rescan against a selected environment history prefix.
-Direct and indirect recursion are suppressed, empty replacements are retained as
-zero-token expansion frames, and every emitted token records its source unit,
-preprocessing-token index, origin, and expansion frame. Frames link nested
-expansions to both their invocation token and environment definition, providing
-the provenance needed by later diagnostics and IDE expansion previews.
+`noc_macro_expansion_build` performs bounded object-like and fixed-arity
+function-like macro substitution and recursive rescan against a selected
+environment history prefix. Function arguments are collected from the logical
+token stream, prescanned, substituted, and rescanned, including invocations whose
+name and parentheses were assembled across replacement/input boundaries. Direct
+and indirect recursion use token hide sets rather than provenance ancestry, so
+nested cases such as `ID(ID(3))` retain standard rescan behavior.
 
-Expansion limits bound recursion depth, output token count, and total expansion
-frames. Limit failures and unsupported `##`/`%:%:` token-paste replacements
-preserve the previous owning result. Function-like macros intentionally remain
-unexpanded until argument prescan/substitution is implemented; this milestone
-never emits a known-incorrect approximation. `noc_macro_expansion_render`
-concatenates the result's exact physical token spellings for inspection. Run the
-focused suite with `./nob test macro-expansion`.
+Every result token records its physical source unit, preprocessing-token index,
+input/argument/replacement origin, and expansion frame. Frames link nested
+expansions to both their invocation token and environment definition, providing
+the provenance needed by later diagnostics and IDE expansion previews. Expansion
+limits bound provenance depth, every live logical token sequence, and total
+expansion frames. Limit failures, incomplete or mismatched calls, malformed
+definitions, variadics, and unsupported `#`/`%:`/`##`/`%:%:` operators preserve
+the previous owning result rather than emitting a known-incorrect approximation.
+`noc_macro_expansion_render` concatenates exact physical token spellings for
+inspection. Run the object and function coverage independently with
+`./nob test macro-expansion` and `./nob test function-macro-expansion`.
 
 Macro definition permission is explicit:
 
@@ -271,10 +278,11 @@ validation are separate: the inventory always records a recognized `#define` or
 `#undef`, including when disabled, while
 `noc_preprocessor_unit_validate_macro_policy` emits precise feature-disabled
 diagnostics. This prevents tooling from reporting a policy violation as a parse
-error. Expansion policy, recursive hide sets, `#`/`##`, include loading, and
-expansion provenance remain subsequent preprocessor milestones. Run the token
-and recovery coverage independently with `./nob test preprocessing-tokens`, or
-the directive/policy coverage with `./nob test preprocessor`.
+error. Conditional policy application, `#`/`##`, include loading, and broader
+expansion provenance queries remain subsequent preprocessor milestones. Run the
+token and recovery coverage independently with
+`./nob test preprocessing-tokens`, or the directive/policy coverage with
+`./nob test preprocessor`.
 
 ## Fuzzing
 
@@ -780,10 +788,11 @@ and node references must not escape the callback.
 ## Current boundary
 
 This version handles explicit token/AST-assisted transformations, a lossless
-delimiter tree, lightweight C structure discovery, and bounded object-like macro
-inspection expansion. It does not provide a complete integrated preprocessor,
-function-like macro expansion, a semantic C AST, typedef resolution, or a C type
-system. Rules inside preprocessor directives are left untouched. More
+delimiter tree, lightweight C structure discovery, and bounded object/fixed-arity
+function macro inspection expansion. It does not provide a complete integrated
+preprocessor, variadic/stringify/paste/built-in macro expansion, a semantic C AST,
+typedef resolution, or a C type system. Rules inside preprocessor directives are
+left untouched. More
 structured statement and declaration helpers can be added without changing the
 registration model.
 

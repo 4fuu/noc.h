@@ -150,8 +150,9 @@ must be generated reproducibly as one self-contained `noc.h`.
         recursion suppression, and invocation/definition provenance frames.
   - [x] Add a generation-aware function-like invocation query with balanced,
         lossless argument collection and incomplete editor-input representation.
-  - [ ] Add function-like argument prescan, substitution, and cross-boundary
-        rescan using a shared logical-token collector without weakening hide-set
+  - [x] Add fixed-arity function-like argument prescan, substitution, and
+        cross-boundary rescan using a shared logical-token collector without
+        weakening hide-set
         semantics or collapsing per-token provenance into physical source ranges.
   - [ ] Add stringification, token pasting, variadic substitution, and built-ins.
 - [ ] Implement includes, include guards/pragma-once behavior, conditionals,

@@ -63,6 +63,7 @@ static const Test_Suite test_suites[] = {
     {"macro-invocations", "tests/test_macro_invocations.c", "build/noc-test-macro-invocations" NOC_EXE, false},
     {"macro-environment", "tests/test_macro_environment.c", "build/noc-test-macro-environment" NOC_EXE, false},
     {"macro-expansion", "tests/test_macro_expansion.c", "build/noc-test-macro-expansion" NOC_EXE, false},
+    {"function-macro-expansion", "tests/test_function_macro_expansion.c", "build/noc-test-function-macro-expansion" NOC_EXE, false},
     {"preprocessor", "tests/test_preprocessor.c", "build/noc-test-preprocessor" NOC_EXE, false},
     {"lexing", "tests/test_lexing.c", "build/noc-test-lexing" NOC_EXE, false},
     {"syntax", "tests/test_syntax.c", "build/noc-test-syntax" NOC_EXE, false},

@@ -29,9 +29,9 @@
 #define NOC_H_INCLUDED
 
 #define NOC_VERSION_MAJOR 0
-#define NOC_VERSION_MINOR 28
+#define NOC_VERSION_MINOR 29
 #define NOC_VERSION_PATCH 0
-#define NOC_VERSION "0.28.0"
+#define NOC_VERSION "0.29.0"
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -642,22 +642,30 @@ typedef enum {
     NOC_MACRO_EXPANSION_OK = 0,
     NOC_MACRO_EXPANSION_INVALID_ARGUMENT,
     NOC_MACRO_EXPANSION_STALE,
+    NOC_MACRO_EXPANSION_INCOMPLETE_INVOCATION,
+    NOC_MACRO_EXPANSION_ARGUMENT_COUNT_MISMATCH,
+    NOC_MACRO_EXPANSION_INVALID_DEFINITION,
     NOC_MACRO_EXPANSION_DEPTH_LIMIT,
     NOC_MACRO_EXPANSION_OUTPUT_LIMIT,
     NOC_MACRO_EXPANSION_COUNT_LIMIT,
     NOC_MACRO_EXPANSION_UNSUPPORTED_OPERATOR,
+    NOC_MACRO_EXPANSION_UNSUPPORTED_VARIADIC,
     NOC_MACRO_EXPANSION_GENERATION_EXHAUSTED,
     NOC_MACRO_EXPANSION_OUT_OF_MEMORY,
 } Noc_Macro_Expansion_Status;
 
 typedef enum {
     NOC_MACRO_EXPANSION_TOKEN_INPUT = 0,
+    NOC_MACRO_EXPANSION_TOKEN_ARGUMENT,
     NOC_MACRO_EXPANSION_TOKEN_REPLACEMENT,
 } Noc_Macro_Expansion_Token_Origin;
 
 typedef struct {
+    /* Maximum nested provenance frames along one expansion path. */
     size_t max_depth;
+    /* Maximum tokens in any live logical sequence, including the result. */
     size_t max_output_tokens;
+    /* Maximum object/function expansion frames created by one build. */
     size_t max_expansions;
 } Noc_Macro_Expansion_Limits;
 
@@ -791,10 +799,13 @@ NOCDEF const char *noc_macro_expansion_token_origin_name(
 NOCDEF Noc_Macro_Expansion_Limits noc_macro_expansion_default_limits(void);
 NOCDEF void noc_macro_expansion_free(Noc_Macro_Expansion *expansion);
 NOCDEF bool noc_macro_expansion_is_valid(const Noc_Macro_Expansion *expansion);
-/* Expands object-like macros using environment entries [0, entry_limit).
-   Function-like macros remain unexpanded in this milestone. A replacement that
-   requires ## or its %:%: spelling is rejected rather than emitted with
-   incorrect semantics.
+/* Expands object-like and fixed-arity function-like macros using environment
+   entries [0, entry_limit). Arguments are collected from the logical token
+   stream, prescanned once, substituted, and rescanned with provenance retained.
+   The token limit bounds every live logical sequence, including raw input and
+   argument-prescan sequences, rather than only the final rendered result.
+   Variadics and replacements requiring #, %:, ##, or %:%: are rejected rather
+   than emitted with incorrect semantics.
    Success replaces output; every failure preserves the prior expansion. */
 NOCDEF Noc_Macro_Expansion_Status noc_macro_expansion_build(
     const Noc_Macro_Environment *environment,

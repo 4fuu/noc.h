@@ -37,6 +37,21 @@ typedef struct {
     size_t capacity;
 } Noc__String_List;
 
+typedef Noc_Token (*Noc__Macro_Token_Query)(const void *, size_t);
+
+/* Sequence-relative invocation syntax shared by the physical-source query and
+   expanded logical-token rescan. It owns only the argument-range array. */
+typedef struct {
+    size_t open_token_index;
+    size_t close_token_index;
+    Noc_Token_Range tokens;
+    Noc_Macro_Argument *arguments;
+    size_t argument_count;
+    size_t argument_capacity;
+    size_t problem_token_index;
+    Noc_Macro_Invocation_Status status;
+} Noc__Macro_Invocation_Collection;
+
 struct Noc_Rewriter {
     Noc_Context *context;
     const Noc_Rule *rule;
@@ -78,6 +93,11 @@ NOC__PRIVATE size_t noc__find_rule_token(const Noc_Context *, Noc_Token);
 NOC__PRIVATE bool noc__depfile_path_is_valid(const char *);
 NOC__PRIVATE bool noc__macro_parse_directive(Noc_Preprocessor_Unit *,
                                              Noc_Preprocessor_Directive *, size_t);
+NOC__PRIVATE void noc__macro_invocation_collection_free(
+    Noc__Macro_Invocation_Collection *);
+NOC__PRIVATE Noc_Macro_Invocation_Build_Status noc__macro_invocation_collect(
+    const void *, Noc__Macro_Token_Query, size_t, size_t,
+    Noc__Macro_Invocation_Collection *);
 NOC__PRIVATE const Noc_Macro_Directive *noc__macro_environment_entry_directive(
     const Noc_Macro_Environment_Entry *);
 NOC__PRIVATE void noc__string_list_free(Noc__String_List *);

@@ -42,18 +42,19 @@ NOCDEF void noc_macro_invocation_free(Noc_Macro_Invocation *invocation)
 }
 
 static bool noc__macro_invocation_range_has_token(
-    const Noc_Preprocessor_Unit *unit,
+    const void *tokens,
+    Noc__Macro_Token_Query token_at,
     Noc_Token_Range range)
 {
     size_t index;
     for (index = range.begin; index < range.end; ++index) {
-        if (!noc_token_is_trivia(unit->preprocessing_tokens[index].token)) return true;
+        if (!noc_token_is_trivia(token_at(tokens, index))) return true;
     }
     return false;
 }
 
 static Noc_Macro_Invocation_Build_Status noc__macro_invocation_argument_append(
-    Noc_Macro_Invocation *invocation,
+    Noc__Macro_Invocation_Collection *invocation,
     Noc_Token_Range tokens)
 {
     Noc_Macro_Argument *arguments;
@@ -81,6 +82,125 @@ static Noc_Macro_Invocation_Build_Status noc__macro_invocation_argument_append(
     invocation->argument_capacity = capacity;
     invocation->arguments[invocation->argument_count++].tokens = tokens;
     return NOC_MACRO_INVOCATION_BUILD_OK;
+}
+
+NOC__PRIVATE void noc__macro_invocation_collection_free(
+    Noc__Macro_Invocation_Collection *invocation)
+{
+    if (!invocation) return;
+    free(invocation->arguments);
+    memset(invocation, 0, sizeof(*invocation));
+}
+
+NOC__PRIVATE Noc_Macro_Invocation_Build_Status noc__macro_invocation_collect(
+    const void *tokens,
+    Noc__Macro_Token_Query token_at,
+    size_t name_token_index,
+    size_t token_limit,
+    Noc__Macro_Invocation_Collection *output)
+{
+    Noc__Macro_Invocation_Collection parsed;
+    Noc_Macro_Invocation_Build_Status build_status;
+    size_t argument_begin;
+    size_t cursor;
+    size_t depth = 0;
+    bool saw_separator = false;
+    if (!tokens || !token_at || !output || name_token_index >= token_limit ||
+        token_at(tokens, name_token_index).kind != NOC_TOKEN_IDENTIFIER) {
+        return NOC_MACRO_INVOCATION_BUILD_INVALID_ARGUMENT;
+    }
+    memset(&parsed, 0, sizeof(parsed));
+    parsed.open_token_index = NOC_TOKEN_INDEX_NONE;
+    parsed.close_token_index = NOC_TOKEN_INDEX_NONE;
+    parsed.problem_token_index = NOC_TOKEN_INDEX_NONE;
+    parsed.tokens.begin = name_token_index;
+    parsed.tokens.end = name_token_index + 1;
+    cursor = name_token_index + 1;
+    while (cursor < token_limit && noc_token_is_trivia(token_at(tokens, cursor))) {
+        cursor += 1;
+    }
+    if (cursor >= token_limit ||
+        !noc_token_is_punct(token_at(tokens, cursor), "(")) {
+        parsed.status = NOC_MACRO_INVOCATION_NOT_INVOKED;
+        goto publish;
+    }
+    parsed.open_token_index = cursor;
+    argument_begin = ++cursor;
+    while (cursor < token_limit) {
+        Noc_Token token = token_at(tokens, cursor);
+        if (token.kind == NOC_TOKEN_EOF) {
+            parsed.status = NOC_MACRO_INVOCATION_INCOMPLETE;
+            parsed.tokens.end = cursor;
+            parsed.problem_token_index = cursor;
+            goto append_partial;
+        }
+        if (token.kind == NOC_TOKEN_INVALID) {
+            parsed.status = NOC_MACRO_INVOCATION_INCOMPLETE;
+            parsed.tokens.end = cursor + 1;
+            parsed.problem_token_index = cursor;
+            goto append_partial;
+        }
+        if (noc_token_is_punct(token, "(")) {
+            depth += 1;
+        } else if (noc_token_is_punct(token, ")")) {
+            if (depth != 0) {
+                depth -= 1;
+            } else {
+                if (saw_separator ||
+                    noc__macro_invocation_range_has_token(
+                        tokens,
+                        token_at,
+                        (Noc_Token_Range){argument_begin, cursor})) {
+                    build_status = noc__macro_invocation_argument_append(
+                        &parsed,
+                        (Noc_Token_Range){argument_begin, cursor});
+                    if (build_status != NOC_MACRO_INVOCATION_BUILD_OK) goto fail;
+                }
+                parsed.status = NOC_MACRO_INVOCATION_COMPLETE;
+                parsed.close_token_index = cursor;
+                parsed.tokens.end = cursor + 1;
+                goto publish;
+            }
+        } else if (depth == 0 && noc_token_is_punct(token, ",")) {
+            build_status = noc__macro_invocation_argument_append(
+                &parsed,
+                (Noc_Token_Range){argument_begin, cursor});
+            if (build_status != NOC_MACRO_INVOCATION_BUILD_OK) goto fail;
+            saw_separator = true;
+            argument_begin = cursor + 1;
+        }
+        cursor += 1;
+    }
+    parsed.status = NOC_MACRO_INVOCATION_INCOMPLETE;
+    parsed.tokens.end = token_limit;
+
+append_partial:
+    if (saw_separator ||
+        noc__macro_invocation_range_has_token(
+            tokens,
+            token_at,
+            (Noc_Token_Range){argument_begin, parsed.tokens.end})) {
+        build_status = noc__macro_invocation_argument_append(
+            &parsed,
+            (Noc_Token_Range){argument_begin, parsed.tokens.end});
+        if (build_status != NOC_MACRO_INVOCATION_BUILD_OK) goto fail;
+    }
+
+publish:
+    noc__macro_invocation_collection_free(output);
+    *output = parsed;
+    return NOC_MACRO_INVOCATION_BUILD_OK;
+
+fail:
+    noc__macro_invocation_collection_free(&parsed);
+    return build_status;
+}
+
+static Noc_Token noc__macro_source_token_at(const void *tokens, size_t index)
+{
+    const Noc_Preprocessor_Unit *unit =
+        (const Noc_Preprocessor_Unit *)tokens;
+    return unit->preprocessing_tokens[index].token;
 }
 
 NOCDEF bool noc_macro_invocation_is_valid(
@@ -193,6 +313,7 @@ NOCDEF bool noc_macro_invocation_is_valid(
     if (saw_separator ||
         noc__macro_invocation_range_has_token(
             unit,
+            noc__macro_source_token_at,
             (Noc_Token_Range){argument_begin, content_end})) {
         if (argument_index >= invocation->argument_count ||
             invocation->arguments[argument_index].tokens.begin != argument_begin ||
@@ -211,12 +332,9 @@ NOCDEF Noc_Macro_Invocation_Build_Status noc_macro_invocation_parse(
     Noc_Macro_Invocation *output)
 {
     Noc_Macro_Invocation parsed;
+    Noc__Macro_Invocation_Collection collection;
     Noc_Macro_Invocation_Build_Status build_status;
-    size_t cursor;
-    size_t argument_begin;
-    size_t depth = 0;
     size_t generation;
-    bool saw_separator = false;
     if (!unit || !output) {
         return NOC_MACRO_INVOCATION_BUILD_INVALID_ARGUMENT;
     }
@@ -235,94 +353,32 @@ NOCDEF Noc_Macro_Invocation_Build_Status noc_macro_invocation_parse(
         return NOC_MACRO_INVOCATION_BUILD_GENERATION_EXHAUSTED;
     }
     memset(&parsed, 0, sizeof(parsed));
+    memset(&collection, 0, sizeof(collection));
+    build_status = noc__macro_invocation_collect(unit,
+                                                 noc__macro_source_token_at,
+                                                 name_token_index,
+                                                 token_limit,
+                                                 &collection);
+    if (build_status != NOC_MACRO_INVOCATION_BUILD_OK) return build_status;
     parsed.unit = unit;
     parsed.unit_stream_generation = unit->stream.generation;
     parsed.name_token_index = name_token_index;
-    parsed.open_token_index = NOC_TOKEN_INDEX_NONE;
-    parsed.close_token_index = NOC_TOKEN_INDEX_NONE;
-    parsed.problem_token_index = NOC_TOKEN_INDEX_NONE;
-    parsed.tokens.begin = name_token_index;
-    parsed.tokens.end = name_token_index + 1;
-    cursor = name_token_index + 1;
-    while (cursor < token_limit &&
-           noc_token_is_trivia(unit->preprocessing_tokens[cursor].token)) {
-        cursor += 1;
-    }
-    if (cursor >= token_limit ||
-        !noc_token_is_punct(unit->preprocessing_tokens[cursor].token, "(")) {
-        parsed.status = NOC_MACRO_INVOCATION_NOT_INVOKED;
-        goto publish;
-    }
-    parsed.open_token_index = cursor;
-    argument_begin = ++cursor;
-    while (cursor < token_limit) {
-        Noc_Token token = unit->preprocessing_tokens[cursor].token;
-        if (token.kind == NOC_TOKEN_EOF) {
-            parsed.status = NOC_MACRO_INVOCATION_INCOMPLETE;
-            parsed.tokens.end = cursor;
-            parsed.problem_token_index = cursor;
-            goto append_partial;
-        }
-        if (token.kind == NOC_TOKEN_INVALID) {
-            parsed.status = NOC_MACRO_INVOCATION_INCOMPLETE;
-            parsed.tokens.end = cursor + 1;
-            parsed.problem_token_index = cursor;
-            goto append_partial;
-        }
-        if (noc_token_is_punct(token, "(")) {
-            depth += 1;
-        } else if (noc_token_is_punct(token, ")")) {
-            if (depth != 0) {
-                depth -= 1;
-            } else {
-                if (saw_separator ||
-                    noc__macro_invocation_range_has_token(
-                        unit,
-                        (Noc_Token_Range){argument_begin, cursor})) {
-                    build_status = noc__macro_invocation_argument_append(
-                        &parsed,
-                        (Noc_Token_Range){argument_begin, cursor});
-                    if (build_status != NOC_MACRO_INVOCATION_BUILD_OK) goto fail;
-                }
-                parsed.status = NOC_MACRO_INVOCATION_COMPLETE;
-                parsed.close_token_index = cursor;
-                parsed.tokens.end = cursor + 1;
-                goto publish;
-            }
-        } else if (depth == 0 && noc_token_is_punct(token, ",")) {
-            build_status = noc__macro_invocation_argument_append(
-                &parsed,
-                (Noc_Token_Range){argument_begin, cursor});
-            if (build_status != NOC_MACRO_INVOCATION_BUILD_OK) goto fail;
-            saw_separator = true;
-            argument_begin = cursor + 1;
-        }
-        cursor += 1;
-    }
-    parsed.status = NOC_MACRO_INVOCATION_INCOMPLETE;
-    parsed.tokens.end = token_limit;
-
-append_partial:
-    if (saw_separator ||
-        noc__macro_invocation_range_has_token(
-            unit,
-            (Noc_Token_Range){argument_begin, parsed.tokens.end})) {
-        build_status = noc__macro_invocation_argument_append(
-            &parsed,
-            (Noc_Token_Range){argument_begin, parsed.tokens.end});
-        if (build_status != NOC_MACRO_INVOCATION_BUILD_OK) goto fail;
-    }
-
-publish:
+    parsed.open_token_index = collection.open_token_index;
+    parsed.close_token_index = collection.close_token_index;
+    parsed.tokens = collection.tokens;
+    parsed.arguments = collection.arguments;
+    parsed.argument_count = collection.argument_count;
+    parsed.argument_capacity = collection.argument_capacity;
+    parsed.problem_token_index = collection.problem_token_index;
+    parsed.status = collection.status;
+    collection.arguments = NULL;
+    collection.argument_count = 0;
+    collection.argument_capacity = 0;
     generation = output->generation + 1;
     noc_macro_invocation_free(output);
     *output = parsed;
     output->generation = generation;
     return NOC_MACRO_INVOCATION_BUILD_OK;
-
-fail:
-    noc_macro_invocation_free(&parsed);
-    return build_status;
 }
 
 NOCDEF const Noc_Macro_Argument *noc_macro_invocation_argument_at(

@@ -11,6 +11,15 @@ static void check_expansion_names_and_defaults(void)
     CHECK(strcmp(noc_macro_expansion_status_name(NOC_MACRO_EXPANSION_STALE),
                  "stale") == 0);
     CHECK(strcmp(noc_macro_expansion_status_name(
+                     NOC_MACRO_EXPANSION_INCOMPLETE_INVOCATION),
+                 "incomplete-invocation") == 0);
+    CHECK(strcmp(noc_macro_expansion_status_name(
+                     NOC_MACRO_EXPANSION_ARGUMENT_COUNT_MISMATCH),
+                 "argument-count-mismatch") == 0);
+    CHECK(strcmp(noc_macro_expansion_status_name(
+                     NOC_MACRO_EXPANSION_INVALID_DEFINITION),
+                 "invalid-definition") == 0);
+    CHECK(strcmp(noc_macro_expansion_status_name(
                      NOC_MACRO_EXPANSION_DEPTH_LIMIT),
                  "depth-limit") == 0);
     CHECK(strcmp(noc_macro_expansion_status_name(
@@ -23,6 +32,9 @@ static void check_expansion_names_and_defaults(void)
                      NOC_MACRO_EXPANSION_UNSUPPORTED_OPERATOR),
                  "unsupported-operator") == 0);
     CHECK(strcmp(noc_macro_expansion_status_name(
+                     NOC_MACRO_EXPANSION_UNSUPPORTED_VARIADIC),
+                 "unsupported-variadic") == 0);
+    CHECK(strcmp(noc_macro_expansion_status_name(
                      NOC_MACRO_EXPANSION_GENERATION_EXHAUSTED),
                  "generation-exhausted") == 0);
     CHECK(strcmp(noc_macro_expansion_status_name(
@@ -34,6 +46,9 @@ static void check_expansion_names_and_defaults(void)
     CHECK(strcmp(noc_macro_expansion_token_origin_name(
                      NOC_MACRO_EXPANSION_TOKEN_INPUT),
                  "input") == 0);
+    CHECK(strcmp(noc_macro_expansion_token_origin_name(
+                     NOC_MACRO_EXPANSION_TOKEN_ARGUMENT),
+                 "argument") == 0);
     CHECK(strcmp(noc_macro_expansion_token_origin_name(
                      NOC_MACRO_EXPANSION_TOKEN_REPLACEMENT),
                  "replacement") == 0);
@@ -68,6 +83,7 @@ static void test_recursive_object_expansion_and_provenance(void)
     Noc_Buffer rendered = {0};
     Diagnostic_State diagnostics = {0};
     Noc_Token_Range input_range;
+    size_t argument_token_count = 0;
     size_t input_token_count = 0;
     size_t replacement_token_count = 0;
     size_t index;
@@ -109,10 +125,10 @@ static void test_recursive_object_expansion_and_provenance(void)
                                     &expansion) == NOC_MACRO_EXPANSION_OK);
     CHECK(noc_macro_expansion_is_valid(&expansion));
     CHECK(expansion.generation == 1);
-    CHECK(expansion.frame_count == 7);
+    CHECK(expansion.frame_count == 8);
     CHECK(noc_macro_expansion_render(&expansion, &rendered));
     CHECK(slice_equals((Noc_Slice){rendered.items, rendered.count},
-                       "1 + 1  SELF A FUNC(9) MISSING\n"));
+                       "1 + 1  SELF A 9 MISSING\n"));
     CHECK(rendered.items[rendered.count] == '\0');
     CHECK(noc_macro_expansion_frame_at(&expansion, 0)->environment_entry_index ==
           1);
@@ -141,6 +157,10 @@ static void test_recursive_object_expansion_and_provenance(void)
             CHECK(token->unit == &input);
             CHECK(token->frame_index == NOC_TOKEN_INDEX_NONE);
             input_token_count += 1;
+        } else if (token->origin == NOC_MACRO_EXPANSION_TOKEN_ARGUMENT) {
+            CHECK(token->unit == &input);
+            CHECK(token->frame_index < expansion.frame_count);
+            argument_token_count += 1;
         } else {
             CHECK(token->origin == NOC_MACRO_EXPANSION_TOKEN_REPLACEMENT);
             CHECK(token->unit == &definitions);
@@ -149,6 +169,7 @@ static void test_recursive_object_expansion_and_provenance(void)
         }
     }
     CHECK(input_token_count > 0);
+    CHECK(argument_token_count > 0);
     CHECK(replacement_token_count > 0);
     CHECK(noc_macro_expansion_token_at(&expansion, expansion.count) == NULL);
     CHECK(diagnostics.errors == 0);
@@ -442,11 +463,84 @@ static void test_history_prefix_and_definition_staleness(void)
     noc_context_deinit(&context);
 }
 
+static void test_hide_sets_do_not_consume_output_limit(void)
+{
+    static const char definitions_source[] =
+        "#define A B\n"
+        "#define B C\n"
+        "#define C 1\n";
+    static const char input_source[] = "A";
+    Noc_Context context;
+    Noc_Workspace workspace = {0};
+    Noc_Document_Snapshot definitions_snapshot = {0};
+    Noc_Document_Snapshot input_snapshot = {0};
+    Noc_Preprocessor_Unit definitions = {0};
+    Noc_Preprocessor_Unit input = {0};
+    Noc_Macro_Environment environment = {0};
+    Noc_Macro_Expansion expansion = {0};
+    Noc_Buffer rendered = {0};
+    Noc_Macro_Expansion_Limits limits = noc_macro_expansion_default_limits();
+    size_t index;
+
+    noc_context_init(&context);
+    noc_workspace_init(&workspace);
+    CHECK(noc_workspace_open_document(&workspace,
+                                      "hide-set-definitions.h",
+                                      definitions_source,
+                                      sizeof(definitions_source) - 1,
+                                      NOC_SOURCE_CLASS_TRUSTED,
+                                      &definitions_snapshot) == NOC_WORKSPACE_OK);
+    CHECK(noc_workspace_open_document(&workspace,
+                                      "hide-set-input.c",
+                                      input_source,
+                                      sizeof(input_source) - 1,
+                                      NOC_SOURCE_CLASS_PROJECT,
+                                      &input_snapshot) == NOC_WORKSPACE_OK);
+    CHECK(noc_preprocessor_unit_build(&context,
+                                      &definitions_snapshot,
+                                      NOC_MACROS_FULL,
+                                      &definitions));
+    CHECK(noc_preprocessor_unit_build(&context,
+                                      &input_snapshot,
+                                      NOC_MACROS_FULL,
+                                      &input));
+    for (index = 0; index < definitions.macro_directive_count; ++index) {
+        CHECK(noc_macro_environment_apply(&environment,
+                                          &definitions,
+                                          index) == NOC_MACRO_ENVIRONMENT_OK);
+    }
+    limits.max_depth = 8;
+    limits.max_output_tokens = 1;
+    limits.max_expansions = 8;
+    CHECK(noc_macro_expansion_build(
+              &environment,
+              environment.count,
+              &input,
+              (Noc_Token_Range){0, input.preprocessing_token_count - 1},
+              limits,
+              &expansion) == NOC_MACRO_EXPANSION_OK);
+    CHECK(expansion.count == 1);
+    CHECK(expansion.frame_count == 3);
+    CHECK(noc_macro_expansion_render(&expansion, &rendered));
+    CHECK(slice_equals((Noc_Slice){rendered.items, rendered.count}, "1"));
+
+    noc_buffer_free(&rendered);
+    noc_macro_expansion_free(&expansion);
+    noc_macro_environment_free(&environment);
+    noc_preprocessor_unit_free(&input);
+    noc_preprocessor_unit_free(&definitions);
+    noc_document_snapshot_free(&input_snapshot);
+    noc_document_snapshot_free(&definitions_snapshot);
+    noc_workspace_deinit(&workspace);
+    noc_context_deinit(&context);
+}
+
 int main(void)
 {
     check_expansion_names_and_defaults();
     test_recursive_object_expansion_and_provenance();
     test_limits_transactionality_and_stale_inputs();
     test_history_prefix_and_definition_staleness();
+    test_hide_sets_do_not_consume_output_limit();
     return finish_suite("macro-expansion");
 }

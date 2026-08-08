@@ -387,10 +387,14 @@ static void fuzz_preprocessor(Noc_Context *context,
                     limits,
                     &expansion);
                 FUZZ_CHECK(status == NOC_MACRO_EXPANSION_OK ||
+                           status == NOC_MACRO_EXPANSION_INCOMPLETE_INVOCATION ||
+                           status == NOC_MACRO_EXPANSION_ARGUMENT_COUNT_MISMATCH ||
+                           status == NOC_MACRO_EXPANSION_INVALID_DEFINITION ||
                            status == NOC_MACRO_EXPANSION_DEPTH_LIMIT ||
                            status == NOC_MACRO_EXPANSION_OUTPUT_LIMIT ||
                            status == NOC_MACRO_EXPANSION_COUNT_LIMIT ||
                            status == NOC_MACRO_EXPANSION_UNSUPPORTED_OPERATOR ||
+                           status == NOC_MACRO_EXPANSION_UNSUPPORTED_VARIADIC ||
                            status == NOC_MACRO_EXPANSION_OUT_OF_MEMORY);
                 if (status == NOC_MACRO_EXPANSION_OK) {
                     FUZZ_CHECK(noc_macro_expansion_is_valid(&expansion));
@@ -545,6 +549,8 @@ int main(void)
         "#if 0\n@missing\n#elif 1\n@fuzz(42)\n#endif\n",
         "#if FLAG\n@fuzz(\n#endif\n42\n#if FLAG\n)\n#endif\n",
         "F(a, (b, c),) G(unterminated\n",
+        "#define ID(x) x\n#define CALL(f,x) f(x)\n"
+        "#define OPEN ID(\nCALL(ID, ID(1)) OPEN 2)\n",
         "([{}]) <::> %:%: /\\\n* block *\\\n/",
         "\"string\\n\\x41\" '\\123' 0x1p+2",
     };
