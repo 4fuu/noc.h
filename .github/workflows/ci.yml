@@ -77,8 +77,8 @@ jobs:
           ./nob header
           for suite in workspace preprocessing_tokens macro_directives macro_invocations \
                        macro_environment macro_expansion function_macro_expansion \
-                       variadic_macro_expansion preprocessor lexing syntax c_analysis \
-                       rewriter artifacts; do
+                       variadic_macro_expansion macro_stringification preprocessor \
+                       lexing syntax c_analysis rewriter artifacts; do
             cc -std=c11 -Wall -Wextra -Wpedantic \
                -fsanitize=address,undefined -fno-omit-frame-pointer \
                -Ibuild/generated -I. \

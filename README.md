@@ -42,8 +42,8 @@ The suite names are `header-c`, `header-cpp`, `public-header-c`,
 `public-header-cpp`, `modules`, `workspace`,
 `preprocessing-tokens`, `macro-directives`, `macro-environment`,
 `macro-invocations`, `macro-expansion`, `function-macro-expansion`,
-`variadic-macro-expansion`, `preprocessor`, `lexing`, `syntax`, `c-analysis`,
-`rewriter`, and `artifacts`, for example:
+`variadic-macro-expansion`, `macro-stringification`, `preprocessor`, `lexing`,
+`syntax`, `c-analysis`, `rewriter`, and `artifacts`, for example:
 
 ```console
 $ ./nob test c-analysis
@@ -255,20 +255,25 @@ boundaries. Multiple variable arguments preserve their separating commas and
 substitute through `__VA_ARGS__`; reserved-name and omitted-variable-argument
 constraints are rejected rather than treated as GNU extensions. Direct and
 indirect recursion use token hide sets rather than provenance ancestry, so nested
-cases such as `ID(ID(3))` retain standard rescan behavior.
+cases such as `ID(ID(3))` retain standard rescan behavior. C11 `#` and its `%:`
+digraph stringify the raw, unprescanned argument, normalize intervening
+whitespace/comments, escape string/character literal spellings, and then rejoin
+normal rescan.
 
 Every result token records its physical source unit, preprocessing-token index,
-input/argument/replacement origin, and expansion frame. Frames link nested
-expansions to both their invocation token and environment definition, providing
-the provenance needed by later diagnostics and IDE expansion previews. Expansion
-limits bound provenance depth, every live logical token sequence, and total
-expansion frames. Limit failures, incomplete or mismatched calls, malformed
-definitions, and unsupported `#`/`%:`/`##`/`%:%:` operators preserve
-the previous owning result rather than emitting a known-incorrect approximation.
-`noc_macro_expansion_render` concatenates exact physical token spellings for
-inspection. Run the object and function coverage independently with
+input/argument/replacement/stringification origin, and expansion frame. Frames
+link nested expansions to both their invocation token and environment definition,
+providing the provenance needed by later diagnostics and IDE expansion previews.
+Stringified tokens use stable generated spellings owned by the expansion and
+retain the physical `#` operator as provenance. Expansion limits bound provenance
+depth, every live logical token sequence, and total expansion frames. Limit
+failures, incomplete or mismatched calls, malformed definitions, and unsupported
+`##`/`%:%:` operators preserve the previous owning result rather than emitting a
+known-incorrect approximation. `noc_macro_expansion_render` concatenates each
+result token's stored physical or generated spelling for inspection. Run the
+coverage independently with
 `./nob test macro-expansion`, `./nob test function-macro-expansion`, and
-`./nob test variadic-macro-expansion`.
+`./nob test variadic-macro-expansion`, or `./nob test macro-stringification`.
 
 Macro definition permission is explicit:
 
@@ -282,7 +287,7 @@ validation are separate: the inventory always records a recognized `#define` or
 `#undef`, including when disabled, while
 `noc_preprocessor_unit_validate_macro_policy` emits precise feature-disabled
 diagnostics. This prevents tooling from reporting a policy violation as a parse
-error. Conditional policy application, `#`/`##`, include loading, and broader
+error. Conditional policy application, `##`, include loading, and broader
 expansion provenance queries remain subsequent preprocessor milestones. Run the
 token and recovery coverage independently with
 `./nob test preprocessing-tokens`, or the directive/policy coverage with
@@ -794,9 +799,9 @@ and node references must not escape the callback.
 This version handles explicit token/AST-assisted transformations, a lossless
 delimiter tree, lightweight C structure discovery, and bounded
 object/fixed-arity/C11-variadic macro inspection expansion. It does not provide a
-complete integrated preprocessor, stringify/paste/built-in macro expansion, a
-semantic C AST, typedef resolution, or a C type system. Rules inside preprocessor
-directives are left untouched. More
+complete integrated preprocessor, token-paste/built-in macro expansion, a
+semantic C AST, typedef resolution, or a C type system. C11 macro stringification
+is supported. Rules inside preprocessor directives are left untouched. More
 structured statement and declaration helpers can be added without changing the
 registration model.
 

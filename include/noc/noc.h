@@ -29,9 +29,9 @@
 #define NOC_H_INCLUDED
 
 #define NOC_VERSION_MAJOR 0
-#define NOC_VERSION_MINOR 30
+#define NOC_VERSION_MINOR 31
 #define NOC_VERSION_PATCH 0
-#define NOC_VERSION "0.30.0"
+#define NOC_VERSION "0.31.0"
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -658,6 +658,7 @@ typedef enum {
     NOC_MACRO_EXPANSION_TOKEN_INPUT = 0,
     NOC_MACRO_EXPANSION_TOKEN_ARGUMENT,
     NOC_MACRO_EXPANSION_TOKEN_REPLACEMENT,
+    NOC_MACRO_EXPANSION_TOKEN_STRINGIFICATION,
 } Noc_Macro_Expansion_Token_Origin;
 
 typedef struct {
@@ -675,6 +676,8 @@ typedef struct {
     size_t unit_stream_generation;
     size_t preprocessing_token_index;
     size_t frame_index;
+    /* Index in expansion.generated_spellings for synthesized tokens, or NONE. */
+    size_t generated_spelling_index;
     Noc_Macro_Expansion_Token_Origin origin;
 } Noc_Macro_Expansion_Token;
 
@@ -688,7 +691,9 @@ typedef struct {
 
 /* Owning expansion view with borrowed source/provenance. Initialize to {0} and
    do not shallow-copy. The environment, input unit, and every definition unit
-   referenced by the environment must remain alive and unchanged. */
+   referenced by the environment must remain alive and unchanged. Synthesized
+   token spellings are owned by this expansion and remain stable until it is
+   rebuilt or freed. */
 typedef struct {
     const Noc_Macro_Environment *environment;
     size_t environment_generation;
@@ -702,6 +707,10 @@ typedef struct {
     Noc_Macro_Expansion_Frame *frames;
     size_t frame_count;
     size_t frame_capacity;
+    /* Stable, owned spellings for synthesized expansion tokens. */
+    Noc_Slice *generated_spellings;
+    size_t generated_spelling_count;
+    size_t generated_spelling_capacity;
     size_t generation;
 } Noc_Macro_Expansion;
 
@@ -802,13 +811,15 @@ NOCDEF bool noc_macro_expansion_is_valid(const Noc_Macro_Expansion *expansion);
 /* Expands object-like, fixed-arity, and strict C11 variadic function-like macros
    using environment entries [0, entry_limit). Arguments are collected from the
    logical token stream, prescanned once, substituted, and rescanned with
-   provenance retained. For F(x, ...), F(value) omits the required variable
-   argument and is rejected, while F(value,) supplies it explicitly as empty;
-   V() is valid for V(...) and supplies one empty variable argument.
+   provenance retained. # and %: stringify the raw, unprescanned argument using
+   C11 whitespace and literal-escaping rules. For F(x, ...), F(value) omits the
+   required variable argument and is rejected, while F(value,) supplies it
+   explicitly as empty; V() is valid for V(...) and supplies one empty variable
+   argument.
    The token limit bounds every live logical sequence, including raw input and
    argument-prescan sequences, rather than only the final rendered result.
-   Replacements requiring #, %:, ##, or %:%: are rejected rather than emitted
-   with incorrect semantics.
+   Replacements requiring ## or %:%: are rejected rather than emitted with
+   incorrect semantics.
    Success replaces output; every failure preserves the prior expansion. */
 NOCDEF Noc_Macro_Expansion_Status noc_macro_expansion_build(
     const Noc_Macro_Environment *environment,
@@ -823,8 +834,9 @@ NOCDEF const Noc_Macro_Expansion_Token *noc_macro_expansion_token_at(
 NOCDEF const Noc_Macro_Expansion_Frame *noc_macro_expansion_frame_at(
     const Noc_Macro_Expansion *expansion,
     size_t index);
-/* Concatenates exact physical token spellings into a NUL-terminated buffer.
-   Success replaces output; failure preserves it. */
+/* Concatenates each expansion token's stored spelling into a NUL-terminated
+   buffer. Source-backed spellings are physical; synthesized spellings are
+   owned by the expansion. Success replaces output; failure preserves it. */
 NOCDEF bool noc_macro_expansion_render(const Noc_Macro_Expansion *expansion,
                                        Noc_Buffer *output);
 

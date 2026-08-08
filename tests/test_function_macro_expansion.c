@@ -221,8 +221,6 @@ static void test_function_errors_are_transactional(void)
     static const char definitions[] =
         "#define ID(x) x\n"
         "#define TWO(x,y) x+y\n"
-        "#define STR(x) #x\n"
-        "#define DIGRAPH_STR(x) %: x\n"
         "#define PASTE(x,y) x ## y\n"
         "#define DIGRAPH_PASTE(x,y) x %:%: y\n"
         "#define DUP(x,x) x\n";
@@ -230,8 +228,6 @@ static void test_function_errors_are_transactional(void)
         "ID(1)\n"
         "TWO(1)\n"
         "TWO(1,2,3)\n"
-        "STR(x)\n"
-        "DIGRAPH_STR(x)\n"
         "PASTE(a,b)\n"
         "DIGRAPH_PASTE(a,b)\n"
         "DUP(1,2)\n"
@@ -239,8 +235,6 @@ static void test_function_errors_are_transactional(void)
     static const Noc_Macro_Expansion_Status statuses[] = {
         NOC_MACRO_EXPANSION_ARGUMENT_COUNT_MISMATCH,
         NOC_MACRO_EXPANSION_ARGUMENT_COUNT_MISMATCH,
-        NOC_MACRO_EXPANSION_UNSUPPORTED_OPERATOR,
-        NOC_MACRO_EXPANSION_UNSUPPORTED_OPERATOR,
         NOC_MACRO_EXPANSION_UNSUPPORTED_OPERATOR,
         NOC_MACRO_EXPANSION_UNSUPPORTED_OPERATOR,
         NOC_MACRO_EXPANSION_INVALID_DEFINITION,

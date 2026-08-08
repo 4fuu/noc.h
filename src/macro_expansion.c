@@ -69,6 +69,7 @@ NOCDEF const char *noc_macro_expansion_token_origin_name(
     case NOC_MACRO_EXPANSION_TOKEN_INPUT: return "input";
     case NOC_MACRO_EXPANSION_TOKEN_ARGUMENT: return "argument";
     case NOC_MACRO_EXPANSION_TOKEN_REPLACEMENT: return "replacement";
+    case NOC_MACRO_EXPANSION_TOKEN_STRINGIFICATION: return "stringification";
     }
     return "unknown";
 }
@@ -85,8 +86,13 @@ NOCDEF Noc_Macro_Expansion_Limits noc_macro_expansion_default_limits(void)
 NOCDEF void noc_macro_expansion_free(Noc_Macro_Expansion *expansion)
 {
     size_t generation;
+    size_t index;
     if (!expansion) return;
     generation = expansion->generation;
+    for (index = 0; index < expansion->generated_spelling_count; ++index) {
+        free((void *)expansion->generated_spellings[index].data);
+    }
+    free(expansion->generated_spellings);
     free(expansion->frames);
     free(expansion->items);
     memset(expansion, 0, sizeof(*expansion));
@@ -107,7 +113,11 @@ NOCDEF bool noc_macro_expansion_is_valid(const Noc_Macro_Expansion *expansion)
         expansion->count > expansion->capacity ||
         ((expansion->capacity == 0) != (expansion->items == NULL)) ||
         expansion->frame_count > expansion->frame_capacity ||
-        ((expansion->frame_capacity == 0) != (expansion->frames == NULL))) {
+        ((expansion->frame_capacity == 0) != (expansion->frames == NULL)) ||
+        expansion->generated_spelling_count >
+            expansion->generated_spelling_capacity ||
+        ((expansion->generated_spelling_capacity == 0) !=
+         (expansion->generated_spellings == NULL))) {
         return false;
     }
     for (index = 0; index < expansion->count; ++index) {
@@ -118,7 +128,23 @@ NOCDEF bool noc_macro_expansion_is_valid(const Noc_Macro_Expansion *expansion)
                 token->unit->preprocessing_token_count) {
             return false;
         }
-        if (token->frame_index == NOC_TOKEN_INDEX_NONE) {
+        if (token->origin == NOC_MACRO_EXPANSION_TOKEN_STRINGIFICATION) {
+            const Noc_Slice *spelling;
+            if (token->frame_index >= expansion->frame_count ||
+                token->generated_spelling_index >=
+                    expansion->generated_spelling_count ||
+                token->token.kind != NOC_TOKEN_STRING) {
+                return false;
+            }
+            spelling = &expansion->generated_spellings[
+                token->generated_spelling_index];
+            if (token->token.text.data != spelling->data ||
+                token->token.text.count != spelling->count) {
+                return false;
+            }
+        } else if (token->generated_spelling_index != NOC_TOKEN_INDEX_NONE) {
+            return false;
+        } else if (token->frame_index == NOC_TOKEN_INDEX_NONE) {
             if (token->origin != NOC_MACRO_EXPANSION_TOKEN_INPUT) return false;
         } else if (token->frame_index >= expansion->frame_count ||
                    (token->origin != NOC_MACRO_EXPANSION_TOKEN_ARGUMENT &&
@@ -287,6 +313,7 @@ static Noc_Macro_Expansion_Token noc__macro_expansion_token(
     result.unit_stream_generation = unit->stream.generation;
     result.preprocessing_token_index = token_index;
     result.frame_index = frame_index;
+    result.generated_spelling_index = NOC_TOKEN_INDEX_NONE;
     result.origin = origin;
     return result;
 }
@@ -462,6 +489,42 @@ static Noc_Macro_Expansion_Status noc__macro_expansion_frame_append(
     return NOC_MACRO_EXPANSION_OK;
 }
 
+static Noc_Macro_Expansion_Status noc__macro_generated_spelling_append(
+    Noc__Macro_Expansion_Builder *builder,
+    Noc_Buffer *spelling,
+    size_t *spelling_index)
+{
+    Noc_Slice *items;
+    size_t capacity;
+    if (!noc_buffer_terminate(spelling)) {
+        return NOC_MACRO_EXPANSION_OUT_OF_MEMORY;
+    }
+    if (builder->output->generated_spelling_count ==
+        builder->output->generated_spelling_capacity) {
+        if (builder->output->generated_spelling_capacity == 0) {
+            capacity = 16;
+        } else {
+            if (builder->output->generated_spelling_capacity > SIZE_MAX / 2) {
+                return NOC_MACRO_EXPANSION_OUT_OF_MEMORY;
+            }
+            capacity = builder->output->generated_spelling_capacity * 2;
+        }
+        if (capacity > SIZE_MAX / sizeof(*items)) {
+            return NOC_MACRO_EXPANSION_OUT_OF_MEMORY;
+        }
+        items = (Noc_Slice *)realloc(builder->output->generated_spellings,
+                                    capacity * sizeof(*items));
+        if (!items) return NOC_MACRO_EXPANSION_OUT_OF_MEMORY;
+        builder->output->generated_spellings = items;
+        builder->output->generated_spelling_capacity = capacity;
+    }
+    *spelling_index = builder->output->generated_spelling_count++;
+    builder->output->generated_spellings[*spelling_index].data = spelling->items;
+    builder->output->generated_spellings[*spelling_index].count = spelling->count;
+    memset(spelling, 0, sizeof(*spelling));
+    return NOC_MACRO_EXPANSION_OK;
+}
+
 static bool noc__macro_replacement_has_operator(
     const Noc_Preprocessor_Unit *unit,
     Noc_Token_Range replacement,
@@ -501,6 +564,101 @@ static size_t noc__macro_replacement_parameter_index(
         }
     }
     return NOC_TOKEN_INDEX_NONE;
+}
+
+static size_t noc__macro_stringification_operand(
+    const Noc_Preprocessor_Unit *unit,
+    const Noc_Macro_Directive *directive,
+    size_t operator_index,
+    size_t *parameter_index)
+{
+    size_t operand_index = operator_index + 1;
+    while (operand_index < directive->replacement_tokens.end &&
+           noc_token_is_trivia(
+               unit->preprocessing_tokens[operand_index].token)) {
+        operand_index += 1;
+    }
+    if (operand_index >= directive->replacement_tokens.end) {
+        return NOC_TOKEN_INDEX_NONE;
+    }
+    *parameter_index = noc__macro_replacement_parameter_index(
+        unit,
+        directive,
+        unit->preprocessing_tokens[operand_index].token);
+    return *parameter_index == NOC_TOKEN_INDEX_NONE
+               ? NOC_TOKEN_INDEX_NONE
+               : operand_index;
+}
+
+static Noc_Macro_Expansion_Status noc__macro_stringify_argument(
+    Noc__Macro_Expansion_Builder *builder,
+    const Noc__Macro_Token_Sequence *sequence,
+    Noc_Token_Range source,
+    const Noc_Macro_Environment_Entry *entry,
+    size_t operator_index,
+    size_t frame_index,
+    size_t hide_set,
+    Noc__Macro_Token_Sequence *replacement)
+{
+    Noc_Buffer spelling = {0};
+    Noc_Buffer logical = {0};
+    Noc_Macro_Expansion_Token token;
+    Noc_Macro_Expansion_Status status = NOC_MACRO_EXPANSION_OUT_OF_MEMORY;
+    size_t generated_spelling_index;
+    size_t index;
+    bool emitted_token = false;
+    bool pending_space = false;
+    if (!noc_buffer_append_cstr(&spelling, "\"")) goto done;
+    for (index = source.begin; index < source.end; ++index) {
+        Noc_Token source_token = sequence->items[index].token;
+        size_t position;
+        if (noc_token_is_trivia(source_token)) {
+            bool separates = source_token.kind == NOC_TOKEN_LINE_COMMENT ||
+                             source_token.kind == NOC_TOKEN_BLOCK_COMMENT;
+            if (!separates) {
+                if (!noc_token_logical_text(source_token, &logical)) goto done;
+                separates = logical.count != 0;
+            }
+            if (separates && emitted_token) pending_space = true;
+            continue;
+        }
+        if (pending_space && !noc_buffer_append_cstr(&spelling, " ")) goto done;
+        pending_space = false;
+        if (!noc_token_logical_text(source_token, &logical)) goto done;
+        for (position = 0; position < logical.count; ++position) {
+            char character = logical.items[position];
+            if ((source_token.kind == NOC_TOKEN_STRING ||
+                 source_token.kind == NOC_TOKEN_CHARACTER) &&
+                (character == '\\' || character == '"') &&
+                !noc_buffer_append_cstr(&spelling, "\\")) {
+                goto done;
+            }
+            if (!noc_buffer_append(&spelling, &character, 1)) goto done;
+        }
+        emitted_token = true;
+    }
+    if (!noc_buffer_append_cstr(&spelling, "\"")) goto done;
+    status = noc__macro_generated_spelling_append(builder,
+                                                  &spelling,
+                                                  &generated_spelling_index);
+    if (status != NOC_MACRO_EXPANSION_OK) goto done;
+    token = noc__macro_expansion_token(entry->unit,
+                                       operator_index,
+                                       frame_index,
+                                       NOC_MACRO_EXPANSION_TOKEN_STRINGIFICATION);
+    token.token.kind = NOC_TOKEN_STRING;
+    token.token.text = builder->output->generated_spellings[
+        generated_spelling_index];
+    token.generated_spelling_index = generated_spelling_index;
+    status = noc__macro_token_sequence_append(builder,
+                                              replacement,
+                                              token,
+                                              hide_set);
+
+done:
+    noc_buffer_free(&logical);
+    noc_buffer_free(&spelling);
+    return status;
 }
 
 static bool noc__macro_replacement_uses_va_args(
@@ -651,7 +809,7 @@ static Noc_Macro_Expansion_Status noc__macro_expand_function(
     }
     if (noc__macro_replacement_has_operator(entry->unit,
                                             directive->replacement_tokens,
-                                            true)) {
+                                            false)) {
         return NOC_MACRO_EXPANSION_UNSUPPORTED_OPERATOR;
     }
     supplied_argument_count = invocation->argument_count;
@@ -692,10 +850,27 @@ static Noc_Macro_Expansion_Status noc__macro_expand_function(
     for (index = directive->replacement_tokens.begin;
          index < directive->replacement_tokens.end;
          ++index) {
+        Noc_Token replacement_token =
+            entry->unit->preprocessing_tokens[index].token;
+        if (noc_token_is_punct(replacement_token, "#") ||
+            noc_token_is_punct(replacement_token, "%:")) {
+            size_t parameter_index;
+            size_t operand_index = noc__macro_stringification_operand(
+                entry->unit,
+                directive,
+                index,
+                &parameter_index);
+            if (operand_index == NOC_TOKEN_INDEX_NONE) {
+                status = NOC_MACRO_EXPANSION_INVALID_DEFINITION;
+                goto done;
+            }
+            index = operand_index;
+            continue;
+        }
         size_t parameter_index = noc__macro_replacement_parameter_index(
             entry->unit,
             directive,
-            entry->unit->preprocessing_tokens[index].token);
+            replacement_token);
         if (parameter_index != NOC_TOKEN_INDEX_NONE) {
             arguments[parameter_index].use_count += 1;
         }
@@ -723,7 +898,9 @@ static Noc_Macro_Expansion_Status noc__macro_expand_function(
         for (token_index = source.begin; token_index < source.end; ++token_index) {
             Noc_Macro_Expansion_Token token = sequence->items[token_index];
             token.frame_index = frame_index;
-            token.origin = NOC_MACRO_EXPANSION_TOKEN_ARGUMENT;
+            if (token.generated_spelling_index == NOC_TOKEN_INDEX_NONE) {
+                token.origin = NOC_MACRO_EXPANSION_TOKEN_ARGUMENT;
+            }
             status = noc__macro_token_sequence_append(builder,
                                                       &arguments[index].tokens,
                                                       token,
@@ -754,10 +931,37 @@ static Noc_Macro_Expansion_Status noc__macro_expand_function(
     for (index = directive->replacement_tokens.begin;
          index < directive->replacement_tokens.end;
          ++index) {
+        Noc_Token replacement_token =
+            entry->unit->preprocessing_tokens[index].token;
+        if (noc_token_is_punct(replacement_token, "#") ||
+            noc_token_is_punct(replacement_token, "%:")) {
+            size_t parameter_index;
+            size_t operand_index = noc__macro_stringification_operand(
+                entry->unit,
+                directive,
+                index,
+                &parameter_index);
+            if (operand_index == NOC_TOKEN_INDEX_NONE) {
+                status = NOC_MACRO_EXPANSION_INVALID_DEFINITION;
+                goto done;
+            }
+            status = noc__macro_stringify_argument(
+                builder,
+                sequence,
+                arguments[parameter_index].source_tokens,
+                entry,
+                index,
+                frame_index,
+                replacement_hide_set,
+                &replacement);
+            index = operand_index;
+            if (status != NOC_MACRO_EXPANSION_OK) goto done;
+            continue;
+        }
         size_t parameter_index = noc__macro_replacement_parameter_index(
             entry->unit,
             directive,
-            entry->unit->preprocessing_tokens[index].token);
+            replacement_token);
         if (parameter_index != NOC_TOKEN_INDEX_NONE) {
             status = noc__macro_token_sequence_append_sequence(
                 builder,

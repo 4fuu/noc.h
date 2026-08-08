@@ -53,6 +53,9 @@ static void check_expansion_names_and_defaults(void)
                      NOC_MACRO_EXPANSION_TOKEN_REPLACEMENT),
                  "replacement") == 0);
     CHECK(strcmp(noc_macro_expansion_token_origin_name(
+                     NOC_MACRO_EXPANSION_TOKEN_STRINGIFICATION),
+                 "stringification") == 0);
+    CHECK(strcmp(noc_macro_expansion_token_origin_name(
                      (Noc_Macro_Expansion_Token_Origin)99),
                  "unknown") == 0);
     CHECK(limits.max_depth > 0);

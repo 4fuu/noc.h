@@ -4,7 +4,7 @@ This file is the long-running implementation checklist. A milestone is checked
 only after its interfaces have tests or examples, the complete local suite
 passes, and the milestone has been committed and pushed.
 
-The current 0.19 implementation remains the compatibility baseline while the
+The 0.19 public API remains the compatibility baseline while the 0.31
 compiler frontend is built. Dialect inputs continue to use ordinary `.c` and
 `.h` names. Development code may be split into normal C modules, but releases
 must be generated reproducibly as one self-contained `noc.h`.
@@ -157,7 +157,10 @@ must be generated reproducibly as one self-contained `noc.h`.
   - [x] Add strict C11 variadic argument prescan and `__VA_ARGS__` substitution,
         including explicit empty arguments, comma provenance, and reserved-name
         validation without accepting GNU omitted-argument behavior.
-  - [ ] Add stringification, token pasting, and built-ins.
+  - [x] Add C11 `#`/`%:` stringification over raw arguments, including variadic
+        commas/empty slots, whitespace normalization, literal escaping, rescan,
+        stable generated spelling ownership, and operator provenance.
+  - [ ] Add token pasting and built-ins.
 - [ ] Implement includes, include guards/pragma-once behavior, conditionals,
       integer constant evaluation, diagnostics, and target predefined macros.
 - [ ] Implement disabled, trusted-only, project, and full macro policies without
