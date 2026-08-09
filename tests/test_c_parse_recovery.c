@@ -125,10 +125,12 @@ static void test_skipped_edge_byte_remains_in_document_root(void)
                                  noc_c_parse_default_options(),
                                  &tree) == NOC_C_PARSE_OK);
     CHECK(noc_c_parse_tree_is_valid(&tree));
+    CHECK(noc_c_parse_tree_has_error(&tree));
     root = noc_c_parse_tree_node_at(&tree, 0);
     CHECK(root != NULL);
     CHECK(root->bytes.begin == 0);
     CHECK(root->bytes.end == sizeof(source) - 1);
+    CHECK((root->flags & NOC_C_PARSE_NODE_SKIPPED_SOURCE) != 0);
     CHECK(slice_equals(noc_c_parse_node_source(&tree, 0), source));
 
     noc_c_parse_tree_free(&tree);

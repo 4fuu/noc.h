@@ -32,8 +32,8 @@
 
 #define NOC_VERSION_MAJOR 0
 #define NOC_VERSION_MINOR 41
-#define NOC_VERSION_PATCH 0
-#define NOC_VERSION "0.41.0"
+#define NOC_VERSION_PATCH 1
+#define NOC_VERSION "0.41.1"
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -385,7 +385,9 @@ typedef struct {
    Ordinary whitespace is available through the retained snapshot but is not a
    syntax node. Comments are EXTRA nodes. The translation-unit root spans the
    complete snapshot even when recovery skips an otherwise unrecognized edge
-   byte; grammar children retain their exact recognized ranges.
+   byte; grammar children retain their exact recognized ranges and the root
+   receives SKIPPED_SOURCE so callers never mistake normalization for complete
+   recognition.
 
    Noc_C_Parse_Tree is an owning handle initialized with {0}. Do not shallow
    copy it. A successful build retains its own snapshot and transactionally
@@ -435,6 +437,9 @@ enum {
     NOC_C_PARSE_NODE_ERROR = 1u << 2,
     NOC_C_PARSE_NODE_MISSING = 1u << 3,
     NOC_C_PARSE_NODE_HAS_ERROR = 1u << 4,
+    /* The engine did not include one or more physical edge bytes in its root.
+       Noc still publishes a document-wide root but records that recovery. */
+    NOC_C_PARSE_NODE_SKIPPED_SOURCE = 1u << 5,
 };
 
 typedef struct {

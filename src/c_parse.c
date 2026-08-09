@@ -241,6 +241,11 @@ static Noc_C_Parse_Status noc__c_parse_flatten(
        its root range while still publishing a recoverable tree. Noc's root is
        the physical document view, so retain those skipped bytes at the root;
        grammar children keep their exact engine ranges and error flags. */
+    if (root_node.bytes.begin != 0 ||
+        root_node.bytes.end != noc_document_snapshot_source(
+                                   &implementation->snapshot).count) {
+        root_node.flags |= NOC_C_PARSE_NODE_SKIPPED_SOURCE;
+    }
     root_node.bytes.begin = 0;
     root_node.bytes.end = noc_document_snapshot_source(
                               &implementation->snapshot).count;
@@ -498,7 +503,9 @@ NOCDEF const Noc_C_Parse_Node *noc_c_parse_tree_node_at(
 NOCDEF bool noc_c_parse_tree_has_error(const Noc_C_Parse_Tree *tree)
 {
     const Noc_C_Parse_Node *root = noc_c_parse_tree_node_at(tree, 0);
-    return root && (root->flags & NOC_C_PARSE_NODE_HAS_ERROR) != 0;
+    return root &&
+           (root->flags & (NOC_C_PARSE_NODE_HAS_ERROR |
+                           NOC_C_PARSE_NODE_SKIPPED_SOURCE)) != 0;
 }
 
 NOCDEF Noc_Slice noc_c_parse_node_source(const Noc_C_Parse_Tree *tree,

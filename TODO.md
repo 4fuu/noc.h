@@ -223,6 +223,13 @@ must be generated reproducibly as one self-contained `noc.h`.
 - [ ] Map the concrete grammar tree into stable Noc-owned C AST kinds and retain
       preprocessing-token provenance; do not expose grammar symbol IDs as the
       semantic compiler contract.
+  - [x] Record skipped physical source explicitly when the parser normalizes a
+        recoverable grammar root to the complete document range.
+  - [ ] Add an owning normalized physical AST with stable Noc kinds, fields,
+        operators, specifiers, qualifiers, extension variants, missing symbols,
+        recovery state, bounded work, cancellation, and generations.
+  - [ ] Attach preprocessing-token, macro-expansion, and include provenance to
+        logical AST nodes without weakening physical spelling/source queries.
 - [ ] Replace lightweight C structure analysis with a grammar-complete parser for
       declarations/declarators, initializers, statements, and expressions.
 - [ ] Parse structs/unions/enums, bit-fields, compound literals, designated
