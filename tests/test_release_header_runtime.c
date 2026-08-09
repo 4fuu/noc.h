@@ -1,3 +1,52 @@
+#define TREE_SITTER_FEATURE_WASM 1
+#define TREE_SITTER_HIDE_SYMBOLS 1
+#define DEBUG_QUERY_STEPS 301
+#define DEBUG_ANALYZE_QUERY 302
+#define DEBUG_EXECUTE_QUERY 303
+#define DEBUG_GET_CHANGED_RANGES 304
+#define HAVE_ENDIAN_H 305
+#define HAVE_SYS_ENDIAN_H 306
+#define HAVE_SYS_PARAM_H 307
+#define U_INT64_T_UNAVAILABLE 308
+#define U_COMBINED_IMPLEMENTATION 309
+#define U_COMMON_IMPLEMENTATION 310
+#define U_I18N_IMPLEMENTATION 311
+#define U_IO_IMPLEMENTATION 312
+#define U_IN_DOXYGEN 313
+#define U_PLATFORM 314
+#define U_SIZEOF_WCHAR_T 315
+#define U_GCC_MAJOR_MINOR 316
+#define U_CPLUSPLUS_VERSION 317
+#define U_IS_SURROGATE(value) ((value) == 318)
+#define TRUE 101
+#define FALSE 102
+#define UCHAR_TYPE unsigned short
+#define Array(type) struct { type consumer_item; }
+
+typedef struct Length {
+    int consumer_value;
+} Length;
+
+typedef struct Lexer {
+    int consumer_value;
+} Lexer;
+
+typedef struct Stack {
+    int consumer_value;
+} Stack;
+
+enum {
+    StackStatusActive = 201,
+    TreeCursorStepVisible = 202,
+};
+
+static const unsigned int LENGTH_MAX = 203;
+
+static int length_add(int left, int right)
+{
+    return left + right;
+}
+
 #define NOC_IMPLEMENTATION
 #include "../release/noc.h"
 
@@ -51,10 +100,35 @@ int main(void)
     Noc_Include_Operand operand = {0};
     Noc_Include_Expansion expansion = {0};
     Noc_Include_Graph graph = {0};
+    Noc_C_Parse_Tree parse_tree = {0};
     Noc_Include_Graph_Options graph_options =
         noc_include_graph_default_options();
     Noc_Include_Resolver resolver = {release_not_found, NULL};
 
+    REQUIRE(sizeof(Length) != 0 && sizeof(Lexer) != 0 && sizeof(Stack) != 0);
+    REQUIRE(length_add(TRUE, FALSE) == 203);
+    REQUIRE(LENGTH_MAX == 203);
+    REQUIRE(StackStatusActive == 201 && TreeCursorStepVisible == 202);
+    REQUIRE(TREE_SITTER_FEATURE_WASM == 1);
+    REQUIRE(TREE_SITTER_HIDE_SYMBOLS == 1);
+    REQUIRE(DEBUG_QUERY_STEPS == 301);
+    REQUIRE(DEBUG_ANALYZE_QUERY == 302);
+    REQUIRE(DEBUG_EXECUTE_QUERY == 303);
+    REQUIRE(DEBUG_GET_CHANGED_RANGES == 304);
+    REQUIRE(HAVE_ENDIAN_H == 305);
+    REQUIRE(HAVE_SYS_ENDIAN_H == 306);
+    REQUIRE(HAVE_SYS_PARAM_H == 307);
+    REQUIRE(U_INT64_T_UNAVAILABLE == 308);
+    REQUIRE(U_COMBINED_IMPLEMENTATION == 309);
+    REQUIRE(U_COMMON_IMPLEMENTATION == 310);
+    REQUIRE(U_I18N_IMPLEMENTATION == 311);
+    REQUIRE(U_IO_IMPLEMENTATION == 312);
+    REQUIRE(U_IN_DOXYGEN == 313);
+    REQUIRE(U_PLATFORM == 314);
+    REQUIRE(U_SIZEOF_WCHAR_T == 315);
+    REQUIRE(U_GCC_MAJOR_MINOR == 316);
+    REQUIRE(U_CPLUSPLUS_VERSION == 317);
+    REQUIRE(U_IS_SURROGATE(318));
     noc_context_init(&context);
     noc_workspace_init(&workspace);
     REQUIRE(noc_workspace_open_document(&workspace,
@@ -132,7 +206,15 @@ int main(void)
             memcmp(guard.guard_name.data,
                    "RELEASE_RUNTIME_H",
                    sizeof("RELEASE_RUNTIME_H") - 1) == 0);
+    REQUIRE(noc_c_parse_tree_build(&guard_snapshot,
+                                   noc_c_parse_default_options(),
+                                   &parse_tree) == NOC_C_PARSE_OK);
+    REQUIRE(noc_c_parse_tree_is_valid(&parse_tree));
+    REQUIRE(!noc_c_parse_tree_has_error(&parse_tree));
+    REQUIRE(noc_c_parse_tree_node_count(&parse_tree) > 1);
+    REQUIRE(noc_c_parse_tree_root(&parse_tree) == 0);
 
+    noc_c_parse_tree_free(&parse_tree);
     noc_preprocessor_conditional_groups_free(&guard_groups);
     noc_macro_environment_free(&guard_environment);
     noc_preprocessor_unit_free(&guard_unit);

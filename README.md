@@ -48,8 +48,9 @@ The suite names are `header-c`, `header-cpp`, `public-header-c`,
 `include-expansion`, `include-expansion-resolver`,
 `include-graph`, `include-graph-limits`, `include-graph-queries`,
 `release-header-runtime`,
-`preprocessor`, `lexing`, `syntax`, `c-analysis`, `rewriter`, and `artifacts`, for
-example:
+`preprocessor`, `lexing`, `syntax`, `c-analysis`, `c-parse-tree`,
+`c-parse-recovery`, `c-parse-lifecycle`, `c-parse-cpp-runtime`,
+`tree-sitter-coexistence`, `rewriter`, and `artifacts`, for example:
 
 ```console
 $ ./nob test c-analysis
@@ -115,8 +116,10 @@ be declared by `src/internal.h`; module-local helpers remain static. Current own
 | `src/include_resolver.c`, `src/include_expansion.c` | Physical/expanded include operands and host-configurable snapshot resolution |
 | `src/include_graph.c` | Bounded conditional include discovery, recursion, cycles, and stable IDE queries |
 | `src/parser.c`, `src/ast.c` | Token cursors/arguments and syntax/C structure analysis |
+| `src/c_parse.c` | Recoverable physical C concrete-syntax adapter and Noc-owned flat node views |
 | `src/features.c` | Context, rules, feature controls, and metadata interfaces |
 | `src/lower.c`, `src/emit_c.c` | Rewrite/edit lowering and transformation/artifact/CLI emission |
+| `third_party/tree-sitter/` | Pinned, namespaced native Tree-sitter runtime and C grammar payload |
 
 New compiler phases get their own domain module and focused test suite; they are
 not appended to an unrelated implementation merely because the
@@ -179,6 +182,58 @@ borrow bytes from that old snapshot. Invalid/overlapping edits, allocation
 failure, and stale snapshots leave both the workspace and output unchanged. An
 empty batch intentionally creates a new generation with identical content. The
 focused suite is available as `./nob test workspace`.
+
+## Recoverable physical C syntax
+
+`noc_c_parse_tree_build` parses one immutable document snapshot with the pinned
+tree-sitter-c grammar. It publishes a Noc-owned flat preorder tree rather than
+Tree-sitter objects: each `Noc_C_Parse_Node` has a grammar kind, its field name
+within the parent, parent/child/sibling indices, flags, a generation, and an
+exact half-open physical byte range. This layer is intended for editor structure
+and the next AST-mapping phase. It does not preprocess macros, resolve typedef
+names semantically, validate feature policy, or claim that every grammar
+extension is accepted by a Noc target profile.
+
+The translation-unit root always spans the complete retained snapshot. If
+recovery skips an unrecognized leading or trailing byte, child nodes keep the
+grammar engine's exact ranges while the root still provides a whole-document
+source view.
+
+```c
+Noc_C_Parse_Tree tree = {0};
+Noc_C_Parse_Options options = noc_c_parse_default_options();
+
+if (noc_c_parse_tree_build(&document, options, &tree) != NOC_C_PARSE_OK) {
+    /* Invalid arguments, cancellation, limits, or adapter/engine failure. */
+    return 1;
+}
+
+/* Malformed editor text still produces a valid, traversable recovery tree. */
+if (noc_c_parse_tree_has_error(&tree)) {
+    const Noc_C_Parse_Node *root =
+        noc_c_parse_tree_node_at(&tree, noc_c_parse_tree_root(&tree));
+    (void)root;
+}
+noc_c_parse_tree_free(&tree);
+```
+
+Tree handles start as `{0}`, own a cloned source snapshot, and must not be
+shallow-copied. Failed builds preserve an existing output unchanged. Successful
+rebuilds increment the generation and invalidate previous node pointers and
+indices. Missing recovery tokens have zero-width `[offset,offset)` ranges;
+`ERROR`, `MISSING`, and `HAS_ERROR` flags distinguish recovery structure from a
+complete parse. Cancellation is cooperative and published-node/source limits
+bound Noc's adapter work; the pinned upstream runtime retains its documented
+fail-fast policy for its own internal allocation failure.
+
+No Tree-sitter type or numeric grammar symbol is part of the public API. The
+runtime and C grammar are pinned, renamed into Noc's private namespace, and
+amalgamated into `release/noc.h`, including their license notices. Normal builds
+are offline and require no external library. Dependency updates are an explicit
+maintainer operation described in `third_party/README.md`. Because the embedded
+runtime is C, compile the one translation unit that defines
+`NOC_IMPLEMENTATION` as C11; C++ consumers may include the declaration-only
+header and link that C object normally.
 
 ## Preprocessing tokens, directives, and macro policy
 

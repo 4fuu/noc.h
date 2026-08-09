@@ -1254,11 +1254,13 @@ NOCDEF int noc_run_cli(Noc_Context *context, int argc, char **argv)
 #undef NOC__PRIVATE
 
 /*
-   This is free and unencumbered software released into the public domain.
+   Original Noc code is free and unencumbered software released into the public
+   domain. Embedded third-party components retain the licenses reproduced in
+   their generated implementation payload above.
 
    Anyone is free to copy, modify, publish, use, compile, sell, or distribute
-   this software, either in source code form or as a compiled binary, for any
-   purpose, commercial or non-commercial, and by any means.
+   the original Noc code, either in source code form or as a compiled binary,
+   for any purpose, commercial or non-commercial, and by any means.
 
    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND.
 */

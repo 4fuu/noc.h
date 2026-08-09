@@ -1,11 +1,21 @@
-#define NOC_IMPLEMENTATION
-#include "noc.h"
+#include <noc/noc.h>
 
 #include <stdint.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-#define FUZZ_CHECK(condition) do { if (!(condition)) abort(); } while (0)
+#define FUZZ_CHECK(condition)                                                  \
+    do {                                                                       \
+        if (!(condition)) {                                                    \
+            fprintf(stderr,                                                    \
+                    "%s:%d: fuzz invariant failed: %s\n",                    \
+                    __FILE__,                                                  \
+                    __LINE__,                                                  \
+                    #condition);                                               \
+            abort();                                                           \
+        }                                                                      \
+    } while (0)
 
 typedef struct {
     unsigned int selector;
@@ -116,6 +126,9 @@ static void fuzz_workspace(const uint8_t *data, size_t size, unsigned int select
     Noc_Workspace workspace = {0};
     Noc_Document_Snapshot current = {0};
     Noc_Document_Snapshot original = {0};
+    Noc_C_Parse_Tree parse_tree = {0};
+    Noc_C_Parse_Options parse_options = noc_c_parse_default_options();
+    Noc_C_Parse_Status parse_status;
     Noc_Slice source;
     size_t offsets[3];
     size_t index;
@@ -128,6 +141,36 @@ static void fuzz_workspace(const uint8_t *data, size_t size, unsigned int select
                    (Noc_Source_Class)(selector % 4u),
                    &current) == NOC_WORKSPACE_OK);
     FUZZ_CHECK(noc_document_snapshot_clone(&current, &original) == NOC_WORKSPACE_OK);
+    parse_options.max_source_bytes = size == 0 ? 1 : size;
+    parse_options.max_nodes = 4096;
+    parse_status = noc_c_parse_tree_build(&original,
+                                          parse_options,
+                                          &parse_tree);
+    FUZZ_CHECK(parse_status == NOC_C_PARSE_OK ||
+               parse_status == NOC_C_PARSE_LIMIT_EXCEEDED ||
+               parse_status == NOC_C_PARSE_OUT_OF_MEMORY);
+    if (parse_status == NOC_C_PARSE_OK) {
+        size_t node_count = noc_c_parse_tree_node_count(&parse_tree);
+        FUZZ_CHECK(noc_c_parse_tree_is_valid(&parse_tree));
+        FUZZ_CHECK(noc_c_parse_tree_root(&parse_tree) == 0);
+        FUZZ_CHECK(node_count > 0 && node_count <= parse_options.max_nodes);
+        for (index = 0; index < node_count; ++index) {
+            const Noc_C_Parse_Node *node =
+                noc_c_parse_tree_node_at(&parse_tree, index);
+            Noc_Slice spelling;
+            FUZZ_CHECK(node != NULL);
+            FUZZ_CHECK(node->generation ==
+                       noc_c_parse_tree_generation(&parse_tree));
+            FUZZ_CHECK(node->bytes.begin <= node->bytes.end);
+            FUZZ_CHECK(node->bytes.end <= size);
+            FUZZ_CHECK(index == 0
+                           ? node->parent == NOC_C_PARSE_NODE_NONE
+                           : node->parent < index);
+            spelling = noc_c_parse_node_source(&parse_tree, index);
+            FUZZ_CHECK(spelling.data != NULL);
+            FUZZ_CHECK(spelling.count == node->bytes.end - node->bytes.begin);
+        }
+    }
     offsets[0] = 0;
     offsets[1] = size;
     offsets[2] = size == 0 ? 0 : selector % (size + 1);
@@ -153,6 +196,8 @@ static void fuzz_workspace(const uint8_t *data, size_t size, unsigned int select
     FUZZ_CHECK(noc_document_snapshot_source(&original).count == size);
     FUZZ_CHECK(noc_workspace_close_document(&workspace, &current) == NOC_WORKSPACE_OK);
     noc_workspace_deinit(&workspace);
+    noc_c_parse_tree_free(&parse_tree);
+    noc_c_parse_tree_free(&parse_tree);
     noc_document_snapshot_free(&original);
     noc_document_snapshot_free(&current);
 }

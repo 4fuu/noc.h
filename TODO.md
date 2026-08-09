@@ -4,7 +4,7 @@ This file is the long-running implementation checklist. A milestone is checked
 only after its interfaces have tests or examples, the complete local suite
 passes, and the milestone has been committed and pushed.
 
-The 0.19 public API remains the compatibility baseline while the 0.40
+The 0.19 public API remains the compatibility baseline while the 0.41
 compiler frontend is built. Dialect inputs continue to use ordinary `.c` and
 `.h` names. Development code may be split into normal C modules, but releases
 must be generated reproducibly as one self-contained `noc.h`.
@@ -210,6 +210,19 @@ must be generated reproducibly as one self-contained `noc.h`.
 
 ## Milestone 9 — complete lossless ISO C11 parser and AST
 
+- [x] Pin, authenticate, namespace, license, and deterministically vendor the
+      native Tree-sitter runtime and tree-sitter-c grammar without exposing
+      Tree-sitter types or requiring a release-header consumer dependency.
+- [x] Add an owning recoverable physical C concrete-syntax tree with flat
+      preorder traversal, grammar fields, half-open byte ranges, error/missing
+      nodes, immutable snapshots, generations, bounded flattening, cancellation,
+      and transactional rebuilds.
+- [x] Add independently runnable parse-tree, malformed-editor-input,
+      lifecycle/limit, dependency-coexistence, module, and final single-header
+      runtime tests.
+- [ ] Map the concrete grammar tree into stable Noc-owned C AST kinds and retain
+      preprocessing-token provenance; do not expose grammar symbol IDs as the
+      semantic compiler contract.
 - [ ] Replace lightweight C structure analysis with a grammar-complete parser for
       declarations/declarators, initializers, statements, and expressions.
 - [ ] Parse structs/unions/enums, bit-fields, compound literals, designated

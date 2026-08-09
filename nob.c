@@ -20,10 +20,16 @@
 #define NOC_RELEASE_HEADER "release/noc.h"
 #define NOC_AMALGAMATE "build/amalgamate" NOC_EXE
 #define NOC_MODULES_TEST "build/noc-test-modules" NOC_EXE
+#if defined(_WIN32)
+#define NOC_IMPLEMENTATION_OBJECT "build/noc-implementation.obj"
+#else
+#define NOC_IMPLEMENTATION_OBJECT "build/noc-implementation.o"
+#endif
 
 static const char *amalgamation_sources[] = {
     "include/noc/noc.h",
     "src/internal.h",
+    "third_party/tree-sitter/tree_sitter.c",
     "src/lexer.c",
     "src/source.c",
     "src/features.c",
@@ -40,17 +46,19 @@ static const char *amalgamation_sources[] = {
     "src/include_graph.c",
     "src/parser.c",
     "src/ast.c",
+    "src/c_parse.c",
     "src/lower.c",
     "src/emit_c.c",
 };
 
 static const char *implementation_modules[] = {
-    "src/lexer.c", "src/source.c", "src/features.c", "src/macro_directives.c",
+    "third_party/tree-sitter/tree_sitter.c", "src/lexer.c", "src/source.c",
+    "src/features.c", "src/macro_directives.c",
     "src/preprocessor.c", "src/macro_invocations.c", "src/macro_environment.c",
     "src/macro_expansion.c", "src/conditional.c", "src/conditional_groups.c",
     "src/include_control.c", "src/include_resolver.c", "src/include_expansion.c",
-    "src/include_graph.c", "src/parser.c", "src/ast.c", "src/lower.c",
-    "src/emit_c.c",
+    "src/include_graph.c", "src/parser.c", "src/ast.c", "src/c_parse.c",
+    "src/lower.c", "src/emit_c.c",
 };
 
 typedef struct {
@@ -94,6 +102,11 @@ static const Test_Suite test_suites[] = {
     {"lexing", "tests/test_lexing.c", "build/noc-test-lexing" NOC_EXE, false},
     {"syntax", "tests/test_syntax.c", "build/noc-test-syntax" NOC_EXE, false},
     {"c-analysis", "tests/test_c_analysis.c", "build/noc-test-c-analysis" NOC_EXE, false},
+    {"c-parse-tree", "tests/test_c_parse_tree.c", "build/noc-test-c-parse-tree" NOC_EXE, false},
+    {"c-parse-recovery", "tests/test_c_parse_recovery.c", "build/noc-test-c-parse-recovery" NOC_EXE, false},
+    {"c-parse-lifecycle", "tests/test_c_parse_lifecycle.c", "build/noc-test-c-parse-lifecycle" NOC_EXE, false},
+    {"c-parse-cpp-runtime", "tests/test_c_parse_cpp_runtime.c", "build/noc-test-c-parse-cpp-runtime" NOC_EXE, true},
+    {"tree-sitter-coexistence", "tests/test_tree_sitter_coexistence.c", "build/noc-test-tree-sitter-coexistence" NOC_EXE, false},
     {"rewriter", "tests/test_rewriter.c", "build/noc-test-rewriter" NOC_EXE, false},
     {"artifacts", "tests/test_artifacts.c", "build/noc-test-artifacts" NOC_EXE, false},
 };
@@ -229,49 +242,114 @@ static void append_compile_command(Nob_Cmd *command,
                    "-Werror",
                    "-Ibuild/generated",
                    "-Iinclude",
-                   "-I.",
-                   "-x",
-                   compile_as_cpp ? "c++" : "c",
-                   "-o",
-                   output,
-                   source);
+                   "-I.");
+    if (compile_as_cpp) {
+        nob_cmd_append(command, "-x", "c++");
+    }
+    nob_cmd_append(command, "-o", output, source);
+    if (compile_as_cpp) nob_cmd_append(command, "-x", "none");
 #endif
+}
+
+static bool build_implementation_object(void)
+{
+    const char *inputs[] = {NOC_GENERATED_HEADER, "nob.c"};
+    Nob_Cmd command = {0};
+    int rebuild = output_rebuild_state(NOC_IMPLEMENTATION_OBJECT,
+                                       inputs,
+                                       NOB_ARRAY_LEN(inputs));
+    if (rebuild < 0) return false;
+    if (rebuild == 0) return nob_file_exists(NOC_IMPLEMENTATION_OBJECT) > 0;
+#if defined(_MSC_VER) && !defined(__clang__)
+    nob_cmd_append(&command,
+                   "cl.exe",
+                   "/std:c11",
+                   "/W4",
+                   "/WX",
+                   "/nologo",
+                   "/D_CRT_SECURE_NO_WARNINGS",
+                   "/DNOC_IMPLEMENTATION",
+                   "/TC",
+                   "/c",
+                   NOC_GENERATED_HEADER,
+                   nob_temp_sprintf("/Fo:%s", NOC_IMPLEMENTATION_OBJECT));
+#else
+    nob_cmd_append(&command,
+                   compiler(),
+                   "-std=c11",
+                   "-Wall",
+                   "-Wextra",
+                   "-Wpedantic",
+                   "-Werror",
+                   "-DNOC_IMPLEMENTATION",
+                   "-x",
+                   "c",
+                   "-c",
+                   NOC_GENERATED_HEADER,
+                   "-o",
+                   NOC_IMPLEMENTATION_OBJECT);
+#endif
+    return nob_cmd_run(&command);
 }
 
 static bool build_binary(const char *output, const char *source)
 {
-    const char *inputs[] = {source, NOC_GENERATED_HEADER, "nob.c"};
+    const char *inputs[] = {source, NOC_IMPLEMENTATION_OBJECT, "nob.c"};
     Nob_Cmd command = {0};
-    int rebuild = output_rebuild_state(output, inputs, NOB_ARRAY_LEN(inputs));
+    int rebuild;
+    if (!build_implementation_object()) return false;
+    rebuild = output_rebuild_state(output, inputs, NOB_ARRAY_LEN(inputs));
     if (rebuild < 0) return false;
     if (rebuild == 0) {
         return nob_file_exists(output) > 0;
     }
     append_compile_command(&command, output, source, false);
+    nob_cmd_append(&command, NOC_IMPLEMENTATION_OBJECT);
     return nob_cmd_run(&command);
+}
+
+static bool test_suite_links_implementation(const Test_Suite *suite)
+{
+    return strcmp(suite->key, "header-c") != 0 &&
+           strcmp(suite->key, "header-cpp") != 0 &&
+           strcmp(suite->key, "public-header-c") != 0 &&
+           strcmp(suite->key, "public-header-cpp") != 0 &&
+           strcmp(suite->key, "release-header-runtime") != 0;
 }
 
 static bool build_test_suite(const Test_Suite *suite)
 {
-    const char *inputs[] = {
-        suite->source,
-        "tests/test_support.h",
-        "tests/macro_expansion_test_support.h",
-        "tests/include_test_support.h",
-        "tests/include_expansion_test_support.h",
-        "tests/include_graph_test_support.h",
-        "tests/include_control_test_support.h",
-        NOC_GENERATED_HEADER,
-        "nob.c",
-    };
+    const char *inputs[10];
+    size_t inputs_count = 0;
+    bool link_implementation = test_suite_links_implementation(suite);
+    const char *header_input =
+        strcmp(suite->key, "release-header-runtime") == 0
+            ? NOC_RELEASE_HEADER
+            : NOC_GENERATED_HEADER;
     Nob_Cmd command = {0};
-    int rebuild = output_rebuild_state(suite->output, inputs, NOB_ARRAY_LEN(inputs));
+    int rebuild;
+    if (link_implementation && !build_implementation_object()) return false;
+    inputs[inputs_count++] = suite->source;
+    inputs[inputs_count++] = "tests/test_support.h";
+    inputs[inputs_count++] = "tests/macro_expansion_test_support.h";
+    inputs[inputs_count++] = "tests/include_test_support.h";
+    inputs[inputs_count++] = "tests/include_expansion_test_support.h";
+    inputs[inputs_count++] = "tests/include_graph_test_support.h";
+    inputs[inputs_count++] = "tests/include_control_test_support.h";
+    inputs[inputs_count++] = link_implementation
+                                 ? NOC_IMPLEMENTATION_OBJECT
+                                 : header_input;
+    inputs[inputs_count++] = "nob.c";
+    rebuild = output_rebuild_state(suite->output, inputs, inputs_count);
     if (rebuild < 0) return false;
     if (rebuild == 0) return nob_file_exists(suite->output) > 0;
     append_compile_command(&command,
                            suite->output,
                            suite->source,
                            suite->compile_as_cpp);
+    if (link_implementation) {
+        nob_cmd_append(&command, NOC_IMPLEMENTATION_OBJECT);
+    }
     return nob_cmd_run(&command);
 }
 

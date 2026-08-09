@@ -1,6 +1,8 @@
 /* noc.h - a single-header toolkit for building explicit, project-local C dialects
 
-   This software is released into the public domain. See the end of this file.
+   Original Noc code is released into the public domain. Embedded third-party
+   parser components retain their licenses; their complete notices and pinned
+   versions are included in the generated implementation payload.
 
    Quick start:
 
@@ -29,9 +31,9 @@
 #define NOC_H_INCLUDED
 
 #define NOC_VERSION_MAJOR 0
-#define NOC_VERSION_MINOR 40
+#define NOC_VERSION_MINOR 41
 #define NOC_VERSION_PATCH 0
-#define NOC_VERSION "0.40.0"
+#define NOC_VERSION "0.41.0"
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -40,6 +42,7 @@
 
 #define NOC_TOKEN_INDEX_NONE ((size_t)-1)
 #define NOC_SYNTAX_NONE NOC_TOKEN_INDEX_NONE
+#define NOC_C_PARSE_NODE_NONE ((size_t)-1)
 
 #ifndef NOCDEF
 #define NOCDEF extern
@@ -368,6 +371,95 @@ typedef struct {
     Noc_Slice replacement;
 } Noc_Text_Edit;
 
+/* Recoverable physical C syntax for compiler and IDE clients. This parser
+   recognizes the embedded tree-sitter-c grammar over one immutable document
+   snapshot. It does not preprocess macros, select conditional branches, or
+   claim that every grammar extension is enabled by a Noc feature profile;
+   preprocessing, feature validation, semantic analysis, and lowering remain
+   separate phases.
+
+   Byte ranges are half-open [begin,end) positions in the retained physical
+   snapshot. They deliberately are not Noc_Token_Range values: error recovery
+   and zero-width missing nodes need not align with physical tokens, and future
+   macro-expanded ASTs use a separate logical coordinate/provenance domain.
+   Ordinary whitespace is available through the retained snapshot but is not a
+   syntax node. Comments are EXTRA nodes. The translation-unit root spans the
+   complete snapshot even when recovery skips an otherwise unrecognized edge
+   byte; grammar children retain their exact recognized ranges.
+
+   Noc_C_Parse_Tree is an owning handle initialized with {0}. Do not shallow
+   copy it. A successful build retains its own snapshot and transactionally
+   replaces output; invalid input, cancellation, limits, adapter allocation
+   failure, and engine failure preserve the previous tree and generation.
+   Recoverable malformed/incomplete editor input is a successful build whose
+   nodes carry ERROR, MISSING, and HAS_ERROR flags. A successful rebuild
+   increments tree.generation and invalidates all earlier node pointers and
+   indices; each published node records the generation in which it is valid.
+
+   Builds use a fresh parser and have no mutable global parser state, but one
+   owning tree must not be read while another thread rebuilds or frees it. The
+   node limit bounds the published flat tree, not Tree-sitter's private tree
+   allocation before flattening. Cancellation is cooperative. Allocation
+   failure in Noc's snapshot/node adapter returns OUT_OF_MEMORY; the pinned
+   upstream runtime deliberately retains its fail-fast policy for its own
+   internal positive-size allocations. */
+typedef struct {
+    size_t begin;
+    size_t end;
+} Noc_Byte_Range;
+
+typedef enum {
+    NOC_C_PARSE_OK = 0,
+    NOC_C_PARSE_INVALID_ARGUMENT,
+    NOC_C_PARSE_CANCELLED,
+    NOC_C_PARSE_LIMIT_EXCEEDED,
+    NOC_C_PARSE_GENERATION_EXHAUSTED,
+    NOC_C_PARSE_OUT_OF_MEMORY,
+    NOC_C_PARSE_ENGINE_FAILURE,
+} Noc_C_Parse_Status;
+
+typedef bool (*Noc_C_Parse_Cancel_Fn)(void *user_data);
+
+typedef struct {
+    /* Both limits must be nonzero. Source bytes are also limited by the
+       embedded engine's uint32_t input ABI. */
+    size_t max_source_bytes;
+    size_t max_nodes;
+    Noc_C_Parse_Cancel_Fn should_cancel;
+    void *cancel_user_data;
+} Noc_C_Parse_Options;
+
+enum {
+    NOC_C_PARSE_NODE_NAMED = 1u << 0,
+    NOC_C_PARSE_NODE_EXTRA = 1u << 1,
+    NOC_C_PARSE_NODE_ERROR = 1u << 2,
+    NOC_C_PARSE_NODE_MISSING = 1u << 3,
+    NOC_C_PARSE_NODE_HAS_ERROR = 1u << 4,
+};
+
+typedef struct {
+    Noc_Byte_Range bytes;
+    size_t parent;
+    size_t first_child;
+    size_t last_child;
+    size_t next_sibling;
+    size_t child_count;
+    /* Grammar-layer labels such as "function_definition" and parent fields
+       such as "body". They are immutable borrowed strings owned by Noc's
+       embedded grammar, not stable numeric semantic classifications. */
+    Noc_Slice kind;
+    Noc_Slice field;
+    size_t generation;
+    unsigned int flags;
+} Noc_C_Parse_Node;
+
+typedef struct Noc_C_Parse_Tree_Impl Noc_C_Parse_Tree_Impl;
+
+typedef struct {
+    Noc_C_Parse_Tree_Impl *impl;
+    size_t generation;
+} Noc_C_Parse_Tree;
+
 NOCDEF const char *noc_workspace_status_name(Noc_Workspace_Status status);
 /* init requires an uninitialized or deinitialized workspace. Workspace and
    snapshot operations are not safe concurrently on a shared object graph;
@@ -443,6 +535,32 @@ NOCDEF Noc_Workspace_Status noc_document_snapshot_offset(
     size_t line,
     size_t byte_column,
     size_t *output);
+
+NOCDEF Noc_C_Parse_Options noc_c_parse_default_options(void);
+NOCDEF const char *noc_c_parse_status_name(Noc_C_Parse_Status status);
+NOCDEF Noc_C_Parse_Status noc_c_parse_tree_build(
+    const Noc_Document_Snapshot *snapshot,
+    Noc_C_Parse_Options options,
+    Noc_C_Parse_Tree *output);
+NOCDEF void noc_c_parse_tree_free(Noc_C_Parse_Tree *tree);
+NOCDEF bool noc_c_parse_tree_is_valid(const Noc_C_Parse_Tree *tree);
+NOCDEF size_t noc_c_parse_tree_generation(const Noc_C_Parse_Tree *tree);
+/* The returned snapshot is a borrowed immutable view retained by tree. */
+NOCDEF const Noc_Document_Snapshot *noc_c_parse_tree_snapshot(
+    const Noc_C_Parse_Tree *tree);
+NOCDEF size_t noc_c_parse_tree_node_count(const Noc_C_Parse_Tree *tree);
+NOCDEF size_t noc_c_parse_tree_root(const Noc_C_Parse_Tree *tree);
+/* Node pointers remain valid only until a successful rebuild or free. */
+NOCDEF const Noc_C_Parse_Node *noc_c_parse_tree_node_at(
+    const Noc_C_Parse_Tree *tree,
+    size_t node_index);
+NOCDEF bool noc_c_parse_tree_has_error(const Noc_C_Parse_Tree *tree);
+/* Invalid tree/index returns {0}; a valid zero-width node returns an empty slice
+   whose data points at its insertion byte in the retained snapshot. */
+NOCDEF Noc_Slice noc_c_parse_node_source(const Noc_C_Parse_Tree *tree,
+                                         size_t node_index);
+NOCDEF Noc_Location noc_c_parse_node_location(const Noc_C_Parse_Tree *tree,
+                                              size_t node_index);
 
 /* Policy-aware preprocessing frontend. Building a unit recognizes source
    directives regardless of whether policy permits them and also publishes a

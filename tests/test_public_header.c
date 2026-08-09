@@ -37,7 +37,7 @@ int main(void)
                    resolver.resolve != NULL &&
                    NOC_INCLUDE_FORM_QUOTED != NOC_INCLUDE_FORM_ANGLED &&
                    NOC_VERSION_MAJOR == 0 &&
-                   NOC_VERSION_MINOR == 40 &&
+                   NOC_VERSION_MINOR == 41 &&
                    NOC_VERSION_PATCH == 0
                ? 0
                : 1;

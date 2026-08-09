@@ -9,6 +9,33 @@ permissions:
   contents: read
 
 jobs:
+  vendored-parser:
+    name: Authenticated vendored parser
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Reproduce and audit Tree-sitter payload
+        run: |
+          set -o pipefail
+          python3 tools/vendor_tree_sitter.py --check
+          cc -std=c11 -Wall -Wextra -Wpedantic -Werror \
+             -DTREE_SITTER_FEATURE_WASM=1 \
+             -DTREE_SITTER_HIDE_SYMBOLS=consumer_flag \
+             -c third_party/tree-sitter/tree_sitter.c \
+             -o tree_sitter_vendor.o
+          nm -g --defined-only tree_sitter_vendor.o > global-symbols
+          awk 'NF && $NF !~ /^noc__vendor_/ {print $NF}' global-symbols \
+            > unexpected-global-symbols
+          test ! -s unexpected-global-symbols
+          nm --defined-only tree_sitter_vendor.o > file-symbols
+          awk 'NF && $NF !~ /^(noc__vendor_.*|Noc__Vendor_.*|NOC__VENDOR_.*|__PRETTY_FUNCTION__(\.[0-9]+)?|empty_state\.[0-9]+|language\.[0-9]+|map\.[0-9]+)$/ {print $NF}' \
+            file-symbols > unexpected-file-symbols
+          test ! -s unexpected-file-symbols
+          readelf -Ws tree_sitter_vendor.o | \
+            awk '($5 == "GLOBAL" && $7 != "UND" && $6 != "HIDDEN") || ($7 == "UND" && $6 == "HIDDEN") {print $8}' \
+            > unexpected-visible-symbols
+          test ! -s unexpected-visible-symbols
+
   native:
     name: ${{ matrix.os }} native toolchain
     runs-on: ${{ matrix.os }}
@@ -75,6 +102,11 @@ jobs:
           cc -o nob nob.c
           ./nob verify-header
           ./nob header
+          common_flags="-std=c11 -Wall -Wextra -Wpedantic -Werror \
+            -fsanitize=address,undefined \
+            -fno-omit-frame-pointer"
+          cc $common_flags -DNOC_IMPLEMENTATION -x c -c release/noc.h \
+             -o build/noc-implementation-sanitize.o
           for suite in workspace preprocessing_tokens macro_directives macro_invocations \
                        macro_environment macro_expansion function_macro_expansion \
                        variadic_macro_expansion macro_stringification macro_token_paste \
@@ -83,27 +115,31 @@ jobs:
                        include_control_queries include_operands include_resolver \
                        include_expansion include_expansion_resolver \
                        include_graph include_graph_limits include_graph_queries \
-                       release_header_runtime \
-                       preprocessor lexing syntax c_analysis rewriter artifacts; do
-            cc -std=c11 -Wall -Wextra -Wpedantic \
-               -fsanitize=address,undefined -fno-omit-frame-pointer \
-               -Ibuild/generated -I. \
-               -o "build/noc-test-${suite}-sanitize" "tests/test_${suite}.c"
+                       preprocessor lexing syntax c_analysis c_parse_tree \
+                       c_parse_recovery c_parse_lifecycle tree_sitter_coexistence \
+                       rewriter artifacts; do
+            cc $common_flags -Ibuild/generated -Iinclude -I. \
+               -o "build/noc-test-${suite}-sanitize" "tests/test_${suite}.c" \
+               build/noc-implementation-sanitize.o
             ASAN_OPTIONS=detect_leaks=1 "./build/noc-test-${suite}-sanitize"
           done
-          cc -std=c11 -Wall -Wextra -Wpedantic \
-             -fsanitize=address,undefined -fno-omit-frame-pointer \
-             -Iinclude -I. -o build/noc-test-modules-sanitize \
-             tests/test_modules.c src/lexer.c src/source.c src/features.c \
+          cc $common_flags -Ibuild/generated -Iinclude -I. \
+             -o build/noc-test-release-header-runtime-sanitize \
+             tests/test_release_header_runtime.c
+          ASAN_OPTIONS=detect_leaks=1 \
+            ./build/noc-test-release-header-runtime-sanitize
+          cc $common_flags -Iinclude -I. -o build/noc-test-modules-sanitize \
+             tests/test_modules.c third_party/tree-sitter/tree_sitter.c \
+             src/lexer.c src/source.c src/features.c \
              src/macro_directives.c src/preprocessor.c src/macro_invocations.c \
              src/macro_environment.c src/macro_expansion.c src/conditional.c \
              src/conditional_groups.c src/include_control.c src/include_resolver.c \
              src/include_expansion.c src/include_graph.c \
-             src/parser.c src/ast.c src/lower.c src/emit_c.c
+             src/parser.c src/ast.c src/c_parse.c src/lower.c src/emit_c.c
           ASAN_OPTIONS=detect_leaks=1 ./build/noc-test-modules-sanitize
-          cc -std=c11 -Wall -Wextra -Wpedantic \
-             -fsanitize=address,undefined -fno-omit-frame-pointer \
-             -Ibuild/generated -I. -o noc-fuzz-sanitize tests/fuzz_noc.c
+          cc $common_flags -Ibuild/generated -Iinclude -I. \
+             -o noc-fuzz-sanitize tests/fuzz_noc.c \
+             build/noc-implementation-sanitize.o
           ASAN_OPTIONS=detect_leaks=1 ./noc-fuzz-sanitize
 
   fuzz:
@@ -117,7 +153,8 @@ jobs:
           ./nob verify-header
           ./nob header
           clang -std=c11 -Wall -Wextra -Wpedantic \
-                -DNOC_LIBFUZZER -fsanitize=fuzzer,address,undefined \
+                -Werror -DNOC_IMPLEMENTATION -DNOC_LIBFUZZER \
+                -fsanitize=fuzzer,address,undefined \
                 -fno-omit-frame-pointer -Ibuild/generated -I. \
                 -o noc-fuzz tests/fuzz_noc.c
           ASAN_OPTIONS=detect_leaks=1 ./noc-fuzz -runs=20000 -max_len=2048

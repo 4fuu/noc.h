@@ -1,8 +1,7 @@
 #ifndef NOC_TEST_SUPPORT_H_INCLUDED
 #define NOC_TEST_SUPPORT_H_INCLUDED
 
-#define NOC_IMPLEMENTATION
-#include "noc.h"
+#include <noc/noc.h>
 
 /* Implementation-only amalgamation helpers must not leak into a consumer TU. */
 #if defined(NOC__MACRO_BUILTIN_BIT) || \
@@ -34,7 +33,8 @@ typedef struct {
     char last_message[160];
 } Diagnostic_State;
 
-static void count_diagnostics(void *user_data, const Noc_Diagnostic *diagnostic)
+static inline void count_diagnostics(void *user_data,
+                                     const Noc_Diagnostic *diagnostic)
 {
     Diagnostic_State *state = (Diagnostic_State *)user_data;
     if (diagnostic->severity == NOC_DIAGNOSTIC_ERROR) {

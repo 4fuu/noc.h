@@ -8,31 +8,91 @@
 #include <windows.h>
 #endif
 
+static int is_redundant_local_include(const unsigned char *line, size_t count)
+{
+    static const char *const includes[] = {
+        "#include \"../include/noc/noc.h\"",
+        "#include \"internal.h\"",
+        "#include \"../third_party/tree-sitter/tree_sitter_private.h\"",
+    };
+    size_t begin = 0;
+    size_t end = count;
+    size_t index;
+    while (begin < end && (line[begin] == ' ' || line[begin] == '\t')) begin += 1;
+    while (end > begin &&
+           (line[end - 1] == ' ' || line[end - 1] == '\t' ||
+            line[end - 1] == '\r' || line[end - 1] == '\n')) {
+        end -= 1;
+    }
+    for (index = 0; index < sizeof(includes) / sizeof(includes[0]); ++index) {
+        size_t include_count = strlen(includes[index]);
+        if (end - begin == include_count &&
+            memcmp(line + begin, includes[index], include_count) == 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 static int copy_file(FILE *output, const char *path)
 {
-    unsigned char buffer[16384];
     FILE *input = fopen(path, "rb");
-    size_t count;
-    int last = '\n';
+    unsigned char *line = NULL;
+    size_t count = 0;
+    size_t capacity = 0;
+    int character;
+    int last_written = '\n';
+    int ok = 1;
     if (!input) {
         fprintf(stderr, "amalgamate: cannot open %s: %s\n", path, strerror(errno));
         return 0;
     }
-    while ((count = fread(buffer, 1, sizeof(buffer), input)) != 0) {
-        last = buffer[count - 1];
-        if (fwrite(buffer, 1, count, output) != count) {
-            fprintf(stderr, "amalgamate: write failed: %s\n", strerror(errno));
-            fclose(input);
-            return 0;
+    while ((character = fgetc(input)) != EOF) {
+        if (count == capacity) {
+            size_t next_capacity = capacity == 0 ? 4096 : capacity * 2;
+            unsigned char *next;
+            if (next_capacity <= capacity) {
+                ok = 0;
+                break;
+            }
+            next = (unsigned char *)realloc(line, next_capacity);
+            if (!next) {
+                ok = 0;
+                break;
+            }
+            line = next;
+            capacity = next_capacity;
+        }
+        line[count++] = (unsigned char)character;
+        if (character == '\n') {
+            if (!is_redundant_local_include(line, count)) {
+                if (fwrite(line, 1, count, output) != count) {
+                    ok = 0;
+                    break;
+                }
+                last_written = '\n';
+            }
+            count = 0;
         }
     }
-    if (ferror(input)) {
+    if (ok && ferror(input)) {
         fprintf(stderr, "amalgamate: cannot read %s: %s\n", path, strerror(errno));
-        fclose(input);
+        ok = 0;
+    }
+    if (ok && count != 0 && !is_redundant_local_include(line, count)) {
+        if (fwrite(line, 1, count, output) != count) {
+            ok = 0;
+        } else {
+            last_written = line[count - 1];
+        }
+    }
+    free(line);
+    if (fclose(input) != 0) ok = 0;
+    if (!ok) {
+        fprintf(stderr, "amalgamate: failed while copying %s\n", path);
         return 0;
     }
-    if (fclose(input) != 0) return 0;
-    return last == '\n' || fputc('\n', output) != EOF;
+    return last_written == '\n' || fputc('\n', output) != EOF;
 }
 
 static int files_equal(const char *left_path, const char *right_path)
