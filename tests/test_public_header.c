@@ -26,6 +26,7 @@ int main(void)
     Noc_C_Grammar_Candidate_Options grammar_options;
     Noc_C_Ast ast;
     Noc_C_Ast_Options ast_options;
+    Noc_Logical_Source_Options logical_source_options;
     Noc_Logical_C_Parse_Tree logical_parse_tree;
     Noc_Logical_C_Parse_Node logical_parse_node;
     Noc_Logical_C_Ast logical_ast;
@@ -41,6 +42,7 @@ int main(void)
     memset(&grammar_options, 0, sizeof(grammar_options));
     memset(&ast, 0, sizeof(ast));
     memset(&ast_options, 0, sizeof(ast_options));
+    memset(&logical_source_options, 0, sizeof(logical_source_options));
     memset(&logical_parse_tree, 0, sizeof(logical_parse_tree));
     memset(&logical_parse_node, 0, sizeof(logical_parse_node));
     memset(&logical_ast, 0, sizeof(logical_ast));
@@ -60,6 +62,7 @@ int main(void)
                    grammar_options.max_candidates == 0 &&
                    ast.generation == 0 &&
                    ast_options.max_nodes == 0 &&
+                   logical_source_options.max_fragments == 0 &&
                    logical_parse_tree.generation == 0 &&
                    logical_parse_node.bytes.begin ==
                        logical_parse_node.bytes.end &&
@@ -73,7 +76,7 @@ int main(void)
                    NOC_INCLUDE_FORM_QUOTED != NOC_INCLUDE_FORM_ANGLED &&
                    NOC_VERSION_MAJOR == 0 &&
                    NOC_VERSION_MINOR == 42 &&
-                   NOC_VERSION_PATCH == 11
+                   NOC_VERSION_PATCH == 12
                ? 0
                : 1;
 }

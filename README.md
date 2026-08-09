@@ -43,6 +43,7 @@ The suite names are `header-c`, `header-cpp`, `public-header-c`,
 `preprocessing-tokens`, `macro-directives`, `macro-environment`,
 `macro-invocations`, `macro-expansion`, `logical-source`,
 `logical-source-lifecycle`, `logical-source-queries`,
+`logical-source-fragments`, `logical-source-fragments-lifecycle`,
 `function-macro-expansion`,
 `variadic-macro-expansion`, `macro-stringification`, `macro-token-paste`,
 `macro-builtins`, `configured-builtins`, `preprocessor-expressions`,
@@ -446,6 +447,15 @@ records are suitable for diagnostics and expansion preview.
 `noc_logical_source_clone` retains one immutable revision without copying its
 bytes, token maps, source-file table, or macro frames.
 
+`noc_logical_source_build_macro_expansions` composes multiple caller-ordered
+expansion fragments in that same owning domain. It interns shared physical unit
+identities, rebases each fragment's nested macro-frame indices, and applies the
+canonical anti-token-pasting separator rule across fragment boundaries. Its
+combined fragment/token/frame/file/path/input-byte budgets, cancellation, and
+transactional publication make it the composition boundary for a later
+conditional/include preprocessing driver; it does not itself decide which
+fragments are active or traverse includes.
+
 `noc_logical_c_parse_tree_build` parses that retained logical text with the same
 embedded recoverable C grammar as the physical CST while publishing a separate
 `Noc_Logical_C_Parse_Node` topology. Its ranges never enter the physical
@@ -479,8 +489,11 @@ hints remain separate from later semantic and feature-policy completion.
 Run source-map/serialization coverage with `./nob test logical-source`,
 ownership/cancellation/generation/limit coverage with `./nob test
 logical-source-lifecycle`, coordinate/range coverage with `./nob test
-logical-source-queries`, logical grammar/provenance coverage with `./nob test
-logical-c-parse`, and retained-revision/transactional coverage with `./nob test
+logical-source-queries`, ordered composition/provenance coverage with `./nob
+test logical-source-fragments`, and its combined limit/stale/transactional
+coverage with `./nob test logical-source-fragments-lifecycle`. Run logical
+grammar/provenance coverage with `./nob test logical-c-parse`, and
+retained-revision/transactional coverage with `./nob test
 logical-c-parse-lifecycle`. Run normalized logical AST/provenance coverage with
 `./nob test logical-c-ast` and its ownership/limit/generation coverage with
 `./nob test logical-c-ast-lifecycle`. Run logical insertion-context and recovery
@@ -1103,10 +1116,10 @@ preprocessing integer-expression evaluation are supported. Recoverable
 conditional-group execution and active-only macro state are available as an
 explicit analysis API;
 translation-configured hosted/date/time built-ins are available without reading
-the host or clock. A durable macro-fragment logical source, recoverable logical C
-CST, and normalized logical AST preserve token-level physical/macro provenance,
-but complete directive/include preprocessing and broader target semantics are
-not integrated.
+the host or clock. Durable ordered macro-fragment composition, a recoverable
+logical C CST, and a normalized logical AST preserve token-level physical/macro
+provenance, but active-fragment selection, complete directive/include
+preprocessing, and broader target semantics are not integrated.
 Rules inside preprocessor directives are left untouched. More
 structured statement and declaration helpers can be added without changing the
 registration model.

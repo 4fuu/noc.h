@@ -61,6 +61,7 @@ static void check_names_defaults_and_empty_expansion(void)
           noc_macro_expansion_default_limits().max_expansions);
     CHECK(options.max_source_files > 1);
     CHECK(options.max_path_bytes > 1);
+    CHECK(options.max_fragments > 1);
     CHECK(!noc_logical_source_is_valid(NULL));
     CHECK(noc_logical_source_generation(NULL) == 0);
     CHECK(noc_logical_source_token_count(NULL) == 0);

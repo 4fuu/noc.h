@@ -14,6 +14,7 @@ enum {
     NOC__LOGICAL_SOURCE_DEFAULT_MAX_FRAMES = 1024 * 1024,
     NOC__LOGICAL_SOURCE_DEFAULT_MAX_FILES = 4096,
     NOC__LOGICAL_SOURCE_DEFAULT_MAX_PATH_BYTES = 16 * 1024 * 1024,
+    NOC__LOGICAL_SOURCE_DEFAULT_MAX_FRAGMENTS = 1024 * 1024,
     NOC__LOGICAL_SOURCE_VALIDATION_INTERVAL = 256,
     NOC__LOGICAL_SOURCE_CANCEL_INTERVAL = 4096,
     /* __STDC_VERSION__ is the longest anchor spelling classified here. */
@@ -248,6 +249,7 @@ NOCDEF Noc_Logical_Source_Options noc_logical_source_default_options(void)
     options.max_macro_frames = NOC__LOGICAL_SOURCE_DEFAULT_MAX_FRAMES;
     options.max_source_files = NOC__LOGICAL_SOURCE_DEFAULT_MAX_FILES;
     options.max_path_bytes = NOC__LOGICAL_SOURCE_DEFAULT_MAX_PATH_BYTES;
+    options.max_fragments = NOC__LOGICAL_SOURCE_DEFAULT_MAX_FRAGMENTS;
     options.should_cancel = NULL;
     options.cancel_user_data = NULL;
     return options;
@@ -979,8 +981,9 @@ static Noc_Logical_Source_Status noc__logical_source_validate_expansion(
     return NOC_LOGICAL_SOURCE_OK;
 }
 
-NOCDEF Noc_Logical_Source_Status noc_logical_source_build_macro_expansion(
-    const Noc_Macro_Expansion *expansion,
+NOCDEF Noc_Logical_Source_Status noc_logical_source_build_macro_expansions(
+    const Noc_Macro_Expansion *const *fragments,
+    size_t fragment_count,
     Noc_Logical_Source_Options options,
     Noc_Logical_Source *output)
 {
@@ -991,17 +994,22 @@ NOCDEF Noc_Logical_Source_Status noc_logical_source_build_macro_expansion(
     Noc_Logical_Source_Status status = NOC_LOGICAL_SOURCE_OK;
     Noc__Line_Map_Status line_status;
     size_t generation;
+    size_t fragment_index;
     size_t index;
+    size_t total_expansion_tokens = 0;
+    size_t total_frame_count = 0;
+    size_t frame_base;
     size_t validation_input_bytes_examined = 0;
     bool saw_significant = false;
     bool saw_nonempty_trivia = false;
 
     memset(&builder, 0, sizeof(builder));
-    if (!expansion || !output || options.max_source_bytes == 0 ||
+    if ((!fragments && fragment_count != 0) || !output ||
+        options.max_source_bytes == 0 ||
         options.max_source_bytes == SIZE_MAX ||
         options.max_input_bytes_examined == 0 || options.max_tokens == 0 ||
         options.max_macro_frames == 0 || options.max_source_files == 0 ||
-        options.max_path_bytes == 0 ||
+        options.max_path_bytes == 0 || options.max_fragments == 0 ||
         (output->impl && !noc__logical_source_handle_is_current(output))) {
         return NOC_LOGICAL_SOURCE_INVALID_ARGUMENT;
     }
@@ -1011,15 +1019,30 @@ NOCDEF Noc_Logical_Source_Status noc_logical_source_build_macro_expansion(
     if (output->generation == SIZE_MAX) {
         return NOC_LOGICAL_SOURCE_GENERATION_EXHAUSTED;
     }
-    if (expansion->count > options.max_tokens ||
-        expansion->frame_count > options.max_macro_frames) {
+    if (fragment_count > options.max_fragments) {
         return NOC_LOGICAL_SOURCE_LIMIT_EXCEEDED;
     }
-    status = noc__logical_source_validate_expansion(
-        expansion,
-        &options,
-        &validation_input_bytes_examined);
-    if (status != NOC_LOGICAL_SOURCE_OK) return status;
+    for (fragment_index = 0;
+         fragment_index < fragment_count;
+         ++fragment_index) {
+        const Noc_Macro_Expansion *expansion = fragments[fragment_index];
+        if (!expansion) return NOC_LOGICAL_SOURCE_INVALID_ARGUMENT;
+        if (noc__logical_source_should_cancel(&options)) {
+            return NOC_LOGICAL_SOURCE_CANCELLED;
+        }
+        if (expansion->count > options.max_tokens - total_expansion_tokens ||
+            expansion->frame_count >
+                options.max_macro_frames - total_frame_count) {
+            return NOC_LOGICAL_SOURCE_LIMIT_EXCEEDED;
+        }
+        total_expansion_tokens += expansion->count;
+        total_frame_count += expansion->frame_count;
+        status = noc__logical_source_validate_expansion(
+            expansion,
+            &options,
+            &validation_input_bytes_examined);
+        if (status != NOC_LOGICAL_SOURCE_OK) return status;
+    }
 
     generation = output->generation + 1;
     built = (Noc_Logical_Source_Impl *)calloc(1, sizeof(*built));
@@ -1030,100 +1053,124 @@ NOCDEF Noc_Logical_Source_Status noc_logical_source_build_macro_expansion(
     builder.options = &options;
     builder.input_bytes_examined = validation_input_bytes_examined;
 
-    if (expansion->frame_count != 0) {
-        if (expansion->frame_count > SIZE_MAX / sizeof(*built->frames)) {
+    if (total_frame_count != 0) {
+        if (total_frame_count > SIZE_MAX / sizeof(*built->frames)) {
             status = NOC_LOGICAL_SOURCE_LIMIT_EXCEEDED;
             goto failed;
         }
         built->frames = (Noc_Logical_Macro_Frame *)malloc(
-            expansion->frame_count * sizeof(*built->frames));
+            total_frame_count * sizeof(*built->frames));
         if (!built->frames) {
             status = NOC_LOGICAL_SOURCE_OUT_OF_MEMORY;
             goto failed;
         }
-        built->frame_count = expansion->frame_count;
+        built->frame_count = total_frame_count;
     }
-    for (index = 0; index < expansion->frame_count; ++index) {
-        const Noc_Macro_Expansion_Frame *source_frame = &expansion->frames[index];
-        const Noc_Macro_Environment_Entry *definition =
-            &expansion->environment->items[
-                source_frame->environment_entry_index];
-        const Noc_Macro_Directive *directive;
-        Noc_Logical_Macro_Frame *frame = &built->frames[index];
-        if (noc__logical_source_should_cancel(&options)) {
-            status = NOC_LOGICAL_SOURCE_CANCELLED;
-            goto failed;
+    frame_base = 0;
+    for (fragment_index = 0;
+         fragment_index < fragment_count;
+         ++fragment_index) {
+        const Noc_Macro_Expansion *expansion = fragments[fragment_index];
+        for (index = 0; index < expansion->frame_count; ++index) {
+            const Noc_Macro_Expansion_Frame *source_frame =
+                &expansion->frames[index];
+            const Noc_Macro_Environment_Entry *definition =
+                &expansion->environment->items[
+                    source_frame->environment_entry_index];
+            const Noc_Macro_Directive *directive;
+            Noc_Logical_Macro_Frame *frame =
+                &built->frames[frame_base + index];
+            if (noc__logical_source_should_cancel(&options)) {
+                status = NOC_LOGICAL_SOURCE_CANCELLED;
+                goto failed;
+            }
+            if (definition->macro_directive_index >=
+                definition->unit->macro_directive_count) {
+                status = NOC_LOGICAL_SOURCE_STALE;
+                goto failed;
+            }
+            directive = &definition->unit->macro_directives[
+                definition->macro_directive_index];
+            status = noc__logical_source_make_site(&builder,
+                                                    definition->unit,
+                                                    directive->name_token_index,
+                                                    &frame->definition);
+            if (status != NOC_LOGICAL_SOURCE_OK) goto failed;
+            status = noc__logical_source_make_site(
+                &builder,
+                source_frame->invocation_unit,
+                source_frame->invocation_token_index,
+                &frame->invocation);
+            if (status != NOC_LOGICAL_SOURCE_OK) goto failed;
+            frame->parent_macro_frame_index =
+                source_frame->parent_frame_index == NOC_TOKEN_INDEX_NONE
+                    ? NOC_TOKEN_INDEX_NONE
+                    : frame_base + source_frame->parent_frame_index;
         }
-        if (definition->macro_directive_index >=
-            definition->unit->macro_directive_count) {
-            status = NOC_LOGICAL_SOURCE_STALE;
-            goto failed;
-        }
-        directive = &definition->unit->macro_directives[
-            definition->macro_directive_index];
-        status = noc__logical_source_make_site(&builder,
-                                                definition->unit,
-                                                directive->name_token_index,
-                                                &frame->definition);
-        if (status != NOC_LOGICAL_SOURCE_OK) goto failed;
-        status = noc__logical_source_make_site(
-            &builder,
-            source_frame->invocation_unit,
-            source_frame->invocation_token_index,
-            &frame->invocation);
-        if (status != NOC_LOGICAL_SOURCE_OK) goto failed;
-        frame->parent_macro_frame_index = source_frame->parent_frame_index;
+        frame_base += expansion->frame_count;
     }
 
-    for (index = 0; index < expansion->count; ++index) {
-        const Noc_Macro_Expansion_Token *source_token = &expansion->items[index];
-        Noc_Logical_Token_Macro_Provenance provenance;
-        size_t begin;
-        bool significant;
-        if (noc__logical_source_should_cancel(&options)) {
-            status = NOC_LOGICAL_SOURCE_CANCELLED;
-            goto failed;
-        }
-        significant = noc__logical_source_is_significant(source_token->token);
-        if (significant && saw_significant && !saw_nonempty_trivia) {
-            status = noc__logical_source_append_separator(built,
-                                                          &text,
-                                                          generation,
-                                                          &options);
+    frame_base = 0;
+    for (fragment_index = 0;
+         fragment_index < fragment_count;
+         ++fragment_index) {
+        const Noc_Macro_Expansion *expansion = fragments[fragment_index];
+        for (index = 0; index < expansion->count; ++index) {
+            const Noc_Macro_Expansion_Token *source_token =
+                &expansion->items[index];
+            Noc_Logical_Token_Macro_Provenance provenance;
+            size_t begin;
+            bool significant;
+            if (noc__logical_source_should_cancel(&options)) {
+                status = NOC_LOGICAL_SOURCE_CANCELLED;
+                goto failed;
+            }
+            significant =
+                noc__logical_source_is_significant(source_token->token);
+            if (significant && saw_significant && !saw_nonempty_trivia) {
+                status = noc__logical_source_append_separator(built,
+                                                              &text,
+                                                              generation,
+                                                              &options);
+                if (status != NOC_LOGICAL_SOURCE_OK) goto failed;
+            }
+            memset(&provenance, 0, sizeof(provenance));
+            status = noc__logical_source_make_site(
+                &builder,
+                source_token->unit,
+                source_token->preprocessing_token_index,
+                &provenance.anchor);
             if (status != NOC_LOGICAL_SOURCE_OK) goto failed;
+            provenance.macro_frame_index =
+                source_token->frame_index == NOC_TOKEN_INDEX_NONE
+                    ? NOC_TOKEN_INDEX_NONE
+                    : frame_base + source_token->frame_index;
+            provenance.macro_origin = source_token->origin;
+            provenance.builtin_kind = source_token->builtin_kind;
+            begin = text.count;
+            status = noc__logical_source_append_logical_spelling(
+                &builder,
+                &text,
+                source_token->token.text);
+            if (status != NOC_LOGICAL_SOURCE_OK) goto failed;
+            status = noc__logical_source_publish_token(built,
+                                                       begin,
+                                                       text.count,
+                                                       source_token->token.kind,
+                                                       0,
+                                                       &provenance,
+                                                       generation,
+                                                       options.max_tokens);
+            if (status != NOC_LOGICAL_SOURCE_OK) goto failed;
+            if (significant) {
+                saw_significant = true;
+                saw_nonempty_trivia = false;
+            } else if (noc_token_is_trivia(source_token->token) &&
+                       begin != text.count) {
+                saw_nonempty_trivia = true;
+            }
         }
-        memset(&provenance, 0, sizeof(provenance));
-        status = noc__logical_source_make_site(
-            &builder,
-            source_token->unit,
-            source_token->preprocessing_token_index,
-            &provenance.anchor);
-        if (status != NOC_LOGICAL_SOURCE_OK) goto failed;
-        provenance.macro_frame_index = source_token->frame_index;
-        provenance.macro_origin = source_token->origin;
-        provenance.builtin_kind = source_token->builtin_kind;
-        begin = text.count;
-        status = noc__logical_source_append_logical_spelling(
-            &builder,
-            &text,
-            source_token->token.text);
-        if (status != NOC_LOGICAL_SOURCE_OK) goto failed;
-        status = noc__logical_source_publish_token(built,
-                                                   begin,
-                                                   text.count,
-                                                   source_token->token.kind,
-                                                   0,
-                                                   &provenance,
-                                                   generation,
-                                                   options.max_tokens);
-        if (status != NOC_LOGICAL_SOURCE_OK) goto failed;
-        if (significant) {
-            saw_significant = true;
-            saw_nonempty_trivia = false;
-        } else if (noc_token_is_trivia(source_token->token) &&
-                   begin != text.count) {
-            saw_nonempty_trivia = true;
-        }
+        frame_base += expansion->frame_count;
     }
     if (noc__logical_source_should_cancel(&options)) {
         status = NOC_LOGICAL_SOURCE_CANCELLED;
@@ -1167,6 +1214,22 @@ failed:
     noc__logical_source_builder_deinit(&builder);
     noc__logical_source_impl_free(built);
     return status;
+}
+
+NOCDEF Noc_Logical_Source_Status noc_logical_source_build_macro_expansion(
+    const Noc_Macro_Expansion *expansion,
+    Noc_Logical_Source_Options options,
+    Noc_Logical_Source *output)
+{
+    const Noc_Macro_Expansion *fragments[1];
+    if (!expansion) return NOC_LOGICAL_SOURCE_INVALID_ARGUMENT;
+    fragments[0] = expansion;
+    /* This bound did not exist in the original singular options contract. */
+    if (options.max_fragments == 0) options.max_fragments = 1;
+    return noc_logical_source_build_macro_expansions(fragments,
+                                                     1,
+                                                     options,
+                                                     output);
 }
 
 NOCDEF Noc_Slice noc_logical_source_text(const Noc_Logical_Source *source)

@@ -252,6 +252,11 @@ must be generated reproducibly as one self-contained `noc.h`.
           exact logical revision, maps nodes to physical/macro token provenance,
           and has separate behavior and lifecycle/transactionality test suites.
           It remains a macro fragment rather than a complete preprocessed unit.
+    - [x] Add bounded, cancellable, transactional composition of ordered macro
+          expansion fragments into one owning logical source, including shared
+          physical-unit interning, cross-fragment anti-pasting separators, and
+          fragment-local macro-frame/provenance index rebasing. Active-fragment
+          selection and include traversal remain preprocessing-driver work.
   - [x] Patch and deterministically regenerate the pinned tree-sitter-c 0.24.2
         grammar for required C11 `_Bool`, `_Complex`, `_Thread_local`, and
         `_Static_assert` spellings, `_Atomic(type-name)`, and anonymous

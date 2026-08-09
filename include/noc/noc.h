@@ -32,8 +32,8 @@
 
 #define NOC_VERSION_MAJOR 0
 #define NOC_VERSION_MINOR 42
-#define NOC_VERSION_PATCH 11
-#define NOC_VERSION "0.42.11"
+#define NOC_VERSION_PATCH 12
+#define NOC_VERSION "0.42.12"
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -1905,10 +1905,10 @@ typedef struct {
 
 /* Owning canonical logical source for later preprocessing-aware C parsing.
    This layer gives macro-expanded tokens their own byte coordinate domain
-   without changing Noc_Byte_Range or any physical CST/AST query. It currently
-   builds one expansion fragment; it does not execute directives, remove
-   conditional branches, traverse includes, or claim to be a complete
-   preprocessed translation unit.
+   without changing Noc_Byte_Range or any physical CST/AST query. It builds one
+   expansion fragment or concatenates caller-ordered fragments; it does not
+   execute directives, remove conditional branches, traverse includes, or claim
+   to be a complete preprocessed translation unit.
 
    Stored token spellings have translation-phase-2 line splices removed. Every
    expansion token is retained in order, including trivia and zero-width
@@ -1998,12 +1998,15 @@ typedef struct {
 typedef bool (*Noc_Logical_Source_Cancel_Fn)(void *user_data);
 
 typedef struct {
-    /* All limits must be nonzero, and max_source_bytes must be less than
-       SIZE_MAX. Source bytes include generated separators but exclude the
-       terminating NUL; max_tokens includes separator tokens.
+    /* All limits must be nonzero for plural fragment composition, and
+       max_source_bytes must be less than SIZE_MAX. The compatibility singular
+       builder treats a zero max_fragments as one. Source bytes include
+       generated separators but exclude the terminating NUL; max_tokens includes
+       separator tokens.
        max_input_bytes_examined bounds physical/generated spelling bytes scanned
        before phase-2 normalization. Path bytes include one NUL per unique source
-       file. */
+       file. max_fragments bounds the ordered input array even when fragments
+       produce no tokens or macro frames. */
     size_t max_source_bytes;
     size_t max_input_bytes_examined;
     size_t max_tokens;
@@ -2012,6 +2015,9 @@ typedef struct {
     size_t max_path_bytes;
     Noc_Logical_Source_Cancel_Fn should_cancel;
     void *cancel_user_data;
+    /* Appended so legacy positional initializers retain their field mapping.
+       The singular build API treats zero as one for source compatibility. */
+    size_t max_fragments;
 } Noc_Logical_Source_Options;
 
 typedef enum {
@@ -2652,6 +2658,20 @@ NOCDEF size_t noc_logical_source_generation(
    generation preserve an existing output exactly. */
 NOCDEF Noc_Logical_Source_Status noc_logical_source_build_macro_expansion(
     const Noc_Macro_Expansion *expansion,
+    Noc_Logical_Source_Options options,
+    Noc_Logical_Source *output);
+/* Concatenates ordered, independently built macro-expansion fragments into one
+   owning logical coordinate/provenance domain. FRAGMENTS may be NULL only when
+   FRAGMENT_COUNT is zero, which builds an empty logical source. Physical files
+   shared by fragment handles are interned once. Fragment-local macro frames are
+   appended in order and parent/token frame indices are rebased accordingly.
+   Canonical generated separators are inserted across fragment boundaries under
+   the same anti-token-pasting rule as within one expansion. All limits and
+   cancellation apply to the combined result; failure preserves OUTPUT. The
+   fragment array and expansions are borrowed only for this call. */
+NOCDEF Noc_Logical_Source_Status noc_logical_source_build_macro_expansions(
+    const Noc_Macro_Expansion *const *fragments,
+    size_t fragment_count,
     Noc_Logical_Source_Options options,
     Noc_Logical_Source *output);
 /* Owned, NUL-terminated text; the NUL is excluded from count. Invalid or stale
