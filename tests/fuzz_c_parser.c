@@ -443,8 +443,16 @@ static void fuzz_c_parser(const uint8_t *data, size_t size)
     Noc_C_Parse_Options parse_options = noc_c_parse_default_options();
     Noc_C_Parse_Status parse_status;
     uint64_t first_tree_hash;
-    uint64_t first_candidates_hash;
+    uint64_t first_candidates_hash = 0;
     size_t first_tree_generation;
+    /* Retained-state grammar lookahead is intentionally much more expensive
+       than topology validation. Focused completion tests cover every offset;
+       fuzzing samples it deterministically so a 20k-input sanitizer campaign
+       still exercises arbitrary malformed trees without multiplying every
+       input by six complete lookahead passes. Empty input always participates. */
+    bool check_candidates =
+        size == 0 ||
+        (hash_bytes(UINT64_C(1469598103934665603), data, size) & 15u) == 0;
 
     noc_workspace_init(&workspace);
     FUZZ_CHECK(noc_workspace_open_document(&workspace,
@@ -464,7 +472,9 @@ static void fuzz_c_parser(const uint8_t *data, size_t size)
         Noc_C_Ast_Status ast_status;
         check_parse_topology(&tree, data, size);
         first_tree_hash = parse_tree_hash(&tree);
-        first_candidates_hash = grammar_candidates_hash(&tree, size);
+        if (check_candidates) {
+            first_candidates_hash = grammar_candidates_hash(&tree, size);
+        }
         first_tree_generation = noc_c_parse_tree_generation(&tree);
 
         ast_options.max_nodes = C_PARSER_FUZZ_MAX_NODES;
@@ -485,8 +495,10 @@ static void fuzz_c_parser(const uint8_t *data, size_t size)
                        first_tree_generation + 1);
             check_parse_topology(&tree, data, size);
             FUZZ_CHECK(parse_tree_hash(&tree) == first_tree_hash);
-            FUZZ_CHECK(grammar_candidates_hash(&tree, size) ==
-                       first_candidates_hash);
+            if (check_candidates) {
+                FUZZ_CHECK(grammar_candidates_hash(&tree, size) ==
+                           first_candidates_hash);
+            }
             FUZZ_CHECK(noc_c_ast_build(&tree, ast_options, &ast) ==
                        NOC_C_AST_OK);
             FUZZ_CHECK(noc_c_ast_generation(&ast) == first_ast_generation + 1);
