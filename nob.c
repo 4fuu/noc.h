@@ -225,13 +225,12 @@ static void append_compile_command(Nob_Cmd *command,
                    "/WX",
                    "/nologo",
                    "/D_CRT_SECURE_NO_WARNINGS",
-                   compile_as_cpp ? "/TP" : "/TC",
                    "/Ibuild/generated",
                    "/Iinclude",
                    "/I.",
                    nob_temp_sprintf("/Fe:%s", output),
                    nob_temp_sprintf("/Fo:%s.obj", output),
-                   source);
+                   nob_temp_sprintf(compile_as_cpp ? "/Tp%s" : "/Tc%s", source));
 #else
     nob_cmd_append(command,
                    compile_as_cpp ? cpp_compiler() : compiler(),
@@ -268,9 +267,8 @@ static bool build_implementation_object(void)
                    "/nologo",
                    "/D_CRT_SECURE_NO_WARNINGS",
                    "/DNOC_IMPLEMENTATION",
-                   "/TC",
                    "/c",
-                   NOC_GENERATED_HEADER,
+                   nob_temp_sprintf("/Tc%s", NOC_GENERATED_HEADER),
                    nob_temp_sprintf("/Fo:%s", NOC_IMPLEMENTATION_OBJECT));
 #else
     nob_cmd_append(&command,
