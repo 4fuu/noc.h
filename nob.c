@@ -350,7 +350,9 @@ static bool test_suite_links_implementation(const Test_Suite *suite)
 
 static bool build_test_suite(const Test_Suite *suite)
 {
-    const char *inputs[10];
+    /* Keep spare capacity so adding a shared test-support dependency cannot
+       silently overwrite the stack before output_rebuild_state sees it. */
+    const char *inputs[16];
     size_t inputs_count = 0;
     bool link_implementation = test_suite_links_implementation(suite);
     const char *header_input =
