@@ -46,6 +46,7 @@ static const char *amalgamation_sources[] = {
     "src/include_resolver.c",
     "src/include_expansion.c",
     "src/include_graph.c",
+    "src/translation.c",
     "src/parser.c",
     "src/ast.c",
     "src/c_parse.c",
@@ -62,7 +63,7 @@ static const char *implementation_modules[] = {
     "src/macro_expansion.c", "src/logical_source.c", "src/conditional.c",
     "src/conditional_groups.c",
     "src/include_control.c", "src/include_resolver.c", "src/include_expansion.c",
-    "src/include_graph.c", "src/parser.c", "src/ast.c", "src/c_parse.c",
+    "src/include_graph.c", "src/translation.c", "src/parser.c", "src/ast.c", "src/c_parse.c",
     "src/logical_c_parse.c", "src/logical_ast.c",
     "src/lower.c", "src/emit_c.c",
 };
@@ -112,6 +113,8 @@ static const Test_Suite test_suites[] = {
     {"include-graph", "tests/test_include_graph.c", "build/noc-test-include-graph" NOC_EXE, false},
     {"include-graph-limits", "tests/test_include_graph_limits.c", "build/noc-test-include-graph-limits" NOC_EXE, false},
     {"include-graph-queries", "tests/test_include_graph_queries.c", "build/noc-test-include-graph-queries" NOC_EXE, false},
+    {"translation-execution", "tests/test_translation_execution.c", "build/noc-test-translation-execution" NOC_EXE, false},
+    {"translation-control", "tests/test_translation_control.c", "build/noc-test-translation-control" NOC_EXE, false},
     {"release-header-runtime", "tests/test_release_header_runtime.c", "build/noc-test-release-header-runtime" NOC_EXE, false},
     {"preprocessor", "tests/test_preprocessor.c", "build/noc-test-preprocessor" NOC_EXE, false},
     {"lexing", "tests/test_lexing.c", "build/noc-test-lexing" NOC_EXE, false},
@@ -365,6 +368,7 @@ static bool build_test_suite(const Test_Suite *suite)
     inputs[inputs_count++] = "tests/include_graph_test_support.h";
     inputs[inputs_count++] = "tests/include_control_test_support.h";
     inputs[inputs_count++] = "tests/preprocessor_logical_source_test_support.h";
+    inputs[inputs_count++] = "tests/translation_test_support.h";
     inputs[inputs_count++] = link_implementation
                                  ? NOC_IMPLEMENTATION_OBJECT
                                  : header_input;

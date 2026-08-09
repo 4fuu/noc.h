@@ -32,8 +32,8 @@
 
 #define NOC_VERSION_MAJOR 0
 #define NOC_VERSION_MINOR 42
-#define NOC_VERSION_PATCH 15
-#define NOC_VERSION "0.42.15"
+#define NOC_VERSION_PATCH 16
+#define NOC_VERSION "0.42.16"
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -2072,6 +2072,124 @@ typedef struct {
     Noc_Macro_Expansion_Status expansion_status;
     Noc_Logical_Source_Status logical_source_status;
 } Noc_Preprocessor_Logical_Source_Result;
+
+/* Owning result of ordered preprocessing execution across includes. This is the
+   compiler-facing execution layer; noc_include_graph_build remains the separate
+   conservative discovery/index layer.
+
+   The driver executes active #define/#undef events, C11 conditional groups,
+   direct or macro-expanded #include operands, canonical include guards, and
+   active #pragma once in physical order. Included files execute depth first, so
+   parent macros affect children and child macro effects affect the remainder of
+   the parent. Null directives are ignored. Active #line, #error, #warning,
+   unknown directives, and pragmas other than direct `once` currently return
+   UNSUPPORTED_DIRECTIVE rather than being silently removed. Inactive directives
+   are not resolved or executed. The final logical source contains only active,
+   recursively included, macro-expanded C tokens and can be passed directly to
+   noc_logical_c_parse_tree_build and noc_logical_c_ast_build.
+
+   The host resolver remains responsible for filesystems, include search order,
+   path identity, overlays, and source classification. The default options use
+   NOC_MACROS_TRUSTED_ONLY: project/generated #define and #undef events are
+   retained by syntax inventory but rejected during execution. Select PROJECT or
+   FULL explicitly when the input dialect permits project macros.
+
+   Initialize the handle to {0}, do not shallow-copy it, and release it with
+   noc_preprocessor_translation_free. Cached files are ordered by first
+   discovery (the root is zero). Snapshots, units produced by this build, the
+   final environment entry array, and logical source are owned by the
+   translation. The final environment may still borrow definition units supplied
+   by INITIAL; those external units must remain alive and unchanged for this
+   handle's lifetime. A rebuild cannot use entries borrowed from the same output
+   translation that it would replace.
+
+   Builds are bounded, cancellable through logical_source options, non-recursive
+   in the host C stack, and transactional: failure preserves an existing valid
+   OUTPUT. Exact snapshot revision identity controls caching and cycle detection.
+   Limits count the root as one include occurrence/depth level. */
+typedef struct Noc_Preprocessor_Translation_Impl
+    Noc_Preprocessor_Translation_Impl;
+typedef struct {
+    Noc_Preprocessor_Translation_Impl *impl;
+    size_t generation;
+} Noc_Preprocessor_Translation;
+typedef struct {
+    /* Permission applied independently to every resolver-classified file. */
+    Noc_Macro_Policy macro_policy;
+    /* Shared predefined inputs and per-fragment expansion limits. */
+    Noc_Macro_Expansion_Options macro_expansion;
+    /* Aggregate final-source limits and cooperative cancellation callback. */
+    Noc_Logical_Source_Options logical_source;
+    /* All limits are nonzero; depth and occurrences include the root. */
+    size_t max_include_depth;
+    size_t max_files;
+    size_t max_include_occurrences;
+    size_t max_directives;
+} Noc_Preprocessor_Translation_Options;
+typedef enum {
+    NOC_PREPROCESSOR_TRANSLATION_OK = 0,
+    NOC_PREPROCESSOR_TRANSLATION_INVALID_ARGUMENT,
+    NOC_PREPROCESSOR_TRANSLATION_STALE,
+    NOC_PREPROCESSOR_TRANSLATION_CANCELLED,
+    NOC_PREPROCESSOR_TRANSLATION_LIMIT_EXCEEDED,
+    NOC_PREPROCESSOR_TRANSLATION_CYCLE,
+    NOC_PREPROCESSOR_TRANSLATION_MALFORMED_CONDITIONAL,
+    NOC_PREPROCESSOR_TRANSLATION_UNSUPPORTED_DIRECTIVE,
+    NOC_PREPROCESSOR_TRANSLATION_MACRO_FAILED,
+    NOC_PREPROCESSOR_TRANSLATION_CONDITION_FAILED,
+    NOC_PREPROCESSOR_TRANSLATION_INCLUDE_FAILED,
+    NOC_PREPROCESSOR_TRANSLATION_LOGICAL_SOURCE_FAILED,
+    NOC_PREPROCESSOR_TRANSLATION_GENERATION_EXHAUSTED,
+    NOC_PREPROCESSOR_TRANSLATION_OUT_OF_MEMORY,
+} Noc_Preprocessor_Translation_Status;
+typedef struct {
+    Noc_Preprocessor_Translation_Status status;
+    /* Nested statuses identify the last downstream phase reached. */
+    Noc_Macro_Environment_Status macro_environment_status;
+    Noc_Macro_Expansion_Status macro_expansion_status;
+    Noc_Preprocessor_Expression_Status expression_status;
+    Noc_Include_Operand_Build_Status include_operand_build_status;
+    Noc_Include_Operand_Status include_operand_status;
+    Noc_Include_Resolve_Status include_resolve_status;
+    Noc_Logical_Source_Status logical_source_status;
+    Noc_File_Id problem_file_id;
+    size_t problem_document_generation;
+    size_t problem_directive_index;
+    size_t problem_token_index;
+} Noc_Preprocessor_Translation_Result;
+
+NOCDEF Noc_Preprocessor_Translation_Options
+noc_preprocessor_translation_default_options(void);
+NOCDEF const char *noc_preprocessor_translation_status_name(
+    Noc_Preprocessor_Translation_Status status);
+NOCDEF void noc_preprocessor_translation_free(
+    Noc_Preprocessor_Translation *translation);
+NOCDEF bool noc_preprocessor_translation_is_valid(
+    const Noc_Preprocessor_Translation *translation);
+/* INITIAL may be NULL only when INITIAL_ENTRY_LIMIT is zero. On success the
+   returned status is OK and OUTPUT is replaced. Problem indices are in the
+   reported physical file's directive/preprocessing-token domains; unavailable
+   values are NOC_TOKEN_INDEX_NONE. */
+NOCDEF Noc_Preprocessor_Translation_Result noc_preprocessor_translation_build(
+    Noc_Context *context,
+    const Noc_Document_Snapshot *root,
+    const Noc_Macro_Environment *initial,
+    size_t initial_entry_limit,
+    Noc_Include_Resolver resolver,
+    Noc_Preprocessor_Translation_Options options,
+    Noc_Preprocessor_Translation *output);
+/* All query results are borrowed and remain valid until successful rebuild or
+   free. Out-of-range or invalid-handle queries return NULL/zero. */
+NOCDEF const Noc_Logical_Source *noc_preprocessor_translation_logical_source(
+    const Noc_Preprocessor_Translation *translation);
+NOCDEF const Noc_Macro_Environment *noc_preprocessor_translation_environment(
+    const Noc_Preprocessor_Translation *translation);
+NOCDEF size_t noc_preprocessor_translation_file_count(
+    const Noc_Preprocessor_Translation *translation);
+NOCDEF const Noc_Document_Snapshot *noc_preprocessor_translation_snapshot_at(
+    const Noc_Preprocessor_Translation *translation, size_t index);
+NOCDEF const Noc_Preprocessor_Unit *noc_preprocessor_translation_unit_at(
+    const Noc_Preprocessor_Translation *translation, size_t index);
 
 /* Recoverable C concrete syntax over an owning logical macro-expansion source.
    This is the preprocessing-aware counterpart of Noc_C_Parse_Tree, not a

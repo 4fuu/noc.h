@@ -29,6 +29,9 @@ int main(void)
     Noc_Logical_Source_Options logical_source_options;
     Noc_Preprocessor_Logical_Source_Options preprocessing_options;
     Noc_Preprocessor_Logical_Source_Result preprocessing_result;
+    Noc_Preprocessor_Translation translation;
+    Noc_Preprocessor_Translation_Options translation_options;
+    Noc_Preprocessor_Translation_Result translation_result;
     Noc_Logical_C_Parse_Tree logical_parse_tree;
     Noc_Logical_C_Parse_Node logical_parse_node;
     Noc_Logical_C_Ast logical_ast;
@@ -47,6 +50,9 @@ int main(void)
     memset(&logical_source_options, 0, sizeof(logical_source_options));
     memset(&preprocessing_options, 0, sizeof(preprocessing_options));
     memset(&preprocessing_result, 0, sizeof(preprocessing_result));
+    memset(&translation, 0, sizeof(translation));
+    memset(&translation_options, 0, sizeof(translation_options));
+    memset(&translation_result, 0, sizeof(translation_result));
     memset(&logical_parse_tree, 0, sizeof(logical_parse_tree));
     memset(&logical_parse_node, 0, sizeof(logical_parse_node));
     memset(&logical_ast, 0, sizeof(logical_ast));
@@ -70,6 +76,10 @@ int main(void)
                    preprocessing_options.logical_source.max_fragments == 0 &&
                    preprocessing_result.status ==
                        NOC_PREPROCESSOR_LOGICAL_SOURCE_OK &&
+                   translation.generation == 0 &&
+                   translation_options.max_files == 0 &&
+                   translation_result.status ==
+                       NOC_PREPROCESSOR_TRANSLATION_OK &&
                    logical_parse_tree.generation == 0 &&
                    logical_parse_node.bytes.begin ==
                        logical_parse_node.bytes.end &&
@@ -83,7 +93,7 @@ int main(void)
                    NOC_INCLUDE_FORM_QUOTED != NOC_INCLUDE_FORM_ANGLED &&
                    NOC_VERSION_MAJOR == 0 &&
                    NOC_VERSION_MINOR == 42 &&
-                   NOC_VERSION_PATCH == 15
+                   NOC_VERSION_PATCH == 16
                ? 0
                : 1;
 }

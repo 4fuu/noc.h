@@ -199,8 +199,10 @@ must be generated reproducibly as one self-contained `noc.h`.
     - [x] Add a structural-only canonical guard classifier that balances nested
           directives without evaluating conditions or applying macro effects,
           for ordered recursive preprocessing and IDE use.
-  - [ ] Execute duplicate-include suppression and exact cross-file macro effects
-        without weakening graph provenance or bounded recovery.
+  - [x] Execute duplicate-include suppression and exact cross-file macro effects
+        in a separate ordered, heap-framed translation driver without weakening
+        the conservative include graph's analysis contract; publish the final
+        environment, cached physical units, and logical C source transactionally.
   - [x] Publish significant directive-body token ranges and add condition-mode
         macro expansion that preserves `defined` operands with full provenance.
   - [x] Add a bounded C11 preprocessing integer-expression evaluator with
@@ -261,9 +263,9 @@ must be generated reproducibly as one self-contained `noc.h`.
           stable kinds and typed spelling/recovery normalization, retains the
           exact logical revision, maps nodes to physical/macro token provenance,
           and has separate behavior and lifecycle/transactionality test suites.
-          It accepts both composed macro fragments and active single-file
-          preprocessing output; recursively included translation units remain
-          separate work.
+          It accepts composed macro fragments, active single-file preprocessing
+          output, and the ordered recursive translation driver's final logical
+          source.
     - [x] Add bounded, cancellable, transactional composition of ordered macro
           expansion fragments into one owning logical source, including shared
           physical-unit interning, cross-fragment anti-pasting separators, and

@@ -51,6 +51,7 @@ The suite names are `header-c`, `header-cpp`, `public-header-c`,
 `conditional-groups`, `include-operands`, `include-resolver`,
 `include-expansion`, `include-expansion-resolver`,
 `include-graph`, `include-graph-limits`, `include-graph-queries`,
+`translation-execution`, `translation-control`,
 `pragma-once`, `include-guard`, `include-control-queries`,
 `release-header-runtime`,
 `preprocessor`, `lexing`, `syntax`, `c-analysis`, `c-parse-tree`,
@@ -126,6 +127,7 @@ be declared by `src/internal.h`; module-local helpers remain static. Current own
 | `src/include_control.c` | Read-only pragma-once and strict canonical include-guard recognition |
 | `src/include_resolver.c`, `src/include_expansion.c` | Physical/expanded include operands and host-configurable snapshot resolution |
 | `src/include_graph.c` | Bounded conditional include discovery, recursion, cycles, and stable IDE queries |
+| `src/translation.c` | Ordered include execution, cross-file macro state, duplicate suppression, and final logical source |
 | `src/parser.c` | Token cursors/arguments and lossless delimiter/C structure analysis |
 | `src/ast.c` | Stable normalized physical C AST and typed spelling/recovery details |
 | `src/c_parse.c` | Recoverable physical C concrete-syntax adapter and Noc-owned flat node views |
@@ -568,19 +570,41 @@ policy. Its focused suites are `include-expansion` and
 `include-expansion-resolver`.
 
 `noc_include_graph_build` composes those phases into bounded, deterministic
-depth-first discovery using heap-backed traversal frames rather than recursive C
-calls. The graph owns immutable snapshots and per-inclusion
+depth-first conservative discovery using heap-backed traversal frames rather
+than recursive C calls. The graph owns immutable snapshots and per-inclusion
 preprocessor/conditional contexts, records inactive and unknown edges without
 calling the host resolver, detects ancestor cycles, and exposes stable node,
 edge, operand, expansion, and phase-object queries for IDE/LSP indexing. The
 same snapshot may be represented by multiple nodes because each occurrence can
-have a different macro prefix. Since child macro effects are not yet executed
-back into the parent, later affected edges are explicitly
-`UNKNOWN_MACRO_STATE` rather than guessed. Noc still performs no filesystem I/O:
+have a different macro prefix. Since child macro effects are not executed back
+into the parent by this read-only analysis API, later affected edges are
+explicitly `UNKNOWN_MACRO_STATE` rather than guessed. Noc still performs no filesystem I/O:
 the host resolver owns search and overlays. Exercise traversal, bounds and
 transactionality, or query/provenance independently with `./nob test
 include-graph`, `./nob test include-graph-limits`, and `./nob test
 include-graph-queries`.
+
+`noc_preprocessor_translation_build` is the separate compiler execution layer.
+It incrementally evaluates conditionals against one mutable macro environment,
+resolves active direct or macro-expanded includes, executes child files depth
+first, and then resumes the parent with the child's `#define`/`#undef` effects.
+Exact snapshot identity supplies one immutable file cache while heap-backed
+frames represent include occurrences. Canonical guards and active `#pragma
+once` suppress duplicate bodies before exact active-stack cycle detection.
+Inactive includes never call the host resolver. The owning result retains every
+discovered snapshot/unit, its final macro environment, and one ordered logical
+source whose token provenance identifies the physical source file and nested
+macro frames. That source can be parsed immediately with the logical CST/AST
+APIs.
+
+The default is the safe `NOC_MACROS_TRUSTED_ONLY` policy; choose PROJECT or FULL
+explicitly for projects that permit macros in ordinary source. Active `#line`,
+diagnostic/unknown directives, and pragmas other than `once` are currently
+reported as unsupported. Builds are bounded, cancellable, and transactional,
+and Noc still performs no filesystem access outside the supplied resolver.
+Exercise cross-file order/macro/AST behavior with `./nob test
+translation-execution`, and guard/once/cycle/policy behavior with `./nob test
+translation-control`.
 
 `noc_pragma_once_build`, `noc_include_guard_build`, and
 `noc_include_guard_build_structural` provide a separate, read-only
@@ -597,9 +621,9 @@ exact half-open preprocessing-token ranges, recovery states, splice-aware names,
 macro-policy visibility, and owner generations. They neither suppress duplicate
 includes nor mutate macro state. Exercise these contracts independently with
 `./nob test pragma-once`, `./nob test include-guard`, `./nob test
-include-guard-structural`, and `./nob test include-control-queries`. Duplicate
-suppression and exact cross-file macro execution remain later preprocessing
-stages.
+include-guard-structural`, and `./nob test include-control-queries`. The ordered
+translation driver consumes these read-only classifications when it performs
+duplicate suppression and exact cross-file macro execution.
 
 Macro definition permission is explicit:
 

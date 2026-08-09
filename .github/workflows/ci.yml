@@ -140,6 +140,7 @@ jobs:
                        include_control_queries include_operands include_resolver \
                        include_expansion include_expansion_resolver \
                        include_graph include_graph_limits include_graph_queries \
+                       translation_execution translation_control \
                        preprocessor lexing syntax c_analysis c_parse_tree \
                        c_parse_recovery c_parse_lifecycle c_parse_corpus \
                        c_parse_malformed_corpus c_parse_completion \
@@ -168,7 +169,7 @@ jobs:
              src/macro_environment.c src/macro_expansion.c src/logical_source.c \
              src/conditional.c \
              src/conditional_groups.c src/include_control.c src/include_resolver.c \
-             src/include_expansion.c src/include_graph.c \
+             src/include_expansion.c src/include_graph.c src/translation.c \
              src/parser.c src/ast.c src/c_parse.c src/logical_c_parse.c \
              src/logical_ast.c \
              src/lower.c src/emit_c.c
