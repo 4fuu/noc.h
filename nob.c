@@ -90,6 +90,8 @@ static const Test_Suite test_suites[] = {
     {"logical-source-queries", "tests/test_logical_source_queries.c", "build/noc-test-logical-source-queries" NOC_EXE, false},
     {"logical-source-fragments", "tests/test_logical_source_fragments.c", "build/noc-test-logical-source-fragments" NOC_EXE, false},
     {"logical-source-fragments-lifecycle", "tests/test_logical_source_fragments_lifecycle.c", "build/noc-test-logical-source-fragments-lifecycle" NOC_EXE, false},
+    {"preprocessor-logical-source", "tests/test_preprocessor_logical_source.c", "build/noc-test-preprocessor-logical-source" NOC_EXE, false},
+    {"preprocessor-logical-source-lifecycle", "tests/test_preprocessor_logical_source_lifecycle.c", "build/noc-test-preprocessor-logical-source-lifecycle" NOC_EXE, false},
     {"function-macro-expansion", "tests/test_function_macro_expansion.c", "build/noc-test-function-macro-expansion" NOC_EXE, false},
     {"variadic-macro-expansion", "tests/test_variadic_macro_expansion.c", "build/noc-test-variadic-macro-expansion" NOC_EXE, false},
     {"macro-stringification", "tests/test_macro_stringification.c", "build/noc-test-macro-stringification" NOC_EXE, false},
@@ -360,6 +362,7 @@ static bool build_test_suite(const Test_Suite *suite)
     inputs[inputs_count++] = "tests/include_expansion_test_support.h";
     inputs[inputs_count++] = "tests/include_graph_test_support.h";
     inputs[inputs_count++] = "tests/include_control_test_support.h";
+    inputs[inputs_count++] = "tests/preprocessor_logical_source_test_support.h";
     inputs[inputs_count++] = link_implementation
                                  ? NOC_IMPLEMENTATION_OBJECT
                                  : header_input;

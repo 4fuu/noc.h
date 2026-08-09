@@ -188,6 +188,8 @@ NOC__PRIVATE bool noc__macro_expansion_options_are_valid(
     Noc_Macro_Expansion_Options);
 NOC__PRIVATE uint32_t noc__macro_builtin_mask_from_options(
     Noc_Macro_Expansion_Options);
+NOC__PRIVATE bool noc__logical_source_options_are_valid(
+    Noc_Logical_Source_Options);
 NOC__PRIVATE bool noc__macro_builtin_mask_contains(
     uint32_t, Noc_Macro_Builtin_Kind);
 NOC__PRIVATE Noc_Macro_Expansion_Status noc__macro_expansion_build(

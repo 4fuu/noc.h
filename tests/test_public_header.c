@@ -27,6 +27,8 @@ int main(void)
     Noc_C_Ast ast;
     Noc_C_Ast_Options ast_options;
     Noc_Logical_Source_Options logical_source_options;
+    Noc_Preprocessor_Logical_Source_Options preprocessing_options;
+    Noc_Preprocessor_Logical_Source_Result preprocessing_result;
     Noc_Logical_C_Parse_Tree logical_parse_tree;
     Noc_Logical_C_Parse_Node logical_parse_node;
     Noc_Logical_C_Ast logical_ast;
@@ -43,6 +45,8 @@ int main(void)
     memset(&ast, 0, sizeof(ast));
     memset(&ast_options, 0, sizeof(ast_options));
     memset(&logical_source_options, 0, sizeof(logical_source_options));
+    memset(&preprocessing_options, 0, sizeof(preprocessing_options));
+    memset(&preprocessing_result, 0, sizeof(preprocessing_result));
     memset(&logical_parse_tree, 0, sizeof(logical_parse_tree));
     memset(&logical_parse_node, 0, sizeof(logical_parse_node));
     memset(&logical_ast, 0, sizeof(logical_ast));
@@ -63,6 +67,9 @@ int main(void)
                    ast.generation == 0 &&
                    ast_options.max_nodes == 0 &&
                    logical_source_options.max_fragments == 0 &&
+                   preprocessing_options.logical_source.max_fragments == 0 &&
+                   preprocessing_result.status ==
+                       NOC_PREPROCESSOR_LOGICAL_SOURCE_OK &&
                    logical_parse_tree.generation == 0 &&
                    logical_parse_node.bytes.begin ==
                        logical_parse_node.bytes.end &&
@@ -76,7 +83,7 @@ int main(void)
                    NOC_INCLUDE_FORM_QUOTED != NOC_INCLUDE_FORM_ANGLED &&
                    NOC_VERSION_MAJOR == 0 &&
                    NOC_VERSION_MINOR == 42 &&
-                   NOC_VERSION_PATCH == 12
+                   NOC_VERSION_PATCH == 13
                ? 0
                : 1;
 }

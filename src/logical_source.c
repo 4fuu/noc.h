@@ -255,6 +255,16 @@ NOCDEF Noc_Logical_Source_Options noc_logical_source_default_options(void)
     return options;
 }
 
+NOC__PRIVATE bool noc__logical_source_options_are_valid(
+    Noc_Logical_Source_Options options)
+{
+    return options.max_source_bytes != 0 &&
+           options.max_source_bytes != SIZE_MAX &&
+           options.max_input_bytes_examined != 0 && options.max_tokens != 0 &&
+           options.max_macro_frames != 0 && options.max_source_files != 0 &&
+           options.max_path_bytes != 0 && options.max_fragments != 0;
+}
+
 NOCDEF const char *noc_logical_source_status_name(
     Noc_Logical_Source_Status status)
 {
@@ -1005,11 +1015,7 @@ NOCDEF Noc_Logical_Source_Status noc_logical_source_build_macro_expansions(
 
     memset(&builder, 0, sizeof(builder));
     if ((!fragments && fragment_count != 0) || !output ||
-        options.max_source_bytes == 0 ||
-        options.max_source_bytes == SIZE_MAX ||
-        options.max_input_bytes_examined == 0 || options.max_tokens == 0 ||
-        options.max_macro_frames == 0 || options.max_source_files == 0 ||
-        options.max_path_bytes == 0 || options.max_fragments == 0 ||
+        !noc__logical_source_options_are_valid(options) ||
         (output->impl && !noc__logical_source_handle_is_current(output))) {
         return NOC_LOGICAL_SOURCE_INVALID_ARGUMENT;
     }

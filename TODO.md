@@ -204,6 +204,11 @@ must be generated reproducibly as one self-contained `noc.h`.
   - [x] Build recoverable balanced conditional groups and per-token activity from
         evaluator results, with active-only macro updates and conservative loss
         of concrete macro-state knowledge after unknown-path macro events.
+  - [x] Build one owning logical source from a fully resolved physical unit's
+        active non-directive ranges using each range's exact macro prefix, with
+        directive rejection, aggregate limits, cancellation, transactionality,
+        physical/macro provenance, and direct logical CST/AST interoperability.
+        Ordered recursive include execution remains separate work.
 - [ ] Implement disabled, trusted-only, project, and full macro policies without
       leaking system-header implementation macros into project source by default.
 - [ ] Add directive/expansion query APIs for IDE hover, definition, references,
@@ -251,12 +256,15 @@ must be generated reproducibly as one self-contained `noc.h`.
           stable kinds and typed spelling/recovery normalization, retains the
           exact logical revision, maps nodes to physical/macro token provenance,
           and has separate behavior and lifecycle/transactionality test suites.
-          It remains a macro fragment rather than a complete preprocessed unit.
+          It accepts both composed macro fragments and active single-file
+          preprocessing output; recursively included translation units remain
+          separate work.
     - [x] Add bounded, cancellable, transactional composition of ordered macro
           expansion fragments into one owning logical source, including shared
           physical-unit interning, cross-fragment anti-pasting separators, and
-          fragment-local macro-frame/provenance index rebasing. Active-fragment
-          selection and include traversal remain preprocessing-driver work.
+          fragment-local macro-frame/provenance index rebasing. Active single-file
+          fragment selection is complete; include traversal remains
+          preprocessing-driver work.
   - [x] Patch and deterministically regenerate the pinned tree-sitter-c 0.24.2
         grammar for required C11 `_Bool`, `_Complex`, `_Thread_local`, and
         `_Static_assert` spellings, `_Atomic(type-name)`, and anonymous

@@ -32,8 +32,8 @@
 
 #define NOC_VERSION_MAJOR 0
 #define NOC_VERSION_MINOR 42
-#define NOC_VERSION_PATCH 12
-#define NOC_VERSION "0.42.12"
+#define NOC_VERSION_PATCH 13
+#define NOC_VERSION "0.42.13"
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -2037,6 +2037,40 @@ typedef struct {
     size_t generation;
 } Noc_Logical_Source;
 
+/* One-file preprocessing driver options. Use the same macro-expansion semantic
+   inputs that built CONDITIONAL_GROUPS so condition selection and predefined
+   expansion describe one translation. Logical-source limits/cancellation cover
+   active-range discovery and the combined owning output. */
+typedef struct {
+    Noc_Macro_Expansion_Options macro_expansion;
+    Noc_Logical_Source_Options logical_source;
+} Noc_Preprocessor_Logical_Source_Options;
+
+typedef enum {
+    NOC_PREPROCESSOR_LOGICAL_SOURCE_OK = 0,
+    NOC_PREPROCESSOR_LOGICAL_SOURCE_INVALID_ARGUMENT,
+    NOC_PREPROCESSOR_LOGICAL_SOURCE_STALE,
+    NOC_PREPROCESSOR_LOGICAL_SOURCE_UNRESOLVED,
+    NOC_PREPROCESSOR_LOGICAL_SOURCE_UNSUPPORTED_DIRECTIVE,
+    NOC_PREPROCESSOR_LOGICAL_SOURCE_EXPANSION_FAILED,
+    NOC_PREPROCESSOR_LOGICAL_SOURCE_LOGICAL_SOURCE_FAILED,
+    NOC_PREPROCESSOR_LOGICAL_SOURCE_CANCELLED,
+    NOC_PREPROCESSOR_LOGICAL_SOURCE_LIMIT_EXCEEDED,
+    NOC_PREPROCESSOR_LOGICAL_SOURCE_OUT_OF_MEMORY,
+} Noc_Preprocessor_Logical_Source_Status;
+
+/* Returned by value so failure detail never aliases OUTPUT. Problem indices use
+   the input unit's preprocessing-token/directive domains; absent values are
+   NOC_TOKEN_INDEX_NONE. Nested statuses record the exact downstream result
+   whenever expansion or logical-source composition was reached. */
+typedef struct {
+    Noc_Preprocessor_Logical_Source_Status status;
+    size_t problem_directive_index;
+    Noc_Token_Range problem_tokens;
+    Noc_Macro_Expansion_Status expansion_status;
+    Noc_Logical_Source_Status logical_source_status;
+} Noc_Preprocessor_Logical_Source_Result;
+
 /* Recoverable C concrete syntax over an owning logical macro-expansion source.
    This is the preprocessing-aware counterpart of Noc_C_Parse_Tree, not a
    reinterpretation of its physical ranges. Every node uses the separate
@@ -2673,6 +2707,27 @@ NOCDEF Noc_Logical_Source_Status noc_logical_source_build_macro_expansions(
     const Noc_Macro_Expansion *const *fragments,
     size_t fragment_count,
     Noc_Logical_Source_Options options,
+    Noc_Logical_Source *output);
+NOCDEF Noc_Preprocessor_Logical_Source_Options
+noc_preprocessor_logical_source_default_options(void);
+NOCDEF const char *noc_preprocessor_logical_source_status_name(
+    Noc_Preprocessor_Logical_Source_Status status);
+/* Build one fully resolved physical unit's active non-directive text. Conditional
+   analysis supplies exact macro-environment prefixes; inactive branches and
+   executed conditional/macro directives are omitted, then active ranges are
+   expanded and composed into one owning logical source. Active include, pragma,
+   line, diagnostic, unknown, disallowed, or malformed macro directives return
+   UNSUPPORTED_DIRECTIVE instead of being silently ignored. Unresolved or
+   malformed conditional analysis returns UNRESOLVED. This deliberately does
+   not traverse includes; a later translation-unit driver handles unsupported
+   directives and invokes this same per-file boundary. CONDITIONAL_GROUPS, its
+   borrowed units, OUTPUT, and translation-option slices must remain alive and
+   unchanged for the call, including from the cancellation callback. OUTPUT is
+   replaced only on OK and preserved for every other result. */
+NOCDEF Noc_Preprocessor_Logical_Source_Result
+noc_preprocessor_logical_source_build(
+    const Noc_Preprocessor_Conditional_Groups *conditional_groups,
+    Noc_Preprocessor_Logical_Source_Options options,
     Noc_Logical_Source *output);
 /* Owned, NUL-terminated text; the NUL is excluded from count. Invalid or stale
    sources return {0}. */

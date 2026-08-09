@@ -1186,5 +1186,468 @@ NOCDEF bool noc_preprocessor_unit_validate_macro_policy(
     return valid;
 }
 
+typedef struct {
+    Noc_Token_Range tokens;
+    size_t macro_entry_limit;
+} Noc__Preprocessor_Logical_Fragment;
+
+typedef struct {
+    const Noc_Preprocessor_Conditional_Groups *groups;
+    size_t groups_generation;
+    const Noc_Preprocessor_Unit *unit;
+    size_t unit_stream_generation;
+    const Noc_Macro_Environment_Entry *environment_items;
+    size_t environment_generation;
+    size_t environment_count;
+    const Noc_Preprocessor_Activity *token_activities;
+    const size_t *token_macro_entry_limits;
+    const Noc_Preprocessing_Token *preprocessing_tokens;
+    size_t preprocessing_token_count;
+    Noc_Logical_Source *output;
+    Noc_Logical_Source_Impl *output_implementation;
+    size_t output_generation;
+} Noc__Preprocessor_Logical_Checkpoint;
+
+typedef struct {
+    Noc__Preprocessor_Logical_Checkpoint checkpoint;
+    Noc_Logical_Source_Cancel_Fn user_callback;
+    void *user_data;
+    bool stale;
+} Noc__Preprocessor_Logical_Compose_Cancel;
+
+static Noc_Preprocessor_Logical_Source_Result
+noc__preprocessor_logical_source_result(
+    Noc_Preprocessor_Logical_Source_Status status)
+{
+    Noc_Preprocessor_Logical_Source_Result result;
+    memset(&result, 0, sizeof(result));
+    result.status = status;
+    result.problem_directive_index = NOC_TOKEN_INDEX_NONE;
+    result.problem_tokens.begin = NOC_TOKEN_INDEX_NONE;
+    result.problem_tokens.end = NOC_TOKEN_INDEX_NONE;
+    result.expansion_status = NOC_MACRO_EXPANSION_OK;
+    result.logical_source_status = NOC_LOGICAL_SOURCE_OK;
+    return result;
+}
+
+static bool noc__preprocessor_logical_checkpoint_is_current(
+    const Noc__Preprocessor_Logical_Checkpoint *checkpoint)
+{
+    return checkpoint->groups->generation == checkpoint->groups_generation &&
+           checkpoint->groups->unit == checkpoint->unit &&
+           checkpoint->groups->environment.items ==
+               checkpoint->environment_items &&
+           checkpoint->groups->environment.generation ==
+               checkpoint->environment_generation &&
+           checkpoint->groups->environment.count ==
+               checkpoint->environment_count &&
+           checkpoint->groups->token_activities ==
+               checkpoint->token_activities &&
+           checkpoint->groups->token_macro_entry_limits ==
+               checkpoint->token_macro_entry_limits &&
+           checkpoint->unit->stream.generation ==
+               checkpoint->unit_stream_generation &&
+           checkpoint->unit->preprocessing_tokens ==
+               checkpoint->preprocessing_tokens &&
+           checkpoint->unit->preprocessing_token_count ==
+               checkpoint->preprocessing_token_count &&
+           checkpoint->output->impl == checkpoint->output_implementation &&
+           checkpoint->output->generation == checkpoint->output_generation;
+}
+
+static Noc_Preprocessor_Logical_Source_Status
+noc__preprocessor_logical_source_poll(
+    const Noc__Preprocessor_Logical_Checkpoint *checkpoint,
+    Noc_Logical_Source_Options options)
+{
+    bool requested = options.should_cancel &&
+                     options.should_cancel(options.cancel_user_data);
+    if (!noc__preprocessor_logical_checkpoint_is_current(checkpoint)) {
+        return NOC_PREPROCESSOR_LOGICAL_SOURCE_STALE;
+    }
+    if (requested) return NOC_PREPROCESSOR_LOGICAL_SOURCE_CANCELLED;
+    return NOC_PREPROCESSOR_LOGICAL_SOURCE_OK;
+}
+
+static bool noc__preprocessor_logical_compose_should_cancel(void *user_data)
+{
+    Noc__Preprocessor_Logical_Compose_Cancel *cancel =
+        (Noc__Preprocessor_Logical_Compose_Cancel *)user_data;
+    bool requested = cancel->user_callback &&
+                     cancel->user_callback(cancel->user_data);
+    if (!noc__preprocessor_logical_checkpoint_is_current(
+            &cancel->checkpoint)) {
+        cancel->stale = true;
+        return true;
+    }
+    return requested;
+}
+
+static bool noc__preprocessor_logical_fragment_append(
+    Noc__Preprocessor_Logical_Fragment **items,
+    size_t *count,
+    size_t *capacity,
+    Noc__Preprocessor_Logical_Fragment fragment,
+    size_t maximum)
+{
+    Noc__Preprocessor_Logical_Fragment *grown;
+    size_t next_capacity;
+    if (*count >= maximum) return false;
+    if (*count < *capacity) {
+        (*items)[(*count)++] = fragment;
+        return true;
+    }
+    next_capacity = *capacity ? *capacity * 2 : 8;
+    if (next_capacity < *capacity || next_capacity > maximum) {
+        next_capacity = maximum;
+    }
+    if (next_capacity > SIZE_MAX / sizeof(**items)) return false;
+    grown = (Noc__Preprocessor_Logical_Fragment *)realloc(
+        *items,
+        next_capacity * sizeof(**items));
+    if (!grown) return false;
+    *items = grown;
+    *capacity = next_capacity;
+    (*items)[(*count)++] = fragment;
+    return true;
+}
+
+static bool noc__preprocessor_logical_directive_is_executed_locally(
+    const Noc_Preprocessor_Unit *unit,
+    const Noc_Preprocessor_Directive *directive)
+{
+    const Noc_Macro_Directive *macro;
+    switch (directive->kind) {
+    case NOC_PREPROCESSOR_DIRECTIVE_NULL:
+    case NOC_PREPROCESSOR_DIRECTIVE_IF:
+    case NOC_PREPROCESSOR_DIRECTIVE_IFDEF:
+    case NOC_PREPROCESSOR_DIRECTIVE_IFNDEF:
+    case NOC_PREPROCESSOR_DIRECTIVE_ELIF:
+    case NOC_PREPROCESSOR_DIRECTIVE_ELIFDEF:
+    case NOC_PREPROCESSOR_DIRECTIVE_ELIFNDEF:
+    case NOC_PREPROCESSOR_DIRECTIVE_ELSE:
+    case NOC_PREPROCESSOR_DIRECTIVE_ENDIF:
+        return true;
+    case NOC_PREPROCESSOR_DIRECTIVE_DEFINE:
+    case NOC_PREPROCESSOR_DIRECTIVE_UNDEF:
+        if (!directive->macro_definition_allowed ||
+            directive->macro_directive_index >=
+                unit->macro_directive_count) {
+            return false;
+        }
+        macro = &unit->macro_directives[directive->macro_directive_index];
+        return macro->status == NOC_MACRO_DIRECTIVE_STATUS_VALID;
+    case NOC_PREPROCESSOR_DIRECTIVE_INCLUDE:
+    case NOC_PREPROCESSOR_DIRECTIVE_LINE:
+    case NOC_PREPROCESSOR_DIRECTIVE_ERROR:
+    case NOC_PREPROCESSOR_DIRECTIVE_WARNING:
+    case NOC_PREPROCESSOR_DIRECTIVE_PRAGMA:
+    case NOC_PREPROCESSOR_DIRECTIVE_UNKNOWN:
+        return false;
+    }
+    return false;
+}
+
+NOCDEF Noc_Preprocessor_Logical_Source_Options
+noc_preprocessor_logical_source_default_options(void)
+{
+    Noc_Preprocessor_Logical_Source_Options options;
+    options.macro_expansion = noc_macro_expansion_default_options();
+    options.logical_source = noc_logical_source_default_options();
+    return options;
+}
+
+NOCDEF const char *noc_preprocessor_logical_source_status_name(
+    Noc_Preprocessor_Logical_Source_Status status)
+{
+    switch (status) {
+    case NOC_PREPROCESSOR_LOGICAL_SOURCE_OK: return "ok";
+    case NOC_PREPROCESSOR_LOGICAL_SOURCE_INVALID_ARGUMENT:
+        return "invalid-argument";
+    case NOC_PREPROCESSOR_LOGICAL_SOURCE_STALE: return "stale";
+    case NOC_PREPROCESSOR_LOGICAL_SOURCE_UNRESOLVED: return "unresolved";
+    case NOC_PREPROCESSOR_LOGICAL_SOURCE_UNSUPPORTED_DIRECTIVE:
+        return "unsupported-directive";
+    case NOC_PREPROCESSOR_LOGICAL_SOURCE_EXPANSION_FAILED:
+        return "expansion-failed";
+    case NOC_PREPROCESSOR_LOGICAL_SOURCE_LOGICAL_SOURCE_FAILED:
+        return "logical-source-failed";
+    case NOC_PREPROCESSOR_LOGICAL_SOURCE_CANCELLED: return "cancelled";
+    case NOC_PREPROCESSOR_LOGICAL_SOURCE_LIMIT_EXCEEDED:
+        return "limit-exceeded";
+    case NOC_PREPROCESSOR_LOGICAL_SOURCE_OUT_OF_MEMORY:
+        return "out-of-memory";
+    }
+    return "unknown";
+}
+
+NOCDEF Noc_Preprocessor_Logical_Source_Result
+noc_preprocessor_logical_source_build(
+    const Noc_Preprocessor_Conditional_Groups *conditional_groups,
+    Noc_Preprocessor_Logical_Source_Options options,
+    Noc_Logical_Source *output)
+{
+    Noc_Preprocessor_Logical_Source_Result result =
+        noc__preprocessor_logical_source_result(
+            NOC_PREPROCESSOR_LOGICAL_SOURCE_OK);
+    const Noc_Preprocessor_Unit *unit;
+    const Noc_Macro_Environment *environment;
+    Noc__Preprocessor_Logical_Checkpoint checkpoint;
+    Noc__Preprocessor_Logical_Compose_Cancel compose_cancel;
+    Noc__Preprocessor_Logical_Fragment *ranges = NULL;
+    Noc_Macro_Expansion *expansions = NULL;
+    const Noc_Macro_Expansion **expansion_views = NULL;
+    Noc__Preprocessor_Logical_Fragment open_range;
+    size_t range_count = 0;
+    size_t range_capacity = 0;
+    size_t input_bytes_examined = 0;
+    size_t total_expansion_tokens = 0;
+    size_t total_expansion_frames = 0;
+    size_t index;
+    bool range_is_open = false;
+
+    if (!conditional_groups || !output ||
+        !noc__macro_expansion_options_are_valid(options.macro_expansion) ||
+        !noc__logical_source_options_are_valid(options.logical_source) ||
+        (output->impl && !noc_logical_source_is_valid(output))) {
+        result.status = NOC_PREPROCESSOR_LOGICAL_SOURCE_INVALID_ARGUMENT;
+        return result;
+    }
+    if (!noc_preprocessor_conditional_groups_is_valid(conditional_groups)) {
+        result.status = NOC_PREPROCESSOR_LOGICAL_SOURCE_STALE;
+        return result;
+    }
+    unit = conditional_groups->unit;
+    environment = &conditional_groups->environment;
+    memset(&checkpoint, 0, sizeof(checkpoint));
+    checkpoint.groups = conditional_groups;
+    checkpoint.groups_generation = conditional_groups->generation;
+    checkpoint.unit = unit;
+    checkpoint.unit_stream_generation = unit->stream.generation;
+    checkpoint.environment_items = environment->items;
+    checkpoint.environment_generation = environment->generation;
+    checkpoint.environment_count = environment->count;
+    checkpoint.token_activities = conditional_groups->token_activities;
+    checkpoint.token_macro_entry_limits =
+        conditional_groups->token_macro_entry_limits;
+    checkpoint.preprocessing_tokens = unit->preprocessing_tokens;
+    checkpoint.preprocessing_token_count = unit->preprocessing_token_count;
+    checkpoint.output = output;
+    checkpoint.output_implementation = output->impl;
+    checkpoint.output_generation = output->generation;
+
+    result.status = noc__preprocessor_logical_source_poll(
+        &checkpoint,
+        options.logical_source);
+    if (result.status != NOC_PREPROCESSOR_LOGICAL_SOURCE_OK) return result;
+
+    memset(&open_range, 0, sizeof(open_range));
+    for (index = 0; index < unit->preprocessing_token_count; ++index) {
+        const Noc_Preprocessing_Token *token =
+            &unit->preprocessing_tokens[index];
+        Noc_Preprocessor_Activity activity;
+        size_t entry_limit = NOC_TOKEN_INDEX_NONE;
+        bool selected;
+
+        result.status = noc__preprocessor_logical_source_poll(
+            &checkpoint,
+            options.logical_source);
+        if (result.status != NOC_PREPROCESSOR_LOGICAL_SOURCE_OK) goto done;
+        if (token->token.text.count >
+            options.logical_source.max_input_bytes_examined -
+                input_bytes_examined) {
+            result.status =
+                NOC_PREPROCESSOR_LOGICAL_SOURCE_LIMIT_EXCEEDED;
+            goto done;
+        }
+        input_bytes_examined += token->token.text.count;
+        activity = conditional_groups->token_activities[index];
+        if (activity == NOC_PREPROCESSOR_ACTIVITY_UNKNOWN) {
+            result.status = NOC_PREPROCESSOR_LOGICAL_SOURCE_UNRESOLVED;
+            result.problem_tokens.begin = index;
+            result.problem_tokens.end = index + 1;
+            goto done;
+        }
+        if (activity == NOC_PREPROCESSOR_ACTIVITY_ACTIVE &&
+            token->role == NOC_PREPROCESSING_TOKEN_DIRECTIVE_MARKER &&
+            token->directive_index < unit->count &&
+            !noc__preprocessor_logical_directive_is_executed_locally(
+                unit,
+                &unit->items[token->directive_index])) {
+            result.status =
+                NOC_PREPROCESSOR_LOGICAL_SOURCE_UNSUPPORTED_DIRECTIVE;
+            result.problem_directive_index = token->directive_index;
+            result.problem_tokens =
+                unit->items[token->directive_index].preprocessing_tokens;
+            goto done;
+        }
+        selected = activity == NOC_PREPROCESSOR_ACTIVITY_ACTIVE &&
+                   token->role == NOC_PREPROCESSING_TOKEN_SOURCE &&
+                   token->token.kind != NOC_TOKEN_EOF;
+        if (selected) {
+            entry_limit =
+                conditional_groups->token_macro_entry_limits[index];
+            if (entry_limit == NOC_TOKEN_INDEX_NONE) {
+                result.status = NOC_PREPROCESSOR_LOGICAL_SOURCE_UNRESOLVED;
+                result.problem_tokens.begin = index;
+                result.problem_tokens.end = index + 1;
+                goto done;
+            }
+        }
+        if (range_is_open &&
+            (!selected || entry_limit != open_range.macro_entry_limit ||
+             index != open_range.tokens.end)) {
+            if (!noc__preprocessor_logical_fragment_append(
+                    &ranges,
+                    &range_count,
+                    &range_capacity,
+                    open_range,
+                    options.logical_source.max_fragments)) {
+                result.status = range_count >=
+                                        options.logical_source.max_fragments
+                                    ? NOC_PREPROCESSOR_LOGICAL_SOURCE_LIMIT_EXCEEDED
+                                    : NOC_PREPROCESSOR_LOGICAL_SOURCE_OUT_OF_MEMORY;
+                goto done;
+            }
+            range_is_open = false;
+        }
+        if (selected && !range_is_open) {
+            open_range.tokens.begin = index;
+            open_range.tokens.end = index + 1;
+            open_range.macro_entry_limit = entry_limit;
+            range_is_open = true;
+        } else if (selected) {
+            open_range.tokens.end = index + 1;
+        }
+    }
+    if (range_is_open &&
+        !noc__preprocessor_logical_fragment_append(
+            &ranges,
+            &range_count,
+            &range_capacity,
+            open_range,
+            options.logical_source.max_fragments)) {
+        result.status = range_count >= options.logical_source.max_fragments
+                            ? NOC_PREPROCESSOR_LOGICAL_SOURCE_LIMIT_EXCEEDED
+                            : NOC_PREPROCESSOR_LOGICAL_SOURCE_OUT_OF_MEMORY;
+        goto done;
+    }
+    if (!noc_preprocessor_conditional_groups_is_fully_resolved(
+            conditional_groups)) {
+        result.status = NOC_PREPROCESSOR_LOGICAL_SOURCE_UNRESOLVED;
+        goto done;
+    }
+
+    if (range_count > SIZE_MAX / sizeof(*expansions) ||
+        range_count > SIZE_MAX / sizeof(*expansion_views)) {
+        result.status = NOC_PREPROCESSOR_LOGICAL_SOURCE_OUT_OF_MEMORY;
+        goto done;
+    }
+    if (range_count != 0) {
+        expansions = (Noc_Macro_Expansion *)calloc(range_count,
+                                                   sizeof(*expansions));
+        expansion_views = (const Noc_Macro_Expansion **)malloc(
+            range_count * sizeof(*expansion_views));
+        if (!expansions || !expansion_views) {
+            result.status = NOC_PREPROCESSOR_LOGICAL_SOURCE_OUT_OF_MEMORY;
+            goto done;
+        }
+    }
+    for (index = 0; index < range_count; ++index) {
+        result.expansion_status = noc_macro_expansion_build_with_options(
+            environment,
+            ranges[index].macro_entry_limit,
+            unit,
+            ranges[index].tokens,
+            options.macro_expansion,
+            &expansions[index]);
+        if (result.expansion_status != NOC_MACRO_EXPANSION_OK) {
+            result.status = result.expansion_status == NOC_MACRO_EXPANSION_STALE
+                                ? NOC_PREPROCESSOR_LOGICAL_SOURCE_STALE
+                                : NOC_PREPROCESSOR_LOGICAL_SOURCE_EXPANSION_FAILED;
+            result.problem_tokens = ranges[index].tokens;
+            goto done;
+        }
+        if (expansions[index].count >
+                options.logical_source.max_tokens - total_expansion_tokens ||
+            expansions[index].frame_count >
+                options.logical_source.max_macro_frames -
+                    total_expansion_frames) {
+            result.status =
+                NOC_PREPROCESSOR_LOGICAL_SOURCE_LIMIT_EXCEEDED;
+            result.problem_tokens = ranges[index].tokens;
+            goto done;
+        }
+        total_expansion_tokens += expansions[index].count;
+        total_expansion_frames += expansions[index].frame_count;
+        expansion_views[index] = &expansions[index];
+    }
+
+    if (input_bytes_examined ==
+        options.logical_source.max_input_bytes_examined) {
+        if (range_count != 0) {
+            result.status =
+                NOC_PREPROCESSOR_LOGICAL_SOURCE_LIMIT_EXCEEDED;
+            goto done;
+        }
+        /* The empty composer examines no additional bytes but still requires
+           a structurally valid nonzero limit. */
+        options.logical_source.max_input_bytes_examined = 1;
+    } else {
+        options.logical_source.max_input_bytes_examined -=
+            input_bytes_examined;
+    }
+    memset(&compose_cancel, 0, sizeof(compose_cancel));
+    compose_cancel.checkpoint = checkpoint;
+    compose_cancel.user_callback = options.logical_source.should_cancel;
+    compose_cancel.user_data = options.logical_source.cancel_user_data;
+    if (compose_cancel.user_callback) {
+        options.logical_source.should_cancel =
+            noc__preprocessor_logical_compose_should_cancel;
+        options.logical_source.cancel_user_data = &compose_cancel;
+    }
+    result.logical_source_status =
+        noc_logical_source_build_macro_expansions(expansion_views,
+                                                  range_count,
+                                                  options.logical_source,
+                                                  output);
+    if (result.logical_source_status != NOC_LOGICAL_SOURCE_OK) {
+        if (compose_cancel.stale) {
+            result.status = NOC_PREPROCESSOR_LOGICAL_SOURCE_STALE;
+            goto done;
+        }
+        switch (result.logical_source_status) {
+        case NOC_LOGICAL_SOURCE_STALE:
+            result.status = NOC_PREPROCESSOR_LOGICAL_SOURCE_STALE;
+            break;
+        case NOC_LOGICAL_SOURCE_CANCELLED:
+            result.status = NOC_PREPROCESSOR_LOGICAL_SOURCE_CANCELLED;
+            break;
+        case NOC_LOGICAL_SOURCE_LIMIT_EXCEEDED:
+            result.status =
+                NOC_PREPROCESSOR_LOGICAL_SOURCE_LIMIT_EXCEEDED;
+            break;
+        case NOC_LOGICAL_SOURCE_OUT_OF_MEMORY:
+            result.status = NOC_PREPROCESSOR_LOGICAL_SOURCE_OUT_OF_MEMORY;
+            break;
+        default:
+            result.status =
+                NOC_PREPROCESSOR_LOGICAL_SOURCE_LOGICAL_SOURCE_FAILED;
+            break;
+        }
+    }
+
+done:
+    if (expansions) {
+        for (index = 0; index < range_count; ++index) {
+            noc_macro_expansion_free(&expansions[index]);
+        }
+    }
+    free(expansion_views);
+    free(expansions);
+    free(ranges);
+    return result;
+}
+
 #endif /* NOC_PREPROCESSOR_IMPLEMENTATION_INCLUDED */
 #endif /* NOC_IMPLEMENTATION || NOC__INDIVIDUAL_SOURCE */

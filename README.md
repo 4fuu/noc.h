@@ -44,6 +44,7 @@ The suite names are `header-c`, `header-cpp`, `public-header-c`,
 `macro-invocations`, `macro-expansion`, `logical-source`,
 `logical-source-lifecycle`, `logical-source-queries`,
 `logical-source-fragments`, `logical-source-fragments-lifecycle`,
+`preprocessor-logical-source`, `preprocessor-logical-source-lifecycle`,
 `function-macro-expansion`,
 `variadic-macro-expansion`, `macro-stringification`, `macro-token-paste`,
 `macro-builtins`, `configured-builtins`, `preprocessor-expressions`,
@@ -464,9 +465,10 @@ embedded recoverable C grammar as the physical CST while publishing a separate
 token interval; callers then use the retained logical source to inspect each
 token's physical anchor and nested macro frames. The parse tree survives source
 rebuild/free, is transactional, generation-scoped, bounded, and cancellable.
-This bridge still does not execute directives, choose conditional branches,
-traverse includes, or claim that an arbitrary macro fragment is a complete
-preprocessed translation unit.
+This parser bridge does not itself execute directives, choose conditional
+branches, or traverse includes. Its retained source may be either an explicitly
+composed macro fragment or the active single-file output described below;
+neither claims to be a complete recursively included translation unit.
 
 `noc_logical_c_ast_build` maps the logical CST into the same stable Noc-owned
 kinds, fields, operators, spelling details, and recovery vocabulary as the
@@ -475,8 +477,8 @@ and every node can be mapped to contributing logical tokens and from there to
 copied physical sites and nested macro frames. The AST owns its retained logical
 revision, is bounded/cancellable/transactional, and remains valid after the CST
 and all preprocessing inputs are released. It is still a syntax AST for one
-expanded fragment, not typedef/type resolution or complete translation-unit
-preprocessing.
+logical revision, not typedef/type resolution or complete recursive
+translation-unit preprocessing.
 
 `noc_logical_c_ast_completion_context` provides the allocation-free logical
 insertion-point counterpart of the physical AST completion context. It reports
@@ -526,6 +528,23 @@ are not guessed. This distinction lets IDEs inspect incomplete source without
 presenting uncertain branches as semantic success. C23 `#elifdef`/`#elifndef`
 are inventoried but reported as unsupported by the current C11 analysis. Run
 this layer independently with `./nob test conditional-groups`.
+
+`noc_preprocessor_logical_source_build` is the conservative single-file
+orchestration boundary above that analysis. It scans one conditional result in
+physical token order, omits inactive text and executed conditional/`#define`/
+`#undef` directives, expands each active source range against the exact macro
+prefix at that range, and composes the ranges into one owning
+`Noc_Logical_Source` with physical and nested macro provenance. The output can
+be passed directly to the logical CST and AST APIs and remains valid after all
+preprocessing inputs are released. Active includes, pragmas,
+line/diagnostic/unknown directives, policy-disabled or malformed macro
+directives, and unresolved conditional state are rejected rather than silently
+omitted; recursive include execution remains translation-unit-driver work. The
+API is transactional, generation-aware, cancellable, and bounded across
+discovery, aggregate expansion, and composition. Run behavior/provenance/AST
+coverage with `./nob test preprocessor-logical-source` and
+limit/cancellation/stale-output coverage with `./nob test
+preprocessor-logical-source-lifecycle`.
 
 Physical include syntax and host resolution are separate APIs.
 `noc_include_operand_build` classifies each inventoried `#include` as a direct
