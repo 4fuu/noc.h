@@ -264,7 +264,7 @@ static void noc__include_guard_init(Noc_Include_Guard *guard,
     guard->unit = unit;
     guard->unit_stream_generation = unit->stream.generation;
     guard->groups = groups;
-    guard->groups_generation = groups->generation;
+    guard->groups_generation = groups ? groups->generation : 0;
     guard->group_index = NOC_TOKEN_INDEX_NONE;
     guard->branch_index = NOC_TOKEN_INDEX_NONE;
     guard->opener_directive_index = NOC_TOKEN_INDEX_NONE;
@@ -286,20 +286,29 @@ NOCDEF bool noc_include_guard_is_valid(const Noc_Include_Guard *guard)
     size_t directive_count;
     if (!guard || guard->generation == 0 ||
         !noc_preprocessor_unit_is_valid(guard->unit) ||
-        !noc_preprocessor_conditional_groups_is_valid(guard->groups) ||
-        guard->groups->unit != guard->unit ||
         guard->unit_stream_generation != guard->unit->stream.generation ||
-        guard->groups_generation != guard->groups->generation ||
         guard->status < NOC_INCLUDE_GUARD_NONE ||
         guard->status > NOC_INCLUDE_GUARD_NOT_FILE_ENCLOSING) {
         return false;
     }
+    if (guard->groups) {
+        if (!noc_preprocessor_conditional_groups_is_valid(guard->groups) ||
+            guard->groups->unit != guard->unit ||
+            guard->groups_generation != guard->groups->generation) {
+            return false;
+        }
+    } else if (guard->groups_generation != 0 ||
+               guard->group_index != NOC_TOKEN_INDEX_NONE ||
+               guard->branch_index != NOC_TOKEN_INDEX_NONE) {
+        return false;
+    }
     token_count = guard->unit->preprocessing_token_count;
     directive_count = guard->unit->count;
-    if (!noc__include_control_index_is_valid(guard->group_index,
-                                             guard->groups->group_count) ||
-        !noc__include_control_index_is_valid(guard->branch_index,
-                                             guard->groups->branch_count) ||
+    if ((guard->groups &&
+         (!noc__include_control_index_is_valid(guard->group_index,
+                                               guard->groups->group_count) ||
+          !noc__include_control_index_is_valid(guard->branch_index,
+                                               guard->groups->branch_count))) ||
         !noc__include_control_index_is_valid(guard->opener_directive_index,
                                              directive_count) ||
         !noc__include_control_index_is_valid(guard->define_directive_index,
@@ -352,10 +361,9 @@ NOCDEF bool noc_include_guard_is_valid(const Noc_Include_Guard *guard)
     }
     if (guard->status == NOC_INCLUDE_GUARD_CANONICAL) {
         const Noc_Preprocessor_Directive *define;
+        const Noc_Preprocessor_Directive *closer;
         const Noc_Macro_Directive *macro;
-        if (guard->group_index == NOC_TOKEN_INDEX_NONE ||
-            guard->branch_index == NOC_TOKEN_INDEX_NONE ||
-            guard->define_directive_index == NOC_TOKEN_INDEX_NONE ||
+        if (guard->define_directive_index == NOC_TOKEN_INDEX_NONE ||
             guard->closer_directive_index == NOC_TOKEN_INDEX_NONE ||
             guard->guard_name_token_index == NOC_TOKEN_INDEX_NONE ||
             guard->guard_name.data == NULL || guard->guard_name.count == 0 ||
@@ -363,19 +371,31 @@ NOCDEF bool noc_include_guard_is_valid(const Noc_Include_Guard *guard)
             guard->problem_token_index != NOC_TOKEN_INDEX_NONE) {
             return false;
         }
-        group = &guard->groups->groups[guard->group_index];
-        branch = &guard->groups->branches[guard->branch_index];
         define = &guard->unit->items[guard->define_directive_index];
-        if (group->parent_branch_index != NOC_TOKEN_INDEX_NONE ||
-            group->first_branch_index != group->last_branch_index ||
-            group->status != NOC_CONDITIONAL_GROUP_COMPLETE ||
-            branch->directive_kind != NOC_PREPROCESSOR_DIRECTIVE_IFNDEF ||
-            define->kind != NOC_PREPROCESSOR_DIRECTIVE_DEFINE ||
+        closer = &guard->unit->items[guard->closer_directive_index];
+        if (define->kind != NOC_PREPROCESSOR_DIRECTIVE_DEFINE ||
+            closer->kind != NOC_PREPROCESSOR_DIRECTIVE_ENDIF ||
+            guard->preprocessing_tokens.begin != opener->preprocessing_tokens.begin ||
+            guard->preprocessing_tokens.end != closer->preprocessing_tokens.end ||
             define->macro_directive_index == NOC_TOKEN_INDEX_NONE ||
             define->macro_directive_index >=
                 guard->unit->macro_directive_count ||
             define->macro_definition_allowed != guard->definition_allowed) {
             return false;
+        }
+        if (guard->groups) {
+            if (guard->group_index == NOC_TOKEN_INDEX_NONE ||
+                guard->branch_index == NOC_TOKEN_INDEX_NONE) {
+                return false;
+            }
+            group = &guard->groups->groups[guard->group_index];
+            branch = &guard->groups->branches[guard->branch_index];
+            if (group->parent_branch_index != NOC_TOKEN_INDEX_NONE ||
+                group->first_branch_index != group->last_branch_index ||
+                group->status != NOC_CONDITIONAL_GROUP_COMPLETE ||
+                branch->directive_kind != NOC_PREPROCESSOR_DIRECTIVE_IFNDEF) {
+                return false;
+            }
         }
         macro = &guard->unit->macro_directives[
             define->macro_directive_index];
@@ -390,6 +410,23 @@ NOCDEF bool noc_include_guard_is_valid(const Noc_Include_Guard *guard)
     return true;
 }
 
+static bool noc__include_guard_structural_is_opener(
+    Noc_Preprocessor_Directive_Kind kind)
+{
+    return kind == NOC_PREPROCESSOR_DIRECTIVE_IF ||
+           kind == NOC_PREPROCESSOR_DIRECTIVE_IFDEF ||
+           kind == NOC_PREPROCESSOR_DIRECTIVE_IFNDEF;
+}
+
+static bool noc__include_guard_structural_is_peer(
+    Noc_Preprocessor_Directive_Kind kind)
+{
+    return kind == NOC_PREPROCESSOR_DIRECTIVE_ELIF ||
+           kind == NOC_PREPROCESSOR_DIRECTIVE_ELIFDEF ||
+           kind == NOC_PREPROCESSOR_DIRECTIVE_ELIFNDEF ||
+           kind == NOC_PREPROCESSOR_DIRECTIVE_ELSE;
+}
+
 static void noc__include_guard_set_problem(Noc_Include_Guard *guard,
                                            Noc_Include_Guard_Status status,
                                            size_t directive_index,
@@ -400,24 +437,219 @@ static void noc__include_guard_set_problem(Noc_Include_Guard *guard,
     guard->problem_token_index = token_index;
 }
 
-NOCDEF Noc_Include_Control_Build_Status noc_include_guard_build(
+static void noc__include_guard_classify_structural(
     const Noc_Preprocessor_Unit *unit,
-    const Noc_Preprocessor_Conditional_Groups *groups,
-    Noc_Include_Guard *output)
+    Noc_Include_Guard *parsed)
 {
-    Noc_Include_Guard parsed;
     const Noc_Preprocessor_Directive *opener;
-    const Noc_Preprocessor_Conditional_Group *group;
-    const Noc_Preprocessor_Conditional_Branch *branch;
     const Noc_Preprocessor_Directive *define;
     const Noc_Macro_Directive *macro;
     Noc_Token_Range body;
     size_t first;
     size_t second;
     size_t last;
-    size_t group_index;
     size_t content_first;
+    size_t depth;
+    size_t directive_index;
+    size_t peer_index = NOC_TOKEN_INDEX_NONE;
+
+    noc__include_guard_init(parsed, unit, NULL);
+    first = noc__include_control_next_significant(
+        unit, 0, unit->preprocessing_token_count);
+    if (first == NOC_TOKEN_INDEX_NONE ||
+        unit->preprocessing_tokens[first].directive_index ==
+            NOC_TOKEN_INDEX_NONE ||
+        unit->items[unit->preprocessing_tokens[first].directive_index].kind !=
+            NOC_PREPROCESSOR_DIRECTIVE_IFNDEF) {
+        parsed->status = NOC_INCLUDE_GUARD_NONE;
+        return;
+    }
+    parsed->opener_directive_index =
+        unit->preprocessing_tokens[first].directive_index;
+    opener = &unit->items[parsed->opener_directive_index];
+    body = noc_preprocessor_directive_body_tokens(
+        unit, parsed->opener_directive_index);
+    if (body.begin == NOC_TOKEN_INDEX_NONE) {
+        noc__include_guard_set_problem(parsed,
+                                       NOC_INCLUDE_GUARD_INCOMPLETE,
+                                       parsed->opener_directive_index,
+                                       opener->preprocessing_tokens.end - 1);
+        return;
+    }
+    first = noc__include_control_next_significant(unit, body.begin, body.end);
+    if (first == NOC_TOKEN_INDEX_NONE ||
+        unit->preprocessing_tokens[first].token.kind == NOC_TOKEN_INVALID) {
+        noc__include_guard_set_problem(parsed,
+                                       NOC_INCLUDE_GUARD_INCOMPLETE,
+                                       parsed->opener_directive_index,
+                                       first == NOC_TOKEN_INDEX_NONE ?
+                                           body.begin : first);
+        return;
+    }
+    if (unit->preprocessing_tokens[first].token.kind != NOC_TOKEN_IDENTIFIER) {
+        noc__include_guard_set_problem(parsed,
+                                       NOC_INCLUDE_GUARD_MALFORMED,
+                                       parsed->opener_directive_index,
+                                       first);
+        return;
+    }
+    parsed->guard_name_token_index = first;
+    parsed->guard_name = unit->preprocessing_tokens[first].token.text;
+    second = noc__include_control_next_significant(unit, first + 1, body.end);
+    if (second != NOC_TOKEN_INDEX_NONE) {
+        noc__include_guard_set_problem(
+            parsed,
+            unit->preprocessing_tokens[second].token.kind == NOC_TOKEN_INVALID
+                ? NOC_INCLUDE_GUARD_INCOMPLETE
+                : NOC_INCLUDE_GUARD_MALFORMED,
+            parsed->opener_directive_index,
+            second);
+        return;
+    }
+
+    depth = 1;
+    for (directive_index = parsed->opener_directive_index + 1;
+         directive_index < unit->count;
+         ++directive_index) {
+        Noc_Preprocessor_Directive_Kind kind =
+            unit->items[directive_index].kind;
+        if (noc__include_guard_structural_is_opener(kind)) {
+            depth += 1;
+        } else if (kind == NOC_PREPROCESSOR_DIRECTIVE_ENDIF) {
+            depth -= 1;
+            if (depth == 0) {
+                parsed->closer_directive_index = directive_index;
+                break;
+            }
+        } else if (depth == 1 &&
+                   noc__include_guard_structural_is_peer(kind) &&
+                   peer_index == NOC_TOKEN_INDEX_NONE) {
+            peer_index = directive_index;
+        }
+    }
+    if (parsed->closer_directive_index == NOC_TOKEN_INDEX_NONE) {
+        noc__include_guard_set_problem(parsed,
+                                       NOC_INCLUDE_GUARD_INCOMPLETE,
+                                       parsed->opener_directive_index,
+                                       parsed->guard_name_token_index);
+        return;
+    }
+    parsed->preprocessing_tokens.begin = opener->preprocessing_tokens.begin;
+    parsed->preprocessing_tokens.end =
+        unit->items[parsed->closer_directive_index].preprocessing_tokens.end;
+    if (peer_index != NOC_TOKEN_INDEX_NONE) {
+        noc__include_guard_set_problem(parsed,
+                                       NOC_INCLUDE_GUARD_HAS_PEER_BRANCH,
+                                       peer_index,
+                                       NOC_TOKEN_INDEX_NONE);
+        return;
+    }
+    last = noc__include_control_last_significant(
+        unit, 0, unit->preprocessing_token_count);
+    body = noc_preprocessor_directive_body_tokens(
+        unit, parsed->closer_directive_index);
+    if (last == NOC_TOKEN_INDEX_NONE ||
+        unit->preprocessing_tokens[last].directive_index !=
+            parsed->closer_directive_index ||
+        body.begin != NOC_TOKEN_INDEX_NONE) {
+        noc__include_guard_set_problem(
+            parsed,
+            NOC_INCLUDE_GUARD_NOT_FILE_ENCLOSING,
+            last == NOC_TOKEN_INDEX_NONE ? NOC_TOKEN_INDEX_NONE :
+                unit->preprocessing_tokens[last].directive_index,
+            last);
+        return;
+    }
+    content_first = noc__include_control_next_significant(
+        unit,
+        opener->preprocessing_tokens.end,
+        unit->items[parsed->closer_directive_index].preprocessing_tokens.begin);
+    if (content_first == NOC_TOKEN_INDEX_NONE ||
+        unit->preprocessing_tokens[content_first].directive_index ==
+            NOC_TOKEN_INDEX_NONE ||
+        unit->items[unit->preprocessing_tokens[content_first].directive_index].kind !=
+            NOC_PREPROCESSOR_DIRECTIVE_DEFINE) {
+        noc__include_guard_set_problem(
+            parsed,
+            NOC_INCLUDE_GUARD_MISSING_DEFINE,
+            content_first == NOC_TOKEN_INDEX_NONE ?
+                parsed->closer_directive_index :
+                unit->preprocessing_tokens[content_first].directive_index,
+            content_first);
+        return;
+    }
+    parsed->define_directive_index =
+        unit->preprocessing_tokens[content_first].directive_index;
+    define = &unit->items[parsed->define_directive_index];
+    parsed->definition_allowed = define->macro_definition_allowed;
+    if (define->macro_directive_index == NOC_TOKEN_INDEX_NONE ||
+        define->macro_directive_index >= unit->macro_directive_count) {
+        noc__include_guard_set_problem(parsed,
+                                       NOC_INCLUDE_GUARD_MALFORMED,
+                                       parsed->define_directive_index,
+                                       content_first);
+        return;
+    }
+    macro = &unit->macro_directives[define->macro_directive_index];
+    if (macro->status != NOC_MACRO_DIRECTIVE_STATUS_VALID ||
+        macro->kind != NOC_MACRO_DIRECTIVE_DEFINE_OBJECT ||
+        macro->name_token_index >= unit->preprocessing_token_count) {
+        noc__include_guard_set_problem(
+            parsed,
+            macro->status == NOC_MACRO_DIRECTIVE_STATUS_INCOMPLETE ?
+                NOC_INCLUDE_GUARD_INCOMPLETE :
+                NOC_INCLUDE_GUARD_MALFORMED,
+            parsed->define_directive_index,
+            macro->problem_token_index != NOC_TOKEN_INDEX_NONE ?
+                macro->problem_token_index : content_first);
+        return;
+    }
+    if (!noc__slices_logically_equal(
+            parsed->guard_name,
+            unit->preprocessing_tokens[macro->name_token_index].token.text)) {
+        noc__include_guard_set_problem(parsed,
+                                       NOC_INCLUDE_GUARD_NAME_MISMATCH,
+                                       parsed->define_directive_index,
+                                       macro->name_token_index);
+        return;
+    }
+    parsed->status = NOC_INCLUDE_GUARD_CANONICAL;
+}
+
+NOCDEF Noc_Include_Control_Build_Status noc_include_guard_build_structural(
+    const Noc_Preprocessor_Unit *unit,
+    Noc_Include_Guard *output)
+{
+    Noc_Include_Guard parsed;
     size_t generation;
+
+    if (!unit || !output) {
+        return NOC_INCLUDE_CONTROL_BUILD_INVALID_ARGUMENT;
+    }
+    if (!noc_preprocessor_unit_is_valid(unit)) {
+        return NOC_INCLUDE_CONTROL_BUILD_STALE;
+    }
+    if (output->generation == SIZE_MAX) {
+        return NOC_INCLUDE_CONTROL_BUILD_GENERATION_EXHAUSTED;
+    }
+    noc__include_guard_classify_structural(unit, &parsed);
+    generation = output->generation + 1;
+    parsed.generation = generation;
+    *output = parsed;
+    return NOC_INCLUDE_CONTROL_BUILD_OK;
+}
+
+NOCDEF Noc_Include_Control_Build_Status noc_include_guard_build(
+    const Noc_Preprocessor_Unit *unit,
+    const Noc_Preprocessor_Conditional_Groups *groups,
+    Noc_Include_Guard *output)
+{
+    Noc_Include_Guard parsed;
+    const Noc_Preprocessor_Conditional_Group *group;
+    const Noc_Preprocessor_Conditional_Branch *branch;
+    size_t group_index;
+    size_t generation;
+
     if (!unit || !groups || !output) {
         return NOC_INCLUDE_CONTROL_BUILD_INVALID_ARGUMENT;
     }
@@ -432,57 +664,13 @@ NOCDEF Noc_Include_Control_Build_Status noc_include_guard_build(
     if (output->generation == SIZE_MAX) {
         return NOC_INCLUDE_CONTROL_BUILD_GENERATION_EXHAUSTED;
     }
-    noc__include_guard_init(&parsed, unit, groups);
-    first = noc__include_control_next_significant(
-        unit, 0, unit->preprocessing_token_count);
-    if (first == NOC_TOKEN_INDEX_NONE ||
-        unit->preprocessing_tokens[first].directive_index ==
-            NOC_TOKEN_INDEX_NONE ||
-        unit->items[unit->preprocessing_tokens[first].directive_index].kind !=
-            NOC_PREPROCESSOR_DIRECTIVE_IFNDEF) {
-        parsed.status = NOC_INCLUDE_GUARD_NONE;
-        goto publish;
-    }
-    parsed.opener_directive_index =
-        unit->preprocessing_tokens[first].directive_index;
-    opener = &unit->items[parsed.opener_directive_index];
-    body = noc_preprocessor_directive_body_tokens(
-        unit, parsed.opener_directive_index);
-    if (body.begin == NOC_TOKEN_INDEX_NONE) {
-        noc__include_guard_set_problem(&parsed,
-                                       NOC_INCLUDE_GUARD_INCOMPLETE,
-                                       parsed.opener_directive_index,
-                                       opener->preprocessing_tokens.end - 1);
-        goto publish;
-    }
-    first = noc__include_control_next_significant(unit, body.begin, body.end);
-    if (first == NOC_TOKEN_INDEX_NONE ||
-        unit->preprocessing_tokens[first].token.kind == NOC_TOKEN_INVALID) {
-        noc__include_guard_set_problem(&parsed,
-                                       NOC_INCLUDE_GUARD_INCOMPLETE,
-                                       parsed.opener_directive_index,
-                                       first == NOC_TOKEN_INDEX_NONE ?
-                                           body.begin : first);
-        goto publish;
-    }
-    if (unit->preprocessing_tokens[first].token.kind != NOC_TOKEN_IDENTIFIER) {
-        noc__include_guard_set_problem(&parsed,
-                                       NOC_INCLUDE_GUARD_MALFORMED,
-                                       parsed.opener_directive_index,
-                                       first);
-        goto publish;
-    }
-    parsed.guard_name_token_index = first;
-    parsed.guard_name = unit->preprocessing_tokens[first].token.text;
-    second = noc__include_control_next_significant(unit, first + 1, body.end);
-    if (second != NOC_TOKEN_INDEX_NONE) {
-        noc__include_guard_set_problem(
-            &parsed,
-            unit->preprocessing_tokens[second].token.kind == NOC_TOKEN_INVALID
-                ? NOC_INCLUDE_GUARD_INCOMPLETE
-                : NOC_INCLUDE_GUARD_MALFORMED,
-            parsed.opener_directive_index,
-            second);
+    noc__include_guard_classify_structural(unit, &parsed);
+    parsed.groups = groups;
+    parsed.groups_generation = groups->generation;
+    if (parsed.status == NOC_INCLUDE_GUARD_NONE ||
+        parsed.guard_name_token_index == NOC_TOKEN_INDEX_NONE ||
+        (parsed.closer_directive_index == NOC_TOKEN_INDEX_NONE &&
+         parsed.problem_token_index != parsed.guard_name_token_index)) {
         goto publish;
     }
     group_index = noc_preprocessor_conditional_owned_group(
@@ -528,76 +716,6 @@ NOCDEF Noc_Include_Control_Build_Status noc_include_guard_build(
                                        NOC_TOKEN_INDEX_NONE);
         goto publish;
     }
-    last = noc__include_control_last_significant(
-        unit, 0, unit->preprocessing_token_count);
-    body = noc_preprocessor_directive_body_tokens(
-        unit, group->closer_directive_index);
-    if (last == NOC_TOKEN_INDEX_NONE ||
-        unit->preprocessing_tokens[last].directive_index !=
-            group->closer_directive_index ||
-        body.begin != NOC_TOKEN_INDEX_NONE) {
-        noc__include_guard_set_problem(
-            &parsed,
-            NOC_INCLUDE_GUARD_NOT_FILE_ENCLOSING,
-            last == NOC_TOKEN_INDEX_NONE ? NOC_TOKEN_INDEX_NONE :
-                unit->preprocessing_tokens[last].directive_index,
-            last);
-        goto publish;
-    }
-    content_first = noc__include_control_next_significant(
-        unit,
-        opener->preprocessing_tokens.end,
-        unit->items[group->closer_directive_index].preprocessing_tokens.begin);
-    if (content_first == NOC_TOKEN_INDEX_NONE ||
-        unit->preprocessing_tokens[content_first].directive_index ==
-            NOC_TOKEN_INDEX_NONE ||
-        unit->items[unit->preprocessing_tokens[content_first].directive_index].kind !=
-            NOC_PREPROCESSOR_DIRECTIVE_DEFINE) {
-        noc__include_guard_set_problem(
-            &parsed,
-            NOC_INCLUDE_GUARD_MISSING_DEFINE,
-            content_first == NOC_TOKEN_INDEX_NONE ?
-                group->closer_directive_index :
-                unit->preprocessing_tokens[content_first].directive_index,
-            content_first);
-        goto publish;
-    }
-    parsed.define_directive_index =
-        unit->preprocessing_tokens[content_first].directive_index;
-    define = &unit->items[parsed.define_directive_index];
-    parsed.definition_allowed = define->macro_definition_allowed;
-    if (define->macro_directive_index == NOC_TOKEN_INDEX_NONE ||
-        define->macro_directive_index >= unit->macro_directive_count) {
-        noc__include_guard_set_problem(&parsed,
-                                       NOC_INCLUDE_GUARD_MALFORMED,
-                                       parsed.define_directive_index,
-                                       content_first);
-        goto publish;
-    }
-    macro = &unit->macro_directives[define->macro_directive_index];
-    if (macro->status != NOC_MACRO_DIRECTIVE_STATUS_VALID ||
-        macro->kind != NOC_MACRO_DIRECTIVE_DEFINE_OBJECT ||
-        macro->name_token_index >= unit->preprocessing_token_count) {
-        noc__include_guard_set_problem(
-            &parsed,
-            macro->status == NOC_MACRO_DIRECTIVE_STATUS_INCOMPLETE ?
-                NOC_INCLUDE_GUARD_INCOMPLETE :
-                NOC_INCLUDE_GUARD_MALFORMED,
-            parsed.define_directive_index,
-            macro->problem_token_index != NOC_TOKEN_INDEX_NONE ?
-                macro->problem_token_index : content_first);
-        goto publish;
-    }
-    if (!noc__slices_logically_equal(
-            parsed.guard_name,
-            unit->preprocessing_tokens[macro->name_token_index].token.text)) {
-        noc__include_guard_set_problem(&parsed,
-                                       NOC_INCLUDE_GUARD_NAME_MISMATCH,
-                                       parsed.define_directive_index,
-                                       macro->name_token_index);
-        goto publish;
-    }
-    parsed.status = NOC_INCLUDE_GUARD_CANONICAL;
 
 publish:
     generation = output->generation + 1;

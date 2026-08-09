@@ -578,18 +578,24 @@ transactionality, or query/provenance independently with `./nob test
 include-graph`, `./nob test include-graph-limits`, and `./nob test
 include-graph-queries`.
 
-`noc_pragma_once_build` and `noc_include_guard_build` provide a separate,
-read-only include-control recognition layer for preprocessing tools and IDE/LSP
-clients. Pragma recognition accepts only direct, case-sensitive `#pragma once`;
-guard recognition deliberately accepts only a file-enclosing `#ifndef NAME`
-whose first significant guarded construct is an object-like `#define NAME`, with
-no peer branch. Both retain exact half-open preprocessing-token ranges, recovery
-states, splice-aware names, macro-policy visibility, and owner generations.
-They neither suppress duplicate includes nor mutate macro state. Exercise syntax
-and recovery, or query lifetime/transactionality independently with `./nob test
-pragma-once`, `./nob test include-guard`, and `./nob test
-include-control-queries`. Duplicate suppression and exact cross-file macro
-execution remain later preprocessing stages.
+`noc_pragma_once_build`, `noc_include_guard_build`, and
+`noc_include_guard_build_structural` provide a separate, read-only
+include-control recognition layer for preprocessing tools and IDE/LSP clients.
+Pragma recognition accepts only direct, case-sensitive `#pragma once`; guard
+recognition deliberately accepts only a file-enclosing `#ifndef NAME` whose
+first significant guarded construct is an object-like `#define NAME`, with no
+peer branch. The structural guard path balances nested directive kinds but never
+evaluates a condition or reads/mutates a macro environment. Its result therefore
+borrows only the preprocessing unit (`groups == NULL`), making it safe for an
+ordered recursive driver before included-file macro effects are known. The
+conditional-analysis path retains its group links for IDE queries. Both retain
+exact half-open preprocessing-token ranges, recovery states, splice-aware names,
+macro-policy visibility, and owner generations. They neither suppress duplicate
+includes nor mutate macro state. Exercise these contracts independently with
+`./nob test pragma-once`, `./nob test include-guard`, `./nob test
+include-guard-structural`, and `./nob test include-control-queries`. Duplicate
+suppression and exact cross-file macro execution remain later preprocessing
+stages.
 
 Macro definition permission is explicit:
 

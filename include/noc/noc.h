@@ -32,8 +32,8 @@
 
 #define NOC_VERSION_MAJOR 0
 #define NOC_VERSION_MINOR 42
-#define NOC_VERSION_PATCH 13
-#define NOC_VERSION "0.42.13"
+#define NOC_VERSION_PATCH 14
+#define NOC_VERSION "0.42.14"
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -1755,7 +1755,9 @@ typedef struct {
    the strict form. Other statuses retain guard-shaped incomplete or malformed
    editor input without presenting it as a usable include guard. The referenced
    conditional analysis supplies balanced nesting and must have been built from
-   the same unchanged unit. */
+   the same unchanged unit. The structural builder instead balances directive
+   kinds without evaluating conditions; its result has groups == NULL and
+   group_index/branch_index == NOC_TOKEN_INDEX_NONE. */
 typedef enum {
     NOC_INCLUDE_GUARD_NONE = 0,
     NOC_INCLUDE_GUARD_CANONICAL,
@@ -2574,6 +2576,15 @@ NOCDEF Noc_Include_Control_Build_Status noc_pragma_once_build(
     size_t directive_index,
     Noc_Pragma_Once *output);
 NOCDEF bool noc_include_guard_is_valid(const Noc_Include_Guard *guard);
+/* Classify the same strict canonical form using directive structure only. This
+   path never expands/evaluates a condition or reads/mutates a macro environment,
+   so an ordered recursive preprocessor can recognize a file before child include
+   side effects are known. Nested conditional directives are balanced by kind;
+   malformed/recovery states remain explicit. Success transactionally replaces
+   output and borrows only unit. */
+NOCDEF Noc_Include_Control_Build_Status noc_include_guard_build_structural(
+    const Noc_Preprocessor_Unit *unit,
+    Noc_Include_Guard *output);
 /* Inspect the first significant file token and, only when it starts #ifndef,
    publish canonical or recoverable guard structure. The conditional analysis
    must belong to unit. Success transactionally replaces output; operational

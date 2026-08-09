@@ -194,6 +194,9 @@ must be generated reproducibly as one self-contained `noc.h`.
   - [x] Add read-only `#pragma once` and strict canonical include-guard
         recognition with exact ranges, recovery states, macro-policy visibility,
         and independently stale IDE views.
+    - [x] Add a structural-only canonical guard classifier that balances nested
+          directives without evaluating conditions or applying macro effects,
+          for ordered recursive preprocessing and IDE use.
   - [ ] Execute duplicate-include suppression and exact cross-file macro effects
         without weakening graph provenance or bounded recovery.
   - [x] Publish significant directive-body token ranges and add condition-mode

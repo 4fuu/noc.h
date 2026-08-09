@@ -102,6 +102,7 @@ static const Test_Suite test_suites[] = {
     {"conditional-groups", "tests/test_conditional_groups.c", "build/noc-test-conditional-groups" NOC_EXE, false},
     {"pragma-once", "tests/test_pragma_once.c", "build/noc-test-pragma-once" NOC_EXE, false},
     {"include-guard", "tests/test_include_guard.c", "build/noc-test-include-guard" NOC_EXE, false},
+    {"include-guard-structural", "tests/test_include_guard_structural.c", "build/noc-test-include-guard-structural" NOC_EXE, false},
     {"include-control-queries", "tests/test_include_control_queries.c", "build/noc-test-include-control-queries" NOC_EXE, false},
     {"include-operands", "tests/test_include_operands.c", "build/noc-test-include-operands" NOC_EXE, false},
     {"include-resolver", "tests/test_include_resolver.c", "build/noc-test-include-resolver" NOC_EXE, false},
