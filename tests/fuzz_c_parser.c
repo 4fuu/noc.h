@@ -193,6 +193,77 @@ static void check_ast_topology(const Noc_C_Ast *ast,
         FUZZ_CHECK(last_child == node->last_child);
     }
     for (index = 0; index < count; ++index) FUZZ_CHECK(visited[index]);
+
+    {
+        size_t offsets[] = {0, size / 2, size};
+        size_t offset_index;
+        for (offset_index = 0;
+             offset_index < sizeof(offsets) / sizeof(offsets[0]);
+             ++offset_index) {
+            Noc_C_Ast_Completion_Context context = {0};
+            size_t expected_count = 0;
+            size_t expected_index;
+            FUZZ_CHECK(noc_c_ast_completion_context(ast,
+                                                    offsets[offset_index],
+                                                    &context));
+            FUZZ_CHECK(context.offset == offsets[offset_index]);
+            FUZZ_CHECK(context.node < count);
+            FUZZ_CHECK(context.owner == ast);
+            FUZZ_CHECK(context.left_node == NOC_C_AST_NODE_NONE ||
+                       context.left_node < count);
+            FUZZ_CHECK(context.right_node == NOC_C_AST_NODE_NONE ||
+                       context.right_node < count);
+            FUZZ_CHECK(context.left_node ==
+                       (offsets[offset_index] == 0
+                            ? NOC_C_AST_NODE_NONE
+                            : noc_c_ast_node_at_offset(
+                                  ast,
+                                  offsets[offset_index] - 1)));
+            FUZZ_CHECK(context.right_node ==
+                       (offsets[offset_index] == size
+                            ? NOC_C_AST_NODE_NONE
+                            : noc_c_ast_node_at_offset(
+                                  ast,
+                                  offsets[offset_index])));
+            FUZZ_CHECK(context.file_id ==
+                       noc_document_snapshot_file_id(snapshot));
+            FUZZ_CHECK(context.generation == noc_c_ast_generation(ast));
+            FUZZ_CHECK(context.document_generation ==
+                       noc_c_ast_document_generation(ast));
+            for (expected_index = 0; expected_index < count; ++expected_index) {
+                const Noc_C_Ast_Node *expected_node =
+                    noc_c_ast_node_at(ast, expected_index);
+                if ((expected_node->flags & NOC_C_AST_NODE_MISSING) != 0 &&
+                    expected_node->bytes.begin == offsets[offset_index] &&
+                    expected_node->bytes.end == offsets[offset_index]) {
+                    expected_count += 1;
+                }
+            }
+            FUZZ_CHECK(context.expected_count == expected_count);
+            {
+                size_t previous = NOC_C_AST_NODE_NONE;
+                size_t enumerated = 0;
+                for (;;) {
+                    size_t expected =
+                        noc_c_ast_completion_next_expected_node(ast,
+                                                                &context,
+                                                                previous);
+                    if (expected == NOC_C_AST_NODE_NONE) break;
+                    FUZZ_CHECK(expected < count);
+                    FUZZ_CHECK(previous == NOC_C_AST_NODE_NONE ||
+                               expected > previous);
+                    FUZZ_CHECK((noc_c_ast_node_at(ast, expected)->flags &
+                                NOC_C_AST_NODE_MISSING) != 0);
+                    FUZZ_CHECK(noc_c_ast_node_at(ast, expected)->bytes.begin ==
+                               offsets[offset_index]);
+                    previous = expected;
+                    enumerated += 1;
+                    FUZZ_CHECK(enumerated <= expected_count);
+                }
+                FUZZ_CHECK(enumerated == expected_count);
+            }
+        }
+    }
 }
 
 static uint64_t ast_hash(const Noc_C_Ast *ast)

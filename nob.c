@@ -114,6 +114,7 @@ static const Test_Suite test_suites[] = {
     {"c-ast-c11", "tests/test_c_ast_c11.c", "build/noc-test-c-ast-c11" NOC_EXE, false},
     {"c-ast-c11-constructs", "tests/test_c_ast_c11_constructs.c", "build/noc-test-c-ast-c11-constructs" NOC_EXE, false},
     {"c-ast-declarators", "tests/test_c_ast_declarators.c", "build/noc-test-c-ast-declarators" NOC_EXE, false},
+    {"c-ast-completion", "tests/test_c_ast_completion.c", "build/noc-test-c-ast-completion" NOC_EXE, false},
     {"c-ast-queries", "tests/test_c_ast_queries.c", "build/noc-test-c-ast-queries" NOC_EXE, false},
     {"c-ast-recovery", "tests/test_c_ast_recovery.c", "build/noc-test-c-ast-recovery" NOC_EXE, false},
     {"tree-sitter-coexistence", "tests/test_tree_sitter_coexistence.c", "build/noc-test-tree-sitter-coexistence" NOC_EXE, false},

@@ -1224,6 +1224,103 @@ NOCDEF size_t noc_c_ast_common_ancestor(const Noc_C_Ast *ast,
     return left;
 }
 
+static bool noc__c_ast_is_expected_at_offset(const Noc_C_Ast_Node *node,
+                                             size_t offset)
+{
+    return node && (node->flags & NOC_C_AST_NODE_MISSING) != 0 &&
+           node->bytes.begin == offset && node->bytes.end == offset;
+}
+
+NOCDEF bool noc_c_ast_completion_context(
+    const Noc_C_Ast *ast,
+    size_t offset,
+    Noc_C_Ast_Completion_Context *output)
+{
+    Noc_C_Ast_Completion_Context result;
+    Noc_Slice source;
+    size_t first_expected_parent = NOC_C_AST_NODE_NONE;
+    size_t last_expected_parent = NOC_C_AST_NODE_NONE;
+    size_t index;
+    if (!noc_c_ast_is_valid(ast) || !output) return false;
+    source = noc_document_snapshot_source(&ast->impl->snapshot);
+    if (offset > source.count) return false;
+
+    memset(&result, 0, sizeof(result));
+    result.owner = ast;
+    result.offset = offset;
+    result.left_node = offset == 0
+                           ? NOC_C_AST_NODE_NONE
+                           : noc_c_ast_node_at_offset(ast, offset - 1);
+    result.right_node = offset == source.count
+                            ? NOC_C_AST_NODE_NONE
+                            : noc_c_ast_node_at_offset(ast, offset);
+    result.node = noc_c_ast_root(ast);
+    result.file_id = noc_document_snapshot_file_id(&ast->impl->snapshot);
+    result.generation = noc_c_ast_generation(ast);
+    result.document_generation = noc_c_ast_document_generation(ast);
+    if (result.left_node != NOC_C_AST_NODE_NONE &&
+        result.right_node != NOC_C_AST_NODE_NONE) {
+        result.node = noc_c_ast_common_ancestor(ast,
+                                                result.left_node,
+                                                result.right_node);
+        if (result.node == NOC_C_AST_NODE_NONE) return false;
+    }
+
+    for (index = 0; index < ast->impl->count; ++index) {
+        const Noc_C_Ast_Node *node = &ast->impl->nodes[index];
+        size_t parent;
+        if (!noc__c_ast_is_expected_at_offset(node, offset)) continue;
+        result.expected_count += 1;
+        parent = node->parent == NOC_C_AST_NODE_NONE
+                     ? noc_c_ast_root(ast)
+                     : node->parent;
+        if (first_expected_parent == NOC_C_AST_NODE_NONE) {
+            first_expected_parent = parent;
+        }
+        last_expected_parent = parent;
+    }
+    if (first_expected_parent != NOC_C_AST_NODE_NONE) {
+        result.node = noc_c_ast_common_ancestor(ast,
+                                                first_expected_parent,
+                                                last_expected_parent);
+        if (result.node == NOC_C_AST_NODE_NONE) return false;
+    }
+    *output = result;
+    return true;
+}
+
+NOCDEF size_t noc_c_ast_completion_next_expected_node(
+    const Noc_C_Ast *ast,
+    const Noc_C_Ast_Completion_Context *context,
+    size_t previous)
+{
+    size_t index;
+    Noc_Slice source;
+    if (!noc_c_ast_is_valid(ast) || !context || context->owner != ast ||
+        context->file_id !=
+            noc_document_snapshot_file_id(&ast->impl->snapshot) ||
+        context->generation != noc_c_ast_generation(ast) ||
+        context->document_generation != noc_c_ast_document_generation(ast)) {
+        return NOC_C_AST_NODE_NONE;
+    }
+    source = noc_document_snapshot_source(&ast->impl->snapshot);
+    if (context->offset > source.count) return NOC_C_AST_NODE_NONE;
+    if (previous == NOC_C_AST_NODE_NONE) {
+        index = 0;
+    } else {
+        const Noc_C_Ast_Node *previous_node = noc_c_ast_node_at(ast, previous);
+        if (!noc__c_ast_is_expected_at_offset(previous_node, context->offset)) {
+            return NOC_C_AST_NODE_NONE;
+        }
+        index = previous + 1;
+    }
+    for (; index < ast->impl->count; ++index) {
+        const Noc_C_Ast_Node *node = &ast->impl->nodes[index];
+        if (noc__c_ast_is_expected_at_offset(node, context->offset)) return index;
+    }
+    return NOC_C_AST_NODE_NONE;
+}
+
 NOCDEF Noc_C_Ast_Operator noc_c_ast_node_operator(const Noc_C_Ast *ast,
                                                   size_t node_index)
 {

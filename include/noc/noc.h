@@ -32,8 +32,8 @@
 
 #define NOC_VERSION_MAJOR 0
 #define NOC_VERSION_MINOR 42
-#define NOC_VERSION_PATCH 4
-#define NOC_VERSION "0.42.4"
+#define NOC_VERSION_PATCH 5
+#define NOC_VERSION "0.42.5"
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -1020,6 +1020,35 @@ typedef struct {
     size_t generation;
 } Noc_C_Ast;
 
+/* Borrowing syntactic context for one physical insertion position. The offset
+   may be any position from the beginning of the document through EOF. LEFT and
+   RIGHT own the adjacent source bytes when those bytes exist. When zero-width
+   recovery expectations exist at OFFSET, NODE is their common parent context;
+   otherwise it is the adjacent nodes' smallest common ancestor, with the
+   translation-unit root used at document edges. EXPECTED_COUNT includes every
+   parser-materialized MISSING node at OFFSET, in AST preorder. These recovery
+   expectations are diagnostic hints and candidate-ranking inputs, not an
+   exhaustive semantic or grammar-lookahead completion set; their absence must
+   not suppress a completion candidate.
+
+   The context owns no memory and must be treated as read-only. OWNER binds it
+   to the AST handle that created it. FILE_ID, GENERATION, and
+   DOCUMENT_GENERATION describe the retained immutable revision. Updating the
+   workspace does not mutate an old AST/context; clients compare this metadata
+   to their current snapshot, while a successful OWNER rebuild invalidates the
+   context automatically. */
+typedef struct {
+    const Noc_C_Ast *owner;
+    size_t offset;
+    size_t node;
+    size_t left_node;
+    size_t right_node;
+    size_t expected_count;
+    Noc_File_Id file_id;
+    size_t generation;
+    size_t document_generation;
+} Noc_C_Ast_Completion_Context;
+
 typedef bool (*Noc_C_Ast_Cancel_Fn)(void *user_data);
 
 typedef struct {
@@ -1082,6 +1111,21 @@ NOCDEF size_t noc_c_ast_depth(const Noc_C_Ast *ast, size_t node_index);
 NOCDEF size_t noc_c_ast_common_ancestor(const Noc_C_Ast *ast,
                                         size_t left,
                                         size_t right);
+/* Completion-context construction is allocation-free and transactionally
+   preserves output on invalid ASTs, out-of-range positions, or NULL output.
+   next_expected_node returns expectations in AST preorder. Pass
+   NOC_C_AST_NODE_NONE as previous to begin; subsequent calls must pass the
+   prior returned node. A stale context, an invalid previous node, or the end of
+   the sequence returns NOC_C_AST_NODE_NONE. Successful results can be passed
+   to noc_c_ast_node_expected(). Complete iteration is linear in AST size. */
+NOCDEF bool noc_c_ast_completion_context(
+    const Noc_C_Ast *ast,
+    size_t offset,
+    Noc_C_Ast_Completion_Context *output);
+NOCDEF size_t noc_c_ast_completion_next_expected_node(
+    const Noc_C_Ast *ast,
+    const Noc_C_Ast_Completion_Context *context,
+    size_t previous);
 NOCDEF Noc_C_Ast_Operator noc_c_ast_node_operator(const Noc_C_Ast *ast,
                                                   size_t node_index);
 NOCDEF Noc_C_Ast_Specifier noc_c_ast_node_specifier(const Noc_C_Ast *ast,

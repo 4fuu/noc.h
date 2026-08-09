@@ -140,6 +140,7 @@ int main(void)
     Noc_Include_Graph graph = {0};
     Noc_C_Parse_Tree parse_tree = {0};
     Noc_C_Ast ast = {0};
+    Noc_C_Ast_Completion_Context release_completion = {0};
     size_t release_atomic;
     size_t release_atomic_type;
     size_t release_query_node;
@@ -279,6 +280,19 @@ int main(void)
                                       release_query_node,
                                       noc_c_ast_root(&ast)) ==
             noc_c_ast_root(&ast));
+    REQUIRE(noc_c_ast_completion_context(
+        &ast,
+        (size_t)(strstr(guard_source, "release_runtime") - guard_source) + 1,
+        &release_completion));
+    REQUIRE(release_completion.node == release_query_node);
+    REQUIRE(release_completion.left_node == release_query_node);
+    REQUIRE(release_completion.right_node == release_query_node);
+    REQUIRE(release_completion.expected_count == 0);
+    REQUIRE(noc_c_ast_completion_next_expected_node(
+                &ast,
+                &release_completion,
+                NOC_C_AST_NODE_NONE) ==
+            NOC_C_AST_NODE_NONE);
 
     noc_c_parse_tree_free(&parse_tree);
     REQUIRE(noc_c_ast_is_valid(&ast));

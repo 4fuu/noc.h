@@ -247,6 +247,10 @@ must be generated reproducibly as one self-contained `noc.h`.
       completion-context queries; never invent a successful complete AST.
   - [x] Add generation-scoped physical byte/range, depth, and common-ancestor
         queries over normalized AST nodes as the cursor-context foundation.
+  - [x] Add an allocation-free, generation-safe completion context for every
+        insertion position, including all parser-materialized missing symbols.
+  - [ ] Add bounded stable grammar-lookahead candidate sets at arbitrary
+        incomplete insertion positions, beyond materialized recovery nodes.
 - [x] Add parser corpus tests, round-trip checks, malformed-input regression
       suites, and parser fuzzing independently of semantic analysis.
   - [x] Add a deterministic table-driven ISO C11 corpus whose exact retained

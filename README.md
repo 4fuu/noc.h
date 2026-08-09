@@ -53,7 +53,7 @@ The suite names are `header-c`, `header-cpp`, `public-header-c`,
 `c-parse-recovery`, `c-parse-lifecycle`, `c-parse-corpus`,
 `c-parse-malformed-corpus`, `c-parse-cpp-runtime`,
 `c-ast`, `c-ast-details`, `c-ast-c11`, `c-ast-c11-constructs`,
-`c-ast-declarators`, `c-ast-queries`, `c-ast-recovery`,
+`c-ast-declarators`, `c-ast-completion`, `c-ast-queries`, `c-ast-recovery`,
 `tree-sitter-coexistence`, `rewriter`, and `artifacts`, for example:
 
 ```console
@@ -258,6 +258,14 @@ selection, while `noc_c_ast_depth` and `noc_c_ast_common_ancestor` support
 context reconstruction. These queries intentionally exclude the EOF insertion
 position and zero-width missing nodes; expected-symbol and completion queries
 remain explicit recovery operations rather than ambiguous byte ownership.
+
+`noc_c_ast_completion_context` accepts insertion positions including document
+edges and EOF. It reports the adjacent physical AST nodes, their syntactic
+context, AST/document generations, and every zero-width recovery expectation at
+that position. `noc_c_ast_completion_next_expected_node` enumerates those
+expected nodes in one allocation-free linear scan. This is parser recovery
+context for IDE clients, not an exhaustive grammar-lookahead or semantic symbol
+completion result; a missing hint must never exclude another candidate.
 
 ## Preprocessing tokens, directives, and macro policy
 
