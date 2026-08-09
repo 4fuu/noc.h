@@ -246,7 +246,12 @@ must be generated reproducibly as one self-contained `noc.h`.
           logical byte ranges, node-to-token provenance queries, recoverable
           grammar nodes, transactional generations, limits, cancellation, and
           separate parser/lifecycle test suites. Complete translation-unit
-          preprocessing and normalized logical AST mapping remain separate.
+          preprocessing remains separate.
+    - [x] Add an owning normalized logical C AST that reuses the physical AST's
+          stable kinds and typed spelling/recovery normalization, retains the
+          exact logical revision, maps nodes to physical/macro token provenance,
+          and has separate behavior and lifecycle/transactionality test suites.
+          It remains a macro fragment rather than a complete preprocessed unit.
   - [x] Patch and deterministically regenerate the pinned tree-sitter-c 0.24.2
         grammar for required C11 `_Bool`, `_Complex`, `_Thread_local`, and
         `_Static_assert` spellings, `_Atomic(type-name)`, and anonymous

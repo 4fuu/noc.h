@@ -48,6 +48,64 @@ typedef enum {
     NOC__LINE_MAP_OUT_OF_MEMORY,
 } Noc__Line_Map_Status;
 
+/* Coordinate-neutral normalized C AST storage. The public physical and logical
+   ASTs intentionally expose distinct byte-range types, but both consume this
+   one grammar-label/detail normalization pass so their stable enum contracts
+   cannot drift. A successful normalization result owns nodes, details, and any
+   expected-token spelling copies. */
+typedef struct {
+    Noc_C_Ast_Operator operator_kind;
+    Noc_C_Ast_Specifier specifier;
+    Noc_C_Ast_Qualifier qualifier;
+    Noc_C_Ast_Type_Spelling type_spelling;
+    Noc_C_Ast_Array_Detail array_detail;
+    Noc_C_Ast_Extension extension;
+    Noc_C_Ast_Expected_Kind expected_kind;
+    char *expected_spelling;
+} Noc__C_Ast_Detail;
+
+typedef struct {
+    Noc_C_Ast_Kind kind;
+    Noc_C_Ast_Field field;
+    size_t bytes_begin;
+    size_t bytes_end;
+    size_t parent;
+    size_t first_child;
+    size_t last_child;
+    size_t next_sibling;
+    size_t child_count;
+    size_t generation;
+    unsigned int flags;
+} Noc__C_Ast_Normalized_Node;
+
+typedef struct {
+    Noc_Slice kind;
+    Noc_Slice field;
+    Noc_Slice spelling;
+    size_t bytes_begin;
+    size_t bytes_end;
+    size_t parent;
+    unsigned int flags;
+} Noc__C_Ast_Input_Node;
+
+typedef bool (*Noc__C_Ast_Input_Query)(const void *,
+                                       size_t,
+                                       Noc__C_Ast_Input_Node *);
+
+typedef struct {
+    const void *context;
+    size_t count;
+    Noc__C_Ast_Input_Query query;
+} Noc__C_Ast_Input;
+
+typedef struct {
+    Noc__C_Ast_Normalized_Node *nodes;
+    Noc__C_Ast_Detail *details;
+    size_t count;
+    size_t capacity;
+    unsigned int issues;
+} Noc__C_Ast_Normalized;
+
 /* Sequence-relative invocation syntax shared by the physical-source query and
    expanded logical-token rescan. It owns only the argument-range array. */
 typedef struct {
@@ -148,6 +206,12 @@ NOC__PRIVATE bool noc__string_list_append_unique(Noc__String_List *, const char 
    and normalized-AST MISSING-node details. */
 NOC__PRIVATE Noc_C_Ast_Expected_Kind noc__c_grammar_expected_kind(
     Noc_Slice, bool);
+NOC__PRIVATE Noc_C_Ast_Status noc__c_ast_normalize(
+    Noc__C_Ast_Input,
+    Noc_C_Ast_Options,
+    size_t,
+    Noc__C_Ast_Normalized *);
+NOC__PRIVATE void noc__c_ast_normalized_free(Noc__C_Ast_Normalized *);
 NOC__PRIVATE bool noc__transform_source(Noc_Context *, const char *, const char *, size_t,
                                        Noc_Transform_Result *, size_t, bool, bool);
 

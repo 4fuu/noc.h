@@ -9,17 +9,6 @@
 #define NOC__C_AST_ARRAY_COUNT(values) \
     (sizeof(values) / sizeof((values)[0]))
 
-typedef struct {
-    Noc_C_Ast_Operator operator_kind;
-    Noc_C_Ast_Specifier specifier;
-    Noc_C_Ast_Qualifier qualifier;
-    Noc_C_Ast_Type_Spelling type_spelling;
-    Noc_C_Ast_Array_Detail array_detail;
-    Noc_C_Ast_Extension extension;
-    Noc_C_Ast_Expected_Kind expected_kind;
-    char *expected_spelling;
-} Noc__C_Ast_Detail;
-
 struct Noc_C_Ast_Impl {
     Noc_Document_Snapshot snapshot;
     Noc_C_Ast_Node *nodes;
@@ -211,17 +200,17 @@ static Noc_Slice noc__c_ast_trim(Noc_Slice value)
     return value;
 }
 
-static Noc_C_Ast_Kind noc__c_ast_kind(const Noc_C_Parse_Node *node)
+static Noc_C_Ast_Kind noc__c_ast_kind(Noc_Slice kind, unsigned int flags)
 {
     size_t index;
-    if ((node->flags & NOC_C_PARSE_NODE_MISSING) != 0) {
+    if ((flags & NOC_C_PARSE_NODE_MISSING) != 0) {
         return NOC_C_AST_KIND_MISSING;
     }
-    if ((node->flags & NOC_C_PARSE_NODE_ERROR) != 0) {
+    if ((flags & NOC_C_PARSE_NODE_ERROR) != 0) {
         return NOC_C_AST_KIND_ERROR;
     }
     for (index = 1; index < (size_t)NOC_C_AST_KIND_ERROR; ++index) {
-        if (noc__c_ast_slice_equal(node->kind, noc__c_ast_kind_names[index])) {
+        if (noc__c_ast_slice_equal(kind, noc__c_ast_kind_names[index])) {
             return (Noc_C_Ast_Kind)index;
         }
     }
@@ -582,10 +571,11 @@ static void noc__c_ast_impl_free(Noc_C_Ast_Impl *implementation)
     free(implementation);
 }
 
-static Noc_C_Ast_Status noc__c_ast_reserve(Noc_C_Ast_Impl *implementation,
-                                            size_t max_nodes)
+static Noc_C_Ast_Status noc__c_ast_reserve(
+    Noc__C_Ast_Normalized *implementation,
+    size_t max_nodes)
 {
-    Noc_C_Ast_Node *nodes;
+    Noc__C_Ast_Normalized_Node *nodes;
     Noc__C_Ast_Detail *details;
     size_t old_capacity = implementation->capacity;
     size_t capacity;
@@ -603,8 +593,9 @@ static Noc_C_Ast_Status noc__c_ast_reserve(Noc_C_Ast_Impl *implementation,
         capacity > SIZE_MAX / sizeof(*details)) {
         return NOC_C_AST_LIMIT_EXCEEDED;
     }
-    nodes = (Noc_C_Ast_Node *)realloc(implementation->nodes,
-                                      capacity * sizeof(*nodes));
+    nodes = (Noc__C_Ast_Normalized_Node *)realloc(
+        implementation->nodes,
+        capacity * sizeof(*nodes));
     if (!nodes) return NOC_C_AST_OUT_OF_MEMORY;
     implementation->nodes = nodes;
     details = (Noc__C_Ast_Detail *)realloc(
@@ -622,8 +613,9 @@ static Noc_C_Ast_Status noc__c_ast_reserve(Noc_C_Ast_Impl *implementation,
     return NOC_C_AST_OK;
 }
 
-static void noc__c_ast_mark_unknown_detail(Noc_C_Ast_Impl *implementation,
-                                           size_t node_index)
+static void noc__c_ast_mark_unknown_detail(
+    Noc__C_Ast_Normalized *implementation,
+    size_t node_index)
 {
     implementation->nodes[node_index].flags |= NOC_C_AST_NODE_UNKNOWN_DETAIL;
     implementation->issues |= NOC_C_AST_ISSUE_UNKNOWN_DETAIL;
@@ -665,13 +657,19 @@ static bool noc__c_ast_requires_extension(Noc_C_Ast_Kind kind)
            kind == NOC_C_AST_KIND_FALSE;
 }
 
-static void noc__c_ast_validate_details(Noc_C_Ast_Impl *implementation)
+static Noc_C_Ast_Status noc__c_ast_validate_details(
+    Noc__C_Ast_Normalized *implementation,
+    const Noc_C_Ast_Options *options)
 {
     size_t index;
     for (index = 0; index < implementation->count; ++index) {
         Noc_C_Ast_Kind kind = implementation->nodes[index].kind;
         Noc__C_Ast_Detail *detail = &implementation->details[index];
         bool unknown = false;
+        if ((index & 255u) == 0 && options->should_cancel &&
+            options->should_cancel(options->cancel_user_data)) {
+            return NOC_C_AST_CANCELLED;
+        }
         if (noc__c_ast_requires_operator(kind) &&
             (detail->operator_kind == NOC_C_AST_OPERATOR_NONE ||
              detail->operator_kind == NOC_C_AST_OPERATOR_UNKNOWN)) {
@@ -706,6 +704,7 @@ static void noc__c_ast_validate_details(Noc_C_Ast_Impl *implementation)
         }
         if (unknown) noc__c_ast_mark_unknown_detail(implementation, index);
     }
+    return NOC_C_AST_OK;
 }
 
 NOCDEF Noc_C_Ast_Options noc_c_ast_default_options(void)
@@ -732,58 +731,42 @@ NOCDEF const char *noc_c_ast_status_name(Noc_C_Ast_Status status)
                : "unknown";
 }
 
-NOCDEF Noc_C_Ast_Status noc_c_ast_build(const Noc_C_Parse_Tree *tree,
-                                         Noc_C_Ast_Options options,
-                                         Noc_C_Ast *output)
+NOC__PRIVATE void noc__c_ast_normalized_free(
+    Noc__C_Ast_Normalized *normalized)
 {
-    Noc_C_Ast_Impl *parsed;
-    Noc_C_Ast_Impl *previous;
-    size_t *cst_to_ast;
-    size_t cst_count;
-    size_t generation;
     size_t index;
-    Noc_Workspace_Status snapshot_status;
+    if (!normalized) return;
+    if (normalized->details) {
+        for (index = 0; index < normalized->count; ++index) {
+            free(normalized->details[index].expected_spelling);
+        }
+    }
+    free(normalized->details);
+    free(normalized->nodes);
+    memset(normalized, 0, sizeof(*normalized));
+}
+
+NOC__PRIVATE Noc_C_Ast_Status noc__c_ast_normalize(
+    Noc__C_Ast_Input input,
+    Noc_C_Ast_Options options,
+    size_t generation,
+    Noc__C_Ast_Normalized *output)
+{
+    Noc__C_Ast_Normalized normalized = {0};
+    size_t *input_to_ast;
+    size_t index;
     Noc_C_Ast_Status status = NOC_C_AST_OK;
 
-    if (!noc_c_parse_tree_is_valid(tree) || !output || options.max_nodes == 0) {
+    if (!output || !input.query || input.count == 0 ||
+        input.count > SIZE_MAX / sizeof(*input_to_ast) ||
+        options.max_nodes == 0 || generation == 0) {
         return NOC_C_AST_INVALID_ARGUMENT;
     }
-    if (output->generation == SIZE_MAX) {
-        return NOC_C_AST_GENERATION_EXHAUSTED;
-    }
-    if ((output->impl || output->generation != 0) &&
-        !noc_c_ast_is_valid(output)) {
-        return NOC_C_AST_INVALID_ARGUMENT;
-    }
-    if (options.should_cancel &&
-        options.should_cancel(options.cancel_user_data)) {
-        return NOC_C_AST_CANCELLED;
-    }
-    cst_count = noc_c_parse_tree_node_count(tree);
-    if (cst_count == 0 || cst_count > SIZE_MAX / sizeof(*cst_to_ast)) {
-        return NOC_C_AST_LIMIT_EXCEEDED;
-    }
-    cst_to_ast = (size_t *)malloc(cst_count * sizeof(*cst_to_ast));
-    if (!cst_to_ast) return NOC_C_AST_OUT_OF_MEMORY;
-    parsed = (Noc_C_Ast_Impl *)calloc(1, sizeof(*parsed));
-    if (!parsed) {
-        free(cst_to_ast);
-        return NOC_C_AST_OUT_OF_MEMORY;
-    }
-    snapshot_status = noc_document_snapshot_clone(
-        noc_c_parse_tree_snapshot(tree),
-        &parsed->snapshot);
-    if (snapshot_status != NOC_WORKSPACE_OK) {
-        free(cst_to_ast);
-        noc__c_ast_impl_free(parsed);
-        return snapshot_status == NOC_WORKSPACE_LIMIT_EXCEEDED
-                   ? NOC_C_AST_LIMIT_EXCEEDED
-                   : NOC_C_AST_INVALID_ARGUMENT;
-    }
-    generation = output->generation + 1;
+    input_to_ast = (size_t *)malloc(input.count * sizeof(*input_to_ast));
+    if (!input_to_ast) return NOC_C_AST_OUT_OF_MEMORY;
 
-    for (index = 0; index < cst_count; ++index) {
-        const Noc_C_Parse_Node *cst = noc_c_parse_tree_node_at(tree, index);
+    for (index = 0; index < input.count; ++index) {
+        Noc__C_Ast_Input_Node input_node;
         size_t parent = NOC_C_AST_NODE_NONE;
         bool select;
         if ((index & 255u) == 0 && options.should_cancel &&
@@ -791,45 +774,59 @@ NOCDEF Noc_C_Ast_Status noc_c_ast_build(const Noc_C_Parse_Tree *tree,
             status = NOC_C_AST_CANCELLED;
             break;
         }
-        if (cst->parent != NOC_C_PARSE_NODE_NONE) {
-            parent = cst_to_ast[cst->parent];
+        memset(&input_node, 0, sizeof(input_node));
+        if (!input.query(input.context, index, &input_node) ||
+            input_node.bytes_begin > input_node.bytes_end ||
+            (input_node.parent != NOC_C_PARSE_NODE_NONE &&
+             input_node.parent >= index)) {
+            status = NOC_C_AST_INVALID_ARGUMENT;
+            break;
         }
-        cst_to_ast[index] = parent;
-        select = ((cst->flags & NOC_C_PARSE_NODE_NAMED) != 0 &&
-                  (cst->flags & NOC_C_PARSE_NODE_EXTRA) == 0) ||
-                 (cst->flags &
+        if (input_node.parent != NOC_C_PARSE_NODE_NONE) {
+            parent = input_to_ast[input_node.parent];
+        }
+        input_to_ast[index] = parent;
+        select = ((input_node.flags & NOC_C_PARSE_NODE_NAMED) != 0 &&
+                  (input_node.flags & NOC_C_PARSE_NODE_EXTRA) == 0) ||
+                 (input_node.flags &
                   (NOC_C_PARSE_NODE_ERROR | NOC_C_PARSE_NODE_MISSING)) != 0;
 
         if (!select) {
             if (parent != NOC_C_AST_NODE_NONE) {
-                Noc_C_Ast_Node *parent_node = &parsed->nodes[parent];
-                Noc__C_Ast_Detail *parent_detail = &parsed->details[parent];
-                Noc_Slice spelling = noc_c_parse_node_source(tree, index);
-                if (noc__c_ast_slice_equal(cst->field, "operator")) {
+                Noc__C_Ast_Normalized_Node *parent_node =
+                    &normalized.nodes[parent];
+                Noc__C_Ast_Detail *parent_detail =
+                    &normalized.details[parent];
+                Noc_Slice spelling = input_node.spelling;
+                if (noc__c_ast_slice_equal(input_node.field, "operator")) {
                     parent_detail->operator_kind = noc__c_ast_operator(
                         spelling,
                         parent_node->kind,
-                        cst->bytes.begin == parent_node->bytes.begin);
+                        input_node.bytes_begin == parent_node->bytes_begin);
                 }
                 if (parent_node->kind == NOC_C_AST_KIND_SIZED_TYPE_SPECIFIER) {
                     spelling = noc__c_ast_trim(spelling);
                     if (noc__c_ast_slice_equal(spelling, "signed")) {
-                        parent_detail->type_spelling.flags |= NOC_C_AST_TYPE_SIGNED;
+                        parent_detail->type_spelling.flags |=
+                            NOC_C_AST_TYPE_SIGNED;
                     } else if (noc__c_ast_slice_equal(spelling, "unsigned")) {
-                        parent_detail->type_spelling.flags |= NOC_C_AST_TYPE_UNSIGNED;
+                        parent_detail->type_spelling.flags |=
+                            NOC_C_AST_TYPE_UNSIGNED;
                     } else if (noc__c_ast_slice_equal(spelling, "short")) {
-                        parent_detail->type_spelling.flags |= NOC_C_AST_TYPE_SHORT;
+                        parent_detail->type_spelling.flags |=
+                            NOC_C_AST_TYPE_SHORT;
                     } else if (noc__c_ast_slice_equal(spelling, "long")) {
                         parent_detail->type_spelling.long_count += 1;
                     } else if (noc__c_ast_slice_equal(spelling, "_Complex")) {
-                        parent_detail->type_spelling.flags |= NOC_C_AST_TYPE_COMPLEX;
+                        parent_detail->type_spelling.flags |=
+                            NOC_C_AST_TYPE_COMPLEX;
                     }
                 }
                 if (noc__c_ast_is_array_kind(parent_node->kind)) {
                     spelling = noc__c_ast_trim(spelling);
                     if (noc__c_ast_slice_equal(spelling, "static")) {
                         parent_detail->array_detail.has_static_minimum = true;
-                    } else if (noc__c_ast_slice_equal(cst->field, "size") &&
+                    } else if (noc__c_ast_slice_equal(input_node.field, "size") &&
                                noc__c_ast_slice_equal(spelling, "*")) {
                         parent_detail->array_detail.size =
                             NOC_C_AST_ARRAY_SIZE_STAR;
@@ -839,47 +836,49 @@ NOCDEF Noc_C_Ast_Status noc_c_ast_build(const Noc_C_Parse_Tree *tree,
             continue;
         }
 
-        status = noc__c_ast_reserve(parsed, options.max_nodes);
+        status = noc__c_ast_reserve(&normalized, options.max_nodes);
         if (status != NOC_C_AST_OK) break;
         {
-            size_t node_index = parsed->count++;
-            Noc_C_Ast_Node *node = &parsed->nodes[node_index];
-            Noc__C_Ast_Detail *detail = &parsed->details[node_index];
-            Noc_Slice spelling = noc_c_parse_node_source(tree, index);
-            node->kind = noc__c_ast_kind(cst);
-            node->field = noc__c_ast_field(cst->field);
-            node->bytes = cst->bytes;
+            size_t node_index = normalized.count++;
+            Noc__C_Ast_Normalized_Node *node =
+                &normalized.nodes[node_index];
+            Noc__C_Ast_Detail *detail = &normalized.details[node_index];
+            Noc_Slice spelling = input_node.spelling;
+            node->kind = noc__c_ast_kind(input_node.kind, input_node.flags);
+            node->field = noc__c_ast_field(input_node.field);
+            node->bytes_begin = input_node.bytes_begin;
+            node->bytes_end = input_node.bytes_end;
             node->parent = parent;
             node->first_child = NOC_C_AST_NODE_NONE;
             node->last_child = NOC_C_AST_NODE_NONE;
             node->next_sibling = NOC_C_AST_NODE_NONE;
             node->generation = generation;
-            if ((cst->flags & NOC_C_PARSE_NODE_ERROR) != 0) {
+            if ((input_node.flags & NOC_C_PARSE_NODE_ERROR) != 0) {
                 node->flags |= NOC_C_AST_NODE_ERROR;
             }
-            if ((cst->flags & NOC_C_PARSE_NODE_MISSING) != 0) {
+            if ((input_node.flags & NOC_C_PARSE_NODE_MISSING) != 0) {
                 node->flags |= NOC_C_AST_NODE_MISSING;
             }
-            if ((cst->flags & NOC_C_PARSE_NODE_HAS_ERROR) != 0) {
+            if ((input_node.flags & NOC_C_PARSE_NODE_HAS_ERROR) != 0) {
                 node->flags |= NOC_C_AST_NODE_HAS_ERROR;
             }
             if (node->kind == NOC_C_AST_KIND_UNKNOWN) {
                 node->flags |= NOC_C_AST_NODE_UNKNOWN_KIND;
-                parsed->issues |= NOC_C_AST_ISSUE_UNKNOWN_KIND;
+                normalized.issues |= NOC_C_AST_ISSUE_UNKNOWN_KIND;
             }
             if (node->field == NOC_C_AST_FIELD_UNKNOWN) {
                 node->flags |= NOC_C_AST_NODE_UNKNOWN_FIELD;
-                parsed->issues |= NOC_C_AST_ISSUE_UNKNOWN_FIELD;
+                normalized.issues |= NOC_C_AST_ISSUE_UNKNOWN_FIELD;
             }
-            if ((cst->flags &
+            if ((input_node.flags &
                  (NOC_C_PARSE_NODE_ERROR | NOC_C_PARSE_NODE_HAS_ERROR)) != 0) {
-                parsed->issues |= NOC_C_AST_ISSUE_PARSE_ERROR;
+                normalized.issues |= NOC_C_AST_ISSUE_PARSE_ERROR;
             }
-            if ((cst->flags & NOC_C_PARSE_NODE_MISSING) != 0) {
-                parsed->issues |= NOC_C_AST_ISSUE_MISSING;
+            if ((input_node.flags & NOC_C_PARSE_NODE_MISSING) != 0) {
+                normalized.issues |= NOC_C_AST_ISSUE_MISSING;
             }
-            if ((cst->flags & NOC_C_PARSE_NODE_SKIPPED_SOURCE) != 0) {
-                parsed->issues |= NOC_C_AST_ISSUE_SKIPPED_SOURCE;
+            if ((input_node.flags & NOC_C_PARSE_NODE_SKIPPED_SOURCE) != 0) {
+                normalized.issues |= NOC_C_AST_ISSUE_SKIPPED_SOURCE;
             }
 
             if (node->kind == NOC_C_AST_KIND_STORAGE_CLASS_SPECIFIER) {
@@ -892,39 +891,43 @@ NOCDEF Noc_C_Ast_Status noc_c_ast_build(const Noc_C_Parse_Tree *tree,
                 detail->qualifier = noc__c_ast_qualifier(spelling);
             }
             if (node->kind == NOC_C_AST_KIND_PRIMITIVE_TYPE) {
-                detail->type_spelling.primitive = noc__c_ast_primitive(spelling);
+                detail->type_spelling.primitive =
+                    noc__c_ast_primitive(spelling);
             }
             detail->extension = noc__c_ast_extension(node->kind, spelling);
             noc__c_ast_apply_spelling_extensions(detail);
 
-            if ((cst->flags & NOC_C_PARSE_NODE_MISSING) != 0) {
+            if ((input_node.flags & NOC_C_PARSE_NODE_MISSING) != 0) {
                 detail->expected_kind = noc__c_grammar_expected_kind(
-                    cst->kind,
-                    (cst->flags & NOC_C_PARSE_NODE_NAMED) != 0);
-                if ((cst->flags & NOC_C_PARSE_NODE_NAMED) == 0) {
+                    input_node.kind,
+                    (input_node.flags & NOC_C_PARSE_NODE_NAMED) != 0);
+                if ((input_node.flags & NOC_C_PARSE_NODE_NAMED) == 0) {
                     detail->expected_spelling =
-                        (char *)malloc(cst->kind.count + 1);
+                        (char *)malloc(input_node.kind.count + 1);
                     if (!detail->expected_spelling) {
                         status = NOC_C_AST_OUT_OF_MEMORY;
                         break;
                     }
                     memcpy(detail->expected_spelling,
-                           cst->kind.data,
-                           cst->kind.count);
-                    detail->expected_spelling[cst->kind.count] = 0;
+                           input_node.kind.data,
+                           input_node.kind.count);
+                    detail->expected_spelling[input_node.kind.count] = 0;
                 }
                 if (detail->expected_kind == NOC_C_AST_EXPECTED_UNKNOWN) {
-                    noc__c_ast_mark_unknown_detail(parsed, node_index);
+                    noc__c_ast_mark_unknown_detail(&normalized, node_index);
                 }
             }
 
             if (parent != NOC_C_AST_NODE_NONE) {
-                Noc_C_Ast_Node *parent_node = &parsed->nodes[parent];
-                Noc__C_Ast_Detail *parent_detail = &parsed->details[parent];
+                Noc__C_Ast_Normalized_Node *parent_node =
+                    &normalized.nodes[parent];
+                Noc__C_Ast_Detail *parent_detail =
+                    &normalized.details[parent];
                 if (parent_node->last_child == NOC_C_AST_NODE_NONE) {
                     parent_node->first_child = node_index;
                 } else {
-                    parsed->nodes[parent_node->last_child].next_sibling = node_index;
+                    normalized.nodes[parent_node->last_child].next_sibling =
+                        node_index;
                 }
                 parent_node->last_child = node_index;
                 parent_node->child_count += 1;
@@ -967,21 +970,137 @@ NOCDEF Noc_C_Ast_Status noc_c_ast_build(const Noc_C_Parse_Tree *tree,
                 node->kind = NOC_C_AST_KIND_IDENTIFIER;
                 detail->extension = NOC_C_AST_EXTENSION_NONE;
             }
-            cst_to_ast[index] = node_index;
+            input_to_ast[index] = node_index;
         }
     }
 
-    free(cst_to_ast);
+    free(input_to_ast);
     if (status == NOC_C_AST_OK) {
-        noc__c_ast_validate_details(parsed);
-        if (parsed->count == 0) {
-            status = NOC_C_AST_INVALID_ARGUMENT;
-        }
+        status = noc__c_ast_validate_details(&normalized, &options);
+        if (normalized.count == 0) status = NOC_C_AST_INVALID_ARGUMENT;
     }
+    if (status != NOC_C_AST_OK) {
+        noc__c_ast_normalized_free(&normalized);
+        return status;
+    }
+    *output = normalized;
+    return NOC_C_AST_OK;
+}
+
+static bool noc__c_ast_physical_input_query(
+    const void *context,
+    size_t node_index,
+    Noc__C_Ast_Input_Node *output)
+{
+    const Noc_C_Parse_Tree *tree = (const Noc_C_Parse_Tree *)context;
+    const Noc_C_Parse_Node *node =
+        noc_c_parse_tree_node_at(tree, node_index);
+    if (!node || !output) return false;
+    output->kind = node->kind;
+    output->field = node->field;
+    output->spelling = noc_c_parse_node_source(tree, node_index);
+    output->bytes_begin = node->bytes.begin;
+    output->bytes_end = node->bytes.end;
+    output->parent = node->parent;
+    output->flags = node->flags;
+    return true;
+}
+
+NOCDEF Noc_C_Ast_Status noc_c_ast_build(const Noc_C_Parse_Tree *tree,
+                                         Noc_C_Ast_Options options,
+                                         Noc_C_Ast *output)
+{
+    Noc_C_Ast_Impl *parsed = NULL;
+    Noc_C_Ast_Impl *previous;
+    Noc__C_Ast_Normalized normalized = {0};
+    Noc__C_Ast_Input input;
+    size_t generation;
+    size_t index;
+    Noc_Workspace_Status snapshot_status;
+    Noc_C_Ast_Status status;
+
+    if (!noc_c_parse_tree_is_valid(tree) || !output || options.max_nodes == 0) {
+        return NOC_C_AST_INVALID_ARGUMENT;
+    }
+    if (output->generation == SIZE_MAX) {
+        return NOC_C_AST_GENERATION_EXHAUSTED;
+    }
+    if ((output->impl || output->generation != 0) &&
+        !noc_c_ast_is_valid(output)) {
+        return NOC_C_AST_INVALID_ARGUMENT;
+    }
+    if (options.should_cancel &&
+        options.should_cancel(options.cancel_user_data)) {
+        return NOC_C_AST_CANCELLED;
+    }
+    parsed = (Noc_C_Ast_Impl *)calloc(1, sizeof(*parsed));
+    if (!parsed) return NOC_C_AST_OUT_OF_MEMORY;
+    snapshot_status = noc_document_snapshot_clone(
+        noc_c_parse_tree_snapshot(tree),
+        &parsed->snapshot);
+    if (snapshot_status != NOC_WORKSPACE_OK) {
+        noc__c_ast_impl_free(parsed);
+        return snapshot_status == NOC_WORKSPACE_LIMIT_EXCEEDED
+                   ? NOC_C_AST_LIMIT_EXCEEDED
+               : snapshot_status == NOC_WORKSPACE_OUT_OF_MEMORY
+                   ? NOC_C_AST_OUT_OF_MEMORY
+                   : NOC_C_AST_INVALID_ARGUMENT;
+    }
+    generation = output->generation + 1;
+    input.context = tree;
+    input.count = noc_c_parse_tree_node_count(tree);
+    input.query = noc__c_ast_physical_input_query;
+    status = noc__c_ast_normalize(input, options, generation, &normalized);
     if (status != NOC_C_AST_OK) {
         noc__c_ast_impl_free(parsed);
         return status;
     }
+    if (normalized.count > SIZE_MAX / sizeof(*parsed->nodes)) {
+        noc__c_ast_normalized_free(&normalized);
+        noc__c_ast_impl_free(parsed);
+        return NOC_C_AST_LIMIT_EXCEEDED;
+    }
+    parsed->nodes = (Noc_C_Ast_Node *)malloc(
+        normalized.count * sizeof(*parsed->nodes));
+    if (!parsed->nodes) {
+        noc__c_ast_normalized_free(&normalized);
+        noc__c_ast_impl_free(parsed);
+        return NOC_C_AST_OUT_OF_MEMORY;
+    }
+    for (index = 0; index < normalized.count; ++index) {
+        const Noc__C_Ast_Normalized_Node *source = &normalized.nodes[index];
+        Noc_C_Ast_Node *node = &parsed->nodes[index];
+        if ((index & 255u) == 0 && options.should_cancel &&
+            options.should_cancel(options.cancel_user_data)) {
+            noc__c_ast_normalized_free(&normalized);
+            noc__c_ast_impl_free(parsed);
+            return NOC_C_AST_CANCELLED;
+        }
+        node->kind = source->kind;
+        node->field = source->field;
+        node->bytes.begin = source->bytes_begin;
+        node->bytes.end = source->bytes_end;
+        node->parent = source->parent;
+        node->first_child = source->first_child;
+        node->last_child = source->last_child;
+        node->next_sibling = source->next_sibling;
+        node->child_count = source->child_count;
+        node->generation = source->generation;
+        node->flags = source->flags;
+    }
+    if (options.should_cancel &&
+        options.should_cancel(options.cancel_user_data)) {
+        noc__c_ast_normalized_free(&normalized);
+        noc__c_ast_impl_free(parsed);
+        return NOC_C_AST_CANCELLED;
+    }
+    parsed->details = normalized.details;
+    parsed->count = normalized.count;
+    parsed->capacity = normalized.count;
+    parsed->issues = normalized.issues;
+    normalized.details = NULL;
+    free(normalized.nodes);
+    normalized.nodes = NULL;
     previous = output->impl;
     output->impl = parsed;
     output->generation = generation;

@@ -118,6 +118,8 @@ be declared by `src/internal.h`; module-local helpers remain static. Current own
 | `src/macro_invocations.c` | Lossless, recoverable function-like invocation/argument syntax |
 | `src/macro_environment.c`, `src/macro_expansion.c` | Effective macro state and bounded expansion |
 | `src/logical_source.c` | Owning canonical macro-fragment bytes, physical sites, and normalized provenance frames |
+| `src/logical_c_parse.c` | Recoverable logical C concrete-syntax adapter over retained macro-fragment source |
+| `src/logical_ast.c` | Stable normalized logical C AST and token-to-physical/macro provenance bridge |
 | `src/conditional.c`, `src/conditional_groups.c` | C11 condition evaluation and recoverable balanced conditional analysis |
 | `src/include_control.c` | Read-only pragma-once and strict canonical include-guard recognition |
 | `src/include_resolver.c`, `src/include_expansion.c` | Physical/expanded include operands and host-configurable snapshot resolution |
@@ -456,12 +458,24 @@ This bridge still does not execute directives, choose conditional branches,
 traverse includes, or claim that an arbitrary macro fragment is a complete
 preprocessed translation unit.
 
+`noc_logical_c_ast_build` maps the logical CST into the same stable Noc-owned
+kinds, fields, operators, spelling details, and recovery vocabulary as the
+physical normalized AST. Its nodes retain the distinct logical byte-range type,
+and every node can be mapped to contributing logical tokens and from there to
+copied physical sites and nested macro frames. The AST owns its retained logical
+revision, is bounded/cancellable/transactional, and remains valid after the CST
+and all preprocessing inputs are released. It is still a syntax AST for one
+expanded fragment, not typedef/type resolution or complete translation-unit
+preprocessing.
+
 Run source-map/serialization coverage with `./nob test logical-source`,
 ownership/cancellation/generation/limit coverage with `./nob test
 logical-source-lifecycle`, coordinate/range coverage with `./nob test
 logical-source-queries`, logical grammar/provenance coverage with `./nob test
 logical-c-parse`, and retained-revision/transactional coverage with `./nob test
-logical-c-parse-lifecycle`.
+logical-c-parse-lifecycle`. Run normalized logical AST/provenance coverage with
+`./nob test logical-c-ast` and its ownership/limit/generation coverage with
+`./nob test logical-c-ast-lifecycle`.
 
 Conditional preprocessing is staged rather than hidden inside a monolithic
 driver. `noc_preprocessor_directive_body_tokens` returns the significant
@@ -1074,15 +1088,16 @@ This version handles explicit token/AST-assisted transformations, a lossless
 delimiter tree, lightweight C structure discovery, and bounded
 object/fixed-arity/C11-variadic macro inspection expansion. It does not provide a
 complete integrated preprocessor, every implementation-specific built-in macro,
-a logical normalized AST, typedef resolution, or a C type system. C11 macro
+typedef resolution, or a C type system. C11 macro
 stringification, token pasting, deterministic file/line/standard built-ins, and
 preprocessing integer-expression evaluation are supported. Recoverable
 conditional-group execution and active-only macro state are available as an
 explicit analysis API;
 translation-configured hosted/date/time built-ins are available without reading
-the host or clock. A durable macro-fragment logical source and recoverable
-logical C CST preserve token-level physical/macro provenance, but complete
-directive/include preprocessing and broader target semantics are not integrated.
+the host or clock. A durable macro-fragment logical source, recoverable logical C
+CST, and normalized logical AST preserve token-level physical/macro provenance,
+but complete directive/include preprocessing and broader target semantics are
+not integrated.
 Rules inside preprocessor directives are left untouched. More
 structured statement and declaration helpers can be added without changing the
 registration model.

@@ -50,6 +50,7 @@ static const char *amalgamation_sources[] = {
     "src/ast.c",
     "src/c_parse.c",
     "src/logical_c_parse.c",
+    "src/logical_ast.c",
     "src/lower.c",
     "src/emit_c.c",
 };
@@ -62,7 +63,7 @@ static const char *implementation_modules[] = {
     "src/conditional_groups.c",
     "src/include_control.c", "src/include_resolver.c", "src/include_expansion.c",
     "src/include_graph.c", "src/parser.c", "src/ast.c", "src/c_parse.c",
-    "src/logical_c_parse.c",
+    "src/logical_c_parse.c", "src/logical_ast.c",
     "src/lower.c", "src/emit_c.c",
 };
 
@@ -119,6 +120,8 @@ static const Test_Suite test_suites[] = {
     {"c-parse-cpp-runtime", "tests/test_c_parse_cpp_runtime.c", "build/noc-test-c-parse-cpp-runtime" NOC_EXE, true},
     {"logical-c-parse", "tests/test_logical_c_parse.c", "build/noc-test-logical-c-parse" NOC_EXE, false},
     {"logical-c-parse-lifecycle", "tests/test_logical_c_parse_lifecycle.c", "build/noc-test-logical-c-parse-lifecycle" NOC_EXE, false},
+    {"logical-c-ast", "tests/test_logical_c_ast.c", "build/noc-test-logical-c-ast" NOC_EXE, false},
+    {"logical-c-ast-lifecycle", "tests/test_logical_c_ast_lifecycle.c", "build/noc-test-logical-c-ast-lifecycle" NOC_EXE, false},
     {"c-ast", "tests/test_c_ast.c", "build/noc-test-c-ast" NOC_EXE, false},
     {"c-ast-details", "tests/test_c_ast_details.c", "build/noc-test-c-ast-details" NOC_EXE, false},
     {"c-ast-c11", "tests/test_c_ast_c11.c", "build/noc-test-c-ast-c11" NOC_EXE, false},

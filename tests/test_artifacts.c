@@ -195,7 +195,7 @@ static void test_command_signature(void)
     const char *invalid_arguments[] = {"cc", NULL};
     static const char expected[] =
         "noc-command-signature 1\n"
-        "noc-version 6:" NOC_VERSION "\n"
+        "noc-version 7:" NOC_VERSION "\n"
         "arguments 4\n"
         "argument 2:cc\n"
         "argument 10:-DNAME=a\nb\n"

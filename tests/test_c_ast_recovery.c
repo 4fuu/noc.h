@@ -212,6 +212,7 @@ static void test_limits_cancellation_and_rebuild_are_transactional(void)
     Noc_C_Ast_Options options = noc_c_ast_default_options();
     Noc_C_Ast_Impl *implementation;
     Delayed_Cancel delayed = {0, 3};
+    Delayed_Cancel copy_cancel = {0, 4};
     size_t immediate_calls = 0;
     size_t generation;
     size_t node_count;
@@ -266,6 +267,17 @@ static void test_limits_cancellation_and_rebuild_are_transactional(void)
     options.cancel_user_data = &immediate_calls;
     CHECK(noc_c_ast_build(&large_tree, options, &ast) == NOC_C_AST_CANCELLED);
     CHECK(immediate_calls == 1);
+    check_preserved(&ast,
+                    implementation,
+                    generation,
+                    node_count,
+                    baseline_source);
+
+    options.should_cancel = cancel_after_delay;
+    options.cancel_user_data = &copy_cancel;
+    CHECK(noc_c_ast_build(&baseline_tree, options, &ast) ==
+          NOC_C_AST_CANCELLED);
+    CHECK(copy_cancel.calls == copy_cancel.cancel_after);
     check_preserved(&ast,
                     implementation,
                     generation,

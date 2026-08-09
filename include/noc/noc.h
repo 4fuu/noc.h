@@ -32,8 +32,8 @@
 
 #define NOC_VERSION_MAJOR 0
 #define NOC_VERSION_MINOR 42
-#define NOC_VERSION_PATCH 9
-#define NOC_VERSION "0.42.9"
+#define NOC_VERSION_PATCH 10
+#define NOC_VERSION "0.42.10"
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -2744,6 +2744,135 @@ NOCDEF bool noc_logical_c_parse_node_token_range(
     const Noc_Logical_C_Parse_Tree *tree,
     size_t node_index,
     Noc_Logical_Token_Range *output);
+
+/* Stable normalized C AST over a logical macro-expansion source. This is the
+   logical-coordinate counterpart of Noc_C_Ast: both use the same Noc-owned
+   kinds, fields, typed spelling details, recovery flags, and normalization
+   implementation. They deliberately use different node structures so a
+   Noc_Logical_Byte_Range can never be mistaken for a physical Noc_Byte_Range.
+
+   Each node can be mapped to the smallest contributing logical-token interval.
+   Inspect those tokens through noc_logical_c_ast_source() to recover copied
+   physical file identities/sites and nested macro definition/invocation frames.
+   Generated separators have no physical origin. A node spanning several macro
+   arguments or generated tokens can have several contributors; there is no
+   misleading single physical range on the node itself.
+
+   This API normalizes one already-expanded fragment. It does not execute
+   directives, select conditional branches, traverse includes, resolve typedef
+   names/types, perform semantic analysis, or grant permission to use a parsed
+   extension. Complete translation-unit preprocessing and feature validation
+   remain distinct phases.
+
+   Noc_Logical_C_Ast is initialized with {0}, owns a retained immutable logical
+   source, and must not be shallow-copied. It has no lifetime dependency on the
+   input CST after a successful build. Failed builds preserve the previous AST
+   exactly. Successful rebuilds increment the AST generation and invalidate old
+   node pointers/indices; source_generation identifies the retained logical
+   revision independently. Shared-handle reads/rebuild/free require external
+   synchronization. */
+typedef struct {
+    Noc_C_Ast_Kind kind;
+    Noc_C_Ast_Field field;
+    Noc_Logical_Byte_Range bytes;
+    size_t parent;
+    size_t first_child;
+    size_t last_child;
+    size_t next_sibling;
+    size_t child_count;
+    size_t generation;
+    unsigned int flags;
+} Noc_Logical_C_Ast_Node;
+
+typedef struct Noc_Logical_C_Ast_Impl Noc_Logical_C_Ast_Impl;
+
+typedef struct {
+    Noc_Logical_C_Ast_Impl *impl;
+    size_t generation;
+} Noc_Logical_C_Ast;
+
+/* Uses Noc_C_Ast_Options and Noc_C_Ast_Status because node selection, limits,
+   cancellation, recovery, and normalization failures are coordinate-neutral.
+   Build is bounded by max_nodes, cancellable, and transactional. */
+NOCDEF Noc_C_Ast_Status noc_logical_c_ast_build(
+    const Noc_Logical_C_Parse_Tree *tree,
+    Noc_C_Ast_Options options,
+    Noc_Logical_C_Ast *output);
+NOCDEF void noc_logical_c_ast_free(Noc_Logical_C_Ast *ast);
+NOCDEF bool noc_logical_c_ast_is_valid(const Noc_Logical_C_Ast *ast);
+/* Syntax completeness has the same recovery/unknown-mapping meaning as the
+   physical AST and does not imply preprocessing or semantic completeness. */
+NOCDEF bool noc_logical_c_ast_is_syntax_complete(
+    const Noc_Logical_C_Ast *ast);
+NOCDEF unsigned int noc_logical_c_ast_issues(
+    const Noc_Logical_C_Ast *ast);
+NOCDEF size_t noc_logical_c_ast_generation(
+    const Noc_Logical_C_Ast *ast);
+NOCDEF size_t noc_logical_c_ast_source_generation(
+    const Noc_Logical_C_Ast *ast);
+/* Borrowed immutable source view retained by AST. */
+NOCDEF const Noc_Logical_Source *noc_logical_c_ast_source(
+    const Noc_Logical_C_Ast *ast);
+NOCDEF size_t noc_logical_c_ast_node_count(
+    const Noc_Logical_C_Ast *ast);
+NOCDEF size_t noc_logical_c_ast_root(const Noc_Logical_C_Ast *ast);
+/* Node pointers and expected spellings remain valid until successful rebuild
+   or free. Invalid/inapplicable typed queries return their NONE value. */
+NOCDEF const Noc_Logical_C_Ast_Node *noc_logical_c_ast_node_at(
+    const Noc_Logical_C_Ast *ast,
+    size_t node_index);
+NOCDEF Noc_Slice noc_logical_c_ast_node_source(
+    const Noc_Logical_C_Ast *ast,
+    size_t node_index);
+NOCDEF Noc_Logical_Location noc_logical_c_ast_node_location(
+    const Noc_Logical_C_Ast *ast,
+    size_t node_index);
+/* Offset queries require one existing logical byte. Range queries require a
+   nonempty half-open logical range. They return the deepest normalized node
+   containing those bytes, while trivia/punctuation resolve to the nearest
+   retained ancestor. Invalid inputs return NOC_C_AST_NODE_NONE. */
+NOCDEF size_t noc_logical_c_ast_node_at_offset(
+    const Noc_Logical_C_Ast *ast,
+    size_t offset);
+NOCDEF size_t noc_logical_c_ast_node_covering_range(
+    const Noc_Logical_C_Ast *ast,
+    Noc_Logical_Byte_Range range);
+NOCDEF size_t noc_logical_c_ast_depth(
+    const Noc_Logical_C_Ast *ast,
+    size_t node_index);
+NOCDEF size_t noc_logical_c_ast_common_ancestor(
+    const Noc_Logical_C_Ast *ast,
+    size_t left,
+    size_t right);
+/* Maps the node's whole logical byte range to token contributors. Empty MISSING
+   nodes follow the logical insertion-point rule. Failure preserves OUTPUT. */
+NOCDEF bool noc_logical_c_ast_node_token_range(
+    const Noc_Logical_C_Ast *ast,
+    size_t node_index,
+    Noc_Logical_Token_Range *output);
+NOCDEF Noc_C_Ast_Operator noc_logical_c_ast_node_operator(
+    const Noc_Logical_C_Ast *ast,
+    size_t node_index);
+NOCDEF Noc_C_Ast_Specifier noc_logical_c_ast_node_specifier(
+    const Noc_Logical_C_Ast *ast,
+    size_t node_index);
+NOCDEF Noc_C_Ast_Qualifier noc_logical_c_ast_node_qualifier(
+    const Noc_Logical_C_Ast *ast,
+    size_t node_index);
+NOCDEF bool noc_logical_c_ast_node_type_spelling(
+    const Noc_Logical_C_Ast *ast,
+    size_t node_index,
+    Noc_C_Ast_Type_Spelling *output);
+NOCDEF bool noc_logical_c_ast_node_array_detail(
+    const Noc_Logical_C_Ast *ast,
+    size_t node_index,
+    Noc_C_Ast_Array_Detail *output);
+NOCDEF Noc_C_Ast_Extension noc_logical_c_ast_node_extension(
+    const Noc_Logical_C_Ast *ast,
+    size_t node_index);
+NOCDEF Noc_C_Ast_Expected noc_logical_c_ast_node_expected(
+    const Noc_Logical_C_Ast *ast,
+    size_t node_index);
 /* Evaluate a condition-mode macro expansion as a bounded C11 preprocessing
    integer constant expression. Remaining identifiers become zero and defined
    queries the expansion's selected environment prefix, including deterministic
