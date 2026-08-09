@@ -380,6 +380,69 @@ static void test_spliced_anchor_budget_and_cancellation(void)
     free(definitions);
 }
 
+static void test_line_map_cancellation_preserves_seeded_output(void)
+{
+    enum { CRLF_COUNT = 5000 };
+    Macro_Expansion_Fixture fixture;
+    Noc_Logical_Source source = {0};
+    Noc_Logical_Source_Options options = noc_logical_source_default_options();
+    Noc_Logical_Source_Impl *implementation;
+    const char *text;
+    size_t generation;
+    size_t position = 0;
+    size_t index;
+    char *input = (char *)malloc(3 + CRLF_COUNT * 2 + 3);
+    Cancel_State polling = {0, SIZE_MAX};
+    Cancel_State cancel = {0, 9};
+
+    CHECK(input != NULL);
+    if (!input) return;
+    memcpy(input + position, "/*x", 3);
+    position += 3;
+    for (index = 0; index < CRLF_COUNT; ++index) {
+        input[position++] = '\r';
+        input[position++] = '\n';
+    }
+    memcpy(input + position, "*/", 3);
+    macro_fixture_init(&fixture, "", input);
+    CHECK(macro_fixture_expand(&fixture, macro_fixture_full_input(&fixture)) ==
+          NOC_MACRO_EXPANSION_OK);
+    CHECK(noc_logical_source_build_macro_expansion(
+              &fixture.expansion,
+              noc_logical_source_default_options(),
+              &source) == NOC_LOGICAL_SOURCE_OK);
+    implementation = source.impl;
+    generation = source.generation;
+    text = noc_logical_source_text(&source).data;
+
+    options.should_cancel = cancel_logical_source;
+    options.cancel_user_data = &polling;
+    CHECK(noc_logical_source_build_macro_expansion(&fixture.expansion,
+                                                    options,
+                                                    &source) ==
+          NOC_LOGICAL_SOURCE_OK);
+    /* Both line-map scans must continue polling even though CRLF processing
+       advances over the LF byte and skips exact interval multiples. */
+    CHECK(polling.calls >= 14);
+    implementation = source.impl;
+    generation = source.generation;
+    text = noc_logical_source_text(&source).data;
+
+    options = noc_logical_source_default_options();
+    options.should_cancel = cancel_logical_source;
+    options.cancel_user_data = &cancel;
+    CHECK(noc_logical_source_build_macro_expansion(&fixture.expansion,
+                                                    options,
+                                                    &source) ==
+          NOC_LOGICAL_SOURCE_CANCELLED);
+    CHECK(cancel.calls == cancel.cancel_at);
+    check_preserved(&source, implementation, generation, text);
+
+    noc_logical_source_free(&source);
+    macro_fixture_deinit(&fixture);
+    free(input);
+}
+
 int main(void)
 {
     check_names_defaults_and_empty_expansion();
@@ -387,5 +450,6 @@ int main(void)
     test_mid_spelling_cancellation();
     test_validation_cancellation_preserves_seeded_output();
     test_spliced_anchor_budget_and_cancellation();
+    test_line_map_cancellation_preserves_seeded_output();
     return finish_suite("logical-source-lifecycle");
 }

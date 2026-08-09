@@ -23,6 +23,8 @@ enum {
 struct Noc_Logical_Source_Impl {
     char *text;
     size_t text_count;
+    size_t *line_starts;
+    size_t line_count;
     Noc_Logical_Token *tokens;
     Noc_Logical_Token_Macro_Provenance *provenances;
     size_t token_count;
@@ -59,6 +61,7 @@ static void noc__logical_source_impl_free(
     free(implementation->files);
     free(implementation->provenances);
     free(implementation->tokens);
+    free(implementation->line_starts);
     free(implementation->text);
     free(implementation);
 }
@@ -133,6 +136,8 @@ static bool noc__logical_source_owned_is_valid(
     if (implementation->generation != source->generation ||
         !implementation->text ||
         implementation->text[implementation->text_count] != '\0' ||
+        !implementation->line_starts || implementation->line_count == 0 ||
+        implementation->line_starts[0] != 0 ||
         implementation->token_count > implementation->token_capacity ||
         (implementation->token_capacity == 0) !=
             (implementation->tokens == NULL) ||
@@ -144,6 +149,15 @@ static bool noc__logical_source_owned_is_valid(
         (implementation->frame_count == 0) !=
             (implementation->frames == NULL)) {
         return false;
+    }
+    for (index = 1; index < implementation->line_count; ++index) {
+        size_t line_start = implementation->line_starts[index];
+        if (line_start <= implementation->line_starts[index - 1] ||
+            line_start > implementation->text_count ||
+            (implementation->text[line_start - 1] != '\n' &&
+             implementation->text[line_start - 1] != '\r')) {
+            return false;
+        }
     }
     for (index = 0; index < implementation->file_count; ++index) {
         const Noc_Logical_Source_File *file = &implementation->files[index];
@@ -931,6 +945,7 @@ NOCDEF Noc_Logical_Source_Status noc_logical_source_build_macro_expansion(
     Noc__Logical_Source_Builder builder;
     Noc_Buffer text = {0};
     Noc_Logical_Source_Status status = NOC_LOGICAL_SOURCE_OK;
+    Noc__Line_Map_Status line_status;
     size_t generation;
     size_t index;
     size_t validation_input_bytes_examined = 0;
@@ -1076,6 +1091,20 @@ NOCDEF Noc_Logical_Source_Status noc_logical_source_build_macro_expansion(
     built->text = text.items;
     built->text_count = text.count;
     memset(&text, 0, sizeof(text));
+    line_status = noc__line_starts_build(built->text,
+                                         built->text_count,
+                                         options.should_cancel,
+                                         options.cancel_user_data,
+                                         &built->line_starts,
+                                         &built->line_count);
+    if (line_status != NOC__LINE_MAP_OK) {
+        status = line_status == NOC__LINE_MAP_CANCELLED
+                     ? NOC_LOGICAL_SOURCE_CANCELLED
+                     : line_status == NOC__LINE_MAP_OUT_OF_MEMORY
+                           ? NOC_LOGICAL_SOURCE_OUT_OF_MEMORY
+                           : NOC_LOGICAL_SOURCE_LIMIT_EXCEEDED;
+        goto failed;
+    }
     if (noc__logical_source_should_cancel(&options)) {
         status = NOC_LOGICAL_SOURCE_CANCELLED;
         goto failed;
@@ -1134,6 +1163,113 @@ NOCDEF Noc_Slice noc_logical_source_token_text(
     result.data = source->impl->text + token->bytes.begin;
     result.count = token->bytes.end - token->bytes.begin;
     return result;
+}
+
+NOCDEF size_t noc_logical_source_line_count(
+    const Noc_Logical_Source *source)
+{
+    return noc__logical_source_handle_is_current(source)
+               ? source->impl->line_count
+               : 0;
+}
+
+NOCDEF bool noc_logical_source_location(
+    const Noc_Logical_Source *source,
+    size_t offset,
+    Noc_Logical_Location *output)
+{
+    const Noc_Logical_Source_Impl *implementation;
+    Noc_Logical_Location location;
+    size_t lower;
+    size_t upper;
+    if (!noc__logical_source_handle_is_current(source) || !output) return false;
+    implementation = source->impl;
+    if (offset > implementation->text_count) return false;
+    lower = 0;
+    upper = implementation->line_count;
+    while (lower + 1 < upper) {
+        size_t middle = lower + (upper - lower) / 2;
+        if (implementation->line_starts[middle] <= offset) {
+            lower = middle;
+        } else {
+            upper = middle;
+        }
+    }
+    location.offset = offset;
+    location.line = lower + 1;
+    location.byte_column = offset - implementation->line_starts[lower] + 1;
+    *output = location;
+    return true;
+}
+
+NOCDEF bool noc_logical_source_offset(
+    const Noc_Logical_Source *source,
+    size_t line,
+    size_t byte_column,
+    size_t *output)
+{
+    const Noc_Logical_Source_Impl *implementation;
+    size_t start;
+    size_t end;
+    size_t column_offset;
+    if (!noc__logical_source_handle_is_current(source) || !output || line == 0 ||
+        byte_column == 0) {
+        return false;
+    }
+    implementation = source->impl;
+    if (line > implementation->line_count) return false;
+    start = implementation->line_starts[line - 1];
+    end = line < implementation->line_count
+              ? implementation->line_starts[line] - 1
+              : implementation->text_count;
+    column_offset = byte_column - 1;
+    if (column_offset > end - start) return false;
+    *output = start + column_offset;
+    return true;
+}
+
+NOCDEF bool noc_logical_source_token_range_for_bytes(
+    const Noc_Logical_Source *source,
+    Noc_Logical_Byte_Range bytes,
+    Noc_Logical_Token_Range *output)
+{
+    const Noc_Logical_Source_Impl *implementation;
+    Noc_Logical_Token_Range result;
+    size_t lower;
+    size_t upper;
+    if (!noc__logical_source_handle_is_current(source) || !output) return false;
+    implementation = source->impl;
+    if (bytes.begin > bytes.end || bytes.end > implementation->text_count) {
+        return false;
+    }
+    lower = 0;
+    upper = implementation->token_count;
+    while (lower < upper) {
+        size_t middle = lower + (upper - lower) / 2;
+        if (implementation->tokens[middle].bytes.end <= bytes.begin) {
+            lower = middle + 1;
+        } else {
+            upper = middle;
+        }
+    }
+    result.begin = lower;
+    if (bytes.begin == bytes.end) {
+        result.end = lower;
+        *output = result;
+        return true;
+    }
+    upper = implementation->token_count;
+    while (lower < upper) {
+        size_t middle = lower + (upper - lower) / 2;
+        if (implementation->tokens[middle].bytes.begin < bytes.end) {
+            lower = middle + 1;
+        } else {
+            upper = middle;
+        }
+    }
+    result.end = lower;
+    *output = result;
+    return true;
 }
 
 NOCDEF bool noc_logical_source_token_macro_provenance(

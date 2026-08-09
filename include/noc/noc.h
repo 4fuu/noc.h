@@ -32,8 +32,8 @@
 
 #define NOC_VERSION_MAJOR 0
 #define NOC_VERSION_MINOR 42
-#define NOC_VERSION_PATCH 7
-#define NOC_VERSION "0.42.7"
+#define NOC_VERSION_PATCH 8
+#define NOC_VERSION "0.42.8"
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -1932,6 +1932,18 @@ typedef struct {
     size_t end;
 } Noc_Logical_Byte_Range;
 
+typedef struct {
+    size_t begin;
+    size_t end;
+} Noc_Logical_Token_Range;
+
+typedef struct {
+    size_t offset;
+    /* One-based logical line and byte column. */
+    size_t line;
+    size_t byte_column;
+} Noc_Logical_Location;
+
 enum {
     /* One owned ASCII space inserted solely to preserve a token boundary. It
        has no physical anchor or macro provenance. */
@@ -2601,6 +2613,31 @@ NOCDEF const Noc_Logical_Token *noc_logical_source_token_at(
 NOCDEF Noc_Slice noc_logical_source_token_text(
     const Noc_Logical_Source *source,
     size_t token_index);
+NOCDEF size_t noc_logical_source_line_count(
+    const Noc_Logical_Source *source);
+/* Logical offsets include EOF (0..text.count). CRLF is one line break while
+   both bytes retain separate columns. Scalar outputs are preserved on failure.
+   These coordinates deliberately have no path: use token provenance to reach
+   one or more exact physical source revisions. */
+NOCDEF bool noc_logical_source_location(
+    const Noc_Logical_Source *source,
+    size_t offset,
+    Noc_Logical_Location *output);
+NOCDEF bool noc_logical_source_offset(
+    const Noc_Logical_Source *source,
+    size_t line,
+    size_t byte_column,
+    size_t *output);
+/* Return the smallest half-open token-index range containing every token that
+   contributes bytes to BYTES. Zero-width tokens strictly inside a nonempty
+   byte range remain visible; zero-width tokens at either boundary are excluded.
+   An empty byte range returns an empty token range at the first token that
+   contributes a byte at or after that insertion point. Failure preserves
+   output. */
+NOCDEF bool noc_logical_source_token_range_for_bytes(
+    const Noc_Logical_Source *source,
+    Noc_Logical_Byte_Range bytes,
+    Noc_Logical_Token_Range *output);
 /* Returns false and preserves output for generated separators, stale sources,
    invalid indices, or NULL output. */
 NOCDEF bool noc_logical_source_token_macro_provenance(

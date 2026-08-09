@@ -110,32 +110,55 @@ static bool noc__document_snapshot_retain(Noc_Document_Snapshot_Impl *snapshot)
     return true;
 }
 
-static Noc_Workspace_Status noc__line_starts_build(const char *source,
-                                                   size_t source_count,
-                                                   size_t **output,
-                                                   size_t *output_count)
+NOC__PRIVATE Noc__Line_Map_Status noc__line_starts_build(
+    const char *source,
+    size_t source_count,
+    Noc__Line_Map_Cancel_Fn should_cancel,
+    void *cancel_user_data,
+    size_t **output,
+    size_t *output_count)
 {
+    enum { CANCEL_INTERVAL = 4096 };
     size_t line_count = 1;
     size_t line = 1;
     size_t index;
+    size_t next_cancel_poll = 0;
     size_t *line_starts;
     for (index = 0; index < source_count; ++index) {
+        if (should_cancel && index >= next_cancel_poll) {
+            if (should_cancel(cancel_user_data)) {
+                return NOC__LINE_MAP_CANCELLED;
+            }
+            next_cancel_poll = index > SIZE_MAX - CANCEL_INTERVAL
+                                   ? SIZE_MAX
+                                   : index + CANCEL_INTERVAL;
+        }
         if (source[index] == '\r') {
-            if (line_count == SIZE_MAX) return NOC_WORKSPACE_LIMIT_EXCEEDED;
+            if (line_count == SIZE_MAX) return NOC__LINE_MAP_LIMIT_EXCEEDED;
             line_count += 1;
             if (index + 1 < source_count && source[index + 1] == '\n') index += 1;
         } else if (source[index] == '\n') {
-            if (line_count == SIZE_MAX) return NOC_WORKSPACE_LIMIT_EXCEEDED;
+            if (line_count == SIZE_MAX) return NOC__LINE_MAP_LIMIT_EXCEEDED;
             line_count += 1;
         }
     }
     if (line_count > SIZE_MAX / sizeof(*line_starts)) {
-        return NOC_WORKSPACE_LIMIT_EXCEEDED;
+        return NOC__LINE_MAP_LIMIT_EXCEEDED;
     }
     line_starts = (size_t *)malloc(line_count * sizeof(*line_starts));
-    if (!line_starts) return NOC_WORKSPACE_OUT_OF_MEMORY;
+    if (!line_starts) return NOC__LINE_MAP_OUT_OF_MEMORY;
     line_starts[0] = 0;
+    next_cancel_poll = 0;
     for (index = 0; index < source_count; ++index) {
+        if (should_cancel && index >= next_cancel_poll) {
+            if (should_cancel(cancel_user_data)) {
+                free(line_starts);
+                return NOC__LINE_MAP_CANCELLED;
+            }
+            next_cancel_poll = index > SIZE_MAX - CANCEL_INTERVAL
+                                   ? SIZE_MAX
+                                   : index + CANCEL_INTERVAL;
+        }
         if (source[index] == '\r') {
             if (index + 1 < source_count && source[index + 1] == '\n') index += 1;
             line_starts[line++] = index + 1;
@@ -145,7 +168,7 @@ static Noc_Workspace_Status noc__line_starts_build(const char *source,
     }
     *output = line_starts;
     *output_count = line_count;
-    return NOC_WORKSPACE_OK;
+    return NOC__LINE_MAP_OK;
 }
 
 static Noc_Workspace_Status noc__document_snapshot_create(
@@ -157,7 +180,7 @@ static Noc_Workspace_Status noc__document_snapshot_create(
     Noc_Document_Snapshot_Impl **output)
 {
     Noc_Document_Snapshot_Impl *snapshot;
-    Noc_Workspace_Status status;
+    Noc__Line_Map_Status line_status;
     char *source_copy;
     size_t *line_starts = NULL;
     size_t line_count = 0;
@@ -170,13 +193,17 @@ static Noc_Workspace_Status noc__document_snapshot_create(
     if (!source_copy) return NOC_WORKSPACE_OUT_OF_MEMORY;
     if (source_count != 0) memcpy(source_copy, source, source_count);
     source_copy[source_count] = '\0';
-    status = noc__line_starts_build(source_copy,
-                                    source_count,
-                                    &line_starts,
-                                    &line_count);
-    if (status != NOC_WORKSPACE_OK) {
+    line_status = noc__line_starts_build(source_copy,
+                                         source_count,
+                                         NULL,
+                                         NULL,
+                                         &line_starts,
+                                         &line_count);
+    if (line_status != NOC__LINE_MAP_OK) {
         free(source_copy);
-        return status;
+        return line_status == NOC__LINE_MAP_OUT_OF_MEMORY
+                   ? NOC_WORKSPACE_OUT_OF_MEMORY
+                   : NOC_WORKSPACE_LIMIT_EXCEEDED;
     }
     snapshot = (Noc_Document_Snapshot_Impl *)malloc(sizeof(*snapshot));
     if (!snapshot) {

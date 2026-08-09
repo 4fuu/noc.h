@@ -138,6 +138,9 @@ must be generated reproducibly as one self-contained `noc.h`.
 
 - [ ] Add stable file identities, immutable document snapshots, physical/logical
       locations, line maps, include stacks, and generated-to-source mappings.
+  - [x] Add an owned logical line map with EOF-inclusive offset/line/byte-column
+        conversion and logical-byte-to-token-range queries suitable for later
+        CST/AST provenance attachment.
 - [x] Add in-memory document open/update/close APIs and generation-aware handles.
 - [ ] Add include search paths, trusted/system/project file classification, and
       a dependency graph usable by the build system and IDE index.
@@ -236,6 +239,9 @@ must be generated reproducibly as one self-contained `noc.h`.
           cancellation, transactional generations, focused tests, and sampled
           fuzz invariants. Logical C parsing and complete translation-unit
           preprocessing remain separate work.
+    - [x] Add durable logical line coordinates and binary-search byte-to-token
+          range queries so future logical CST/AST nodes can reach token-level
+          physical and macro provenance without reinterpreting physical ranges.
   - [x] Patch and deterministically regenerate the pinned tree-sitter-c 0.24.2
         grammar for required C11 `_Bool`, `_Complex`, `_Thread_local`, and
         `_Static_assert` spellings, `_Atomic(type-name)`, and anonymous

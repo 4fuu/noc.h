@@ -175,6 +175,8 @@ static void fuzz_compare_logical_sources(const Noc_Logical_Source *left,
                               noc_logical_source_text(right)));
     FUZZ_CHECK(noc_logical_source_token_count(left) ==
                noc_logical_source_token_count(right));
+    FUZZ_CHECK(noc_logical_source_line_count(left) ==
+               noc_logical_source_line_count(right));
     FUZZ_CHECK(noc_logical_source_file_count(left) ==
                noc_logical_source_file_count(right));
     FUZZ_CHECK(noc_logical_source_macro_frame_count(left) ==
@@ -260,6 +262,9 @@ static void fuzz_logical_source(const Noc_Macro_Expansion *expansion,
     Noc_Logical_Source repeated = {0};
     Noc_Logical_Source_Options options = noc_logical_source_default_options();
     Noc_Logical_Source_Status status;
+    Noc_Logical_Location location;
+    Noc_Logical_Token_Range token_range;
+    size_t round_trip;
     size_t previous_end = 0;
     size_t index;
     options.max_source_bytes = 128 * 1024;
@@ -276,6 +281,14 @@ static void fuzz_logical_source(const Noc_Macro_Expansion *expansion,
     FUZZ_CHECK(noc_logical_source_is_valid(output));
     FUZZ_CHECK(noc_logical_source_text(output).data[
                    noc_logical_source_text(output).count] == '\0');
+    FUZZ_CHECK(noc_logical_source_line_count(output) > 0);
+    FUZZ_CHECK(noc_logical_source_location(
+        output, noc_logical_source_text(output).count, &location));
+    FUZZ_CHECK(noc_logical_source_offset(output,
+                                         location.line,
+                                         location.byte_column,
+                                         &round_trip));
+    FUZZ_CHECK(round_trip == noc_logical_source_text(output).count);
     for (index = 0; index < noc_logical_source_token_count(output); ++index) {
         const Noc_Logical_Token *token =
             noc_logical_source_token_at(output, index);
@@ -286,6 +299,12 @@ static void fuzz_logical_source(const Noc_Macro_Expansion *expansion,
         FUZZ_CHECK(token->bytes.end <= noc_logical_source_text(output).count);
         FUZZ_CHECK(noc_logical_source_token_text(output, index).data ==
                    noc_logical_source_text(output).data + token->bytes.begin);
+        if (token->bytes.begin != token->bytes.end) {
+            FUZZ_CHECK(noc_logical_source_token_range_for_bytes(output,
+                                                                 token->bytes,
+                                                                 &token_range));
+            FUZZ_CHECK(token_range.begin <= index && index < token_range.end);
+        }
         if ((token->flags & NOC_LOGICAL_TOKEN_GENERATED_SEPARATOR) != 0) {
             FUZZ_CHECK(!noc_logical_source_token_macro_provenance(
                 output, index, &provenance));

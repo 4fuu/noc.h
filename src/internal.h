@@ -39,6 +39,15 @@ typedef struct {
 
 typedef Noc_Token (*Noc__Macro_Token_Query)(const void *, size_t);
 
+typedef bool (*Noc__Line_Map_Cancel_Fn)(void *);
+
+typedef enum {
+    NOC__LINE_MAP_OK = 0,
+    NOC__LINE_MAP_CANCELLED,
+    NOC__LINE_MAP_LIMIT_EXCEEDED,
+    NOC__LINE_MAP_OUT_OF_MEMORY,
+} Noc__Line_Map_Status;
+
 /* Sequence-relative invocation syntax shared by the physical-source query and
    expanded logical-token rescan. It owns only the argument-range array. */
 typedef struct {
@@ -79,6 +88,8 @@ NOC__PRIVATE size_t noc__splice_length(const char *, size_t, size_t);
 NOC__PRIVATE bool noc__contains_newline(const char *, size_t);
 NOC__PRIVATE bool noc__logical_pair(const char *, size_t, size_t, char, char, size_t *);
 NOC__PRIVATE bool noc__source_class_is_valid(Noc_Source_Class);
+NOC__PRIVATE Noc__Line_Map_Status noc__line_starts_build(
+    const char *, size_t, Noc__Line_Map_Cancel_Fn, void *, size_t **, size_t *);
 NOC__PRIVATE Noc_Token noc__make_token(Noc_Lexer *, Noc_Token_Kind, size_t, size_t,
                                       Noc_Location);
 NOC__PRIVATE void noc__report(Noc_Context *, Noc_Diagnostic_Severity,

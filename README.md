@@ -42,7 +42,7 @@ The suite names are `header-c`, `header-cpp`, `public-header-c`,
 `public-header-cpp`, `modules`, `workspace`,
 `preprocessing-tokens`, `macro-directives`, `macro-environment`,
 `macro-invocations`, `macro-expansion`, `logical-source`,
-`logical-source-lifecycle`,
+`logical-source-lifecycle`, `logical-source-queries`,
 `function-macro-expansion`,
 `variadic-macro-expansion`, `macro-stringification`, `macro-token-paste`,
 `macro-builtins`, `configured-builtins`, `preprocessor-expressions`,
@@ -435,12 +435,18 @@ definition/invocation frame chain. It therefore remains queryable after the
 temporary expansion, environment, preprocessing units, snapshots, and workspace
 are destroyed. Input scanning, output bytes, token/frame/file counts, copied path
 bytes, and cancellation are explicitly bounded, and every failure preserves the
-previous generation. These records are suitable for diagnostics, expansion
-preview, and a later logical C CST/AST; they do not execute directives, choose
-conditional branches, traverse includes, or claim that an arbitrary fragment is
-a complete preprocessed translation unit. Run source-map/serialization coverage
-with `./nob test logical-source`, and ownership, cancellation, generation, and
-limit coverage with `./nob test logical-source-lifecycle`.
+previous generation. Its owned logical line map supports EOF-inclusive
+offset/line/byte-column conversion with the same CRLF convention as physical
+snapshots. A binary-search byte-range query maps future logical CST/AST ranges
+back to the minimal token interval, where callers can inspect each token's
+physical and macro provenance without conflating coordinate domains. These
+records are suitable for diagnostics, expansion preview, and a later logical C
+CST/AST; they do not execute directives, choose conditional branches, traverse
+includes, or claim that an arbitrary fragment is a complete preprocessed
+translation unit. Run source-map/serialization coverage with `./nob test
+logical-source`, ownership/cancellation/generation/limit coverage with `./nob
+test logical-source-lifecycle`, and coordinate/range coverage with `./nob test
+logical-source-queries`.
 
 Conditional preprocessing is staged rather than hidden inside a monolithic
 driver. `noc_preprocessor_directive_body_tokens` returns the significant

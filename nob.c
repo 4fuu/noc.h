@@ -84,6 +84,7 @@ static const Test_Suite test_suites[] = {
     {"macro-expansion", "tests/test_macro_expansion.c", "build/noc-test-macro-expansion" NOC_EXE, false},
     {"logical-source", "tests/test_logical_source.c", "build/noc-test-logical-source" NOC_EXE, false},
     {"logical-source-lifecycle", "tests/test_logical_source_lifecycle.c", "build/noc-test-logical-source-lifecycle" NOC_EXE, false},
+    {"logical-source-queries", "tests/test_logical_source_queries.c", "build/noc-test-logical-source-queries" NOC_EXE, false},
     {"function-macro-expansion", "tests/test_function_macro_expansion.c", "build/noc-test-function-macro-expansion" NOC_EXE, false},
     {"variadic-macro-expansion", "tests/test_variadic_macro_expansion.c", "build/noc-test-variadic-macro-expansion" NOC_EXE, false},
     {"macro-stringification", "tests/test_macro_stringification.c", "build/noc-test-macro-stringification" NOC_EXE, false},

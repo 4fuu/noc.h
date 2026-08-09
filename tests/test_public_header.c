@@ -26,6 +26,8 @@ int main(void)
     Noc_C_Grammar_Candidate_Options grammar_options;
     Noc_C_Ast ast;
     Noc_C_Ast_Options ast_options;
+    Noc_Logical_Location logical_location;
+    Noc_Logical_Token_Range logical_tokens;
     memset(&pragma_once, 0, sizeof(pragma_once));
     memset(&guard, 0, sizeof(guard));
     memset(&expansion, 0, sizeof(expansion));
@@ -34,6 +36,8 @@ int main(void)
     memset(&grammar_options, 0, sizeof(grammar_options));
     memset(&ast, 0, sizeof(ast));
     memset(&ast_options, 0, sizeof(ast_options));
+    memset(&logical_location, 0, sizeof(logical_location));
+    memset(&logical_tokens, 0, sizeof(logical_tokens));
     resolver.resolve = public_header_resolver;
     resolver.user_data = NULL;
     return version.count == strlen(NOC_VERSION) &&
@@ -46,11 +50,13 @@ int main(void)
                    grammar_options.max_candidates == 0 &&
                    ast.generation == 0 &&
                    ast_options.max_nodes == 0 &&
+                   logical_location.line == 0 &&
+                   logical_tokens.begin == logical_tokens.end &&
                    resolver.resolve != NULL &&
                    NOC_INCLUDE_FORM_QUOTED != NOC_INCLUDE_FORM_ANGLED &&
                    NOC_VERSION_MAJOR == 0 &&
                    NOC_VERSION_MINOR == 42 &&
-                   NOC_VERSION_PATCH == 7
+                   NOC_VERSION_PATCH == 8
                ? 0
                : 1;
 }
