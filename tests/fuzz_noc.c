@@ -167,6 +167,171 @@ static void fuzz_workspace(const uint8_t *data, size_t size, unsigned int select
     noc_document_snapshot_free(&current);
 }
 
+static void fuzz_compare_logical_sources(const Noc_Logical_Source *left,
+                                         const Noc_Logical_Source *right)
+{
+    size_t index;
+    FUZZ_CHECK(noc_slice_equal(noc_logical_source_text(left),
+                              noc_logical_source_text(right)));
+    FUZZ_CHECK(noc_logical_source_token_count(left) ==
+               noc_logical_source_token_count(right));
+    FUZZ_CHECK(noc_logical_source_file_count(left) ==
+               noc_logical_source_file_count(right));
+    FUZZ_CHECK(noc_logical_source_macro_frame_count(left) ==
+               noc_logical_source_macro_frame_count(right));
+    for (index = 0; index < noc_logical_source_token_count(left); ++index) {
+        const Noc_Logical_Token *left_token =
+            noc_logical_source_token_at(left, index);
+        const Noc_Logical_Token *right_token =
+            noc_logical_source_token_at(right, index);
+        Noc_Logical_Token_Macro_Provenance left_provenance;
+        Noc_Logical_Token_Macro_Provenance right_provenance;
+        bool left_has_provenance;
+        bool right_has_provenance;
+        FUZZ_CHECK(left_token != NULL && right_token != NULL);
+        FUZZ_CHECK(left_token->kind == right_token->kind);
+        FUZZ_CHECK(left_token->bytes.begin == right_token->bytes.begin);
+        FUZZ_CHECK(left_token->bytes.end == right_token->bytes.end);
+        FUZZ_CHECK(left_token->flags == right_token->flags);
+        FUZZ_CHECK(noc_slice_equal(noc_logical_source_token_text(left, index),
+                                  noc_logical_source_token_text(right, index)));
+        left_has_provenance = noc_logical_source_token_macro_provenance(
+            left, index, &left_provenance);
+        right_has_provenance = noc_logical_source_token_macro_provenance(
+            right, index, &right_provenance);
+        FUZZ_CHECK(left_has_provenance == right_has_provenance);
+        if (left_has_provenance) {
+            FUZZ_CHECK(left_provenance.anchor.file_index ==
+                       right_provenance.anchor.file_index);
+            FUZZ_CHECK(left_provenance.anchor.bytes.begin ==
+                       right_provenance.anchor.bytes.begin);
+            FUZZ_CHECK(left_provenance.anchor.bytes.end ==
+                       right_provenance.anchor.bytes.end);
+            FUZZ_CHECK(left_provenance.anchor.line ==
+                       right_provenance.anchor.line);
+            FUZZ_CHECK(left_provenance.anchor.byte_column ==
+                       right_provenance.anchor.byte_column);
+            FUZZ_CHECK(left_provenance.macro_frame_index ==
+                       right_provenance.macro_frame_index);
+            FUZZ_CHECK(left_provenance.macro_origin ==
+                       right_provenance.macro_origin);
+            FUZZ_CHECK(left_provenance.builtin_kind ==
+                       right_provenance.builtin_kind);
+        }
+    }
+    for (index = 0; index < noc_logical_source_file_count(left); ++index) {
+        const Noc_Logical_Source_File *left_file =
+            noc_logical_source_file_at(left, index);
+        const Noc_Logical_Source_File *right_file =
+            noc_logical_source_file_at(right, index);
+        FUZZ_CHECK(left_file != NULL && right_file != NULL);
+        FUZZ_CHECK(left_file->file_id == right_file->file_id);
+        FUZZ_CHECK(left_file->document_generation ==
+                   right_file->document_generation);
+        FUZZ_CHECK(left_file->source_class == right_file->source_class);
+        FUZZ_CHECK(noc_slice_equal(left_file->path, right_file->path));
+    }
+    for (index = 0; index < noc_logical_source_macro_frame_count(left); ++index) {
+        const Noc_Logical_Macro_Frame *left_frame =
+            noc_logical_source_macro_frame_at(left, index);
+        const Noc_Logical_Macro_Frame *right_frame =
+            noc_logical_source_macro_frame_at(right, index);
+        FUZZ_CHECK(left_frame != NULL && right_frame != NULL);
+        FUZZ_CHECK(left_frame->definition.file_index ==
+                   right_frame->definition.file_index);
+        FUZZ_CHECK(left_frame->definition.bytes.begin ==
+                   right_frame->definition.bytes.begin);
+        FUZZ_CHECK(left_frame->definition.bytes.end ==
+                   right_frame->definition.bytes.end);
+        FUZZ_CHECK(left_frame->invocation.file_index ==
+                   right_frame->invocation.file_index);
+        FUZZ_CHECK(left_frame->invocation.bytes.begin ==
+                   right_frame->invocation.bytes.begin);
+        FUZZ_CHECK(left_frame->invocation.bytes.end ==
+                   right_frame->invocation.bytes.end);
+        FUZZ_CHECK(left_frame->parent_macro_frame_index ==
+                   right_frame->parent_macro_frame_index);
+    }
+}
+
+static void fuzz_logical_source(const Noc_Macro_Expansion *expansion,
+                                Noc_Logical_Source *output)
+{
+    Noc_Logical_Source repeated = {0};
+    Noc_Logical_Source_Options options = noc_logical_source_default_options();
+    Noc_Logical_Source_Status status;
+    size_t previous_end = 0;
+    size_t index;
+    options.max_source_bytes = 128 * 1024;
+    options.max_input_bytes_examined = 256 * 1024;
+    options.max_tokens = 8192;
+    options.max_macro_frames = 1024;
+    options.max_source_files = 128;
+    options.max_path_bytes = 16 * 1024;
+    status = noc_logical_source_build_macro_expansion(expansion, options, output);
+    FUZZ_CHECK(status == NOC_LOGICAL_SOURCE_OK ||
+               status == NOC_LOGICAL_SOURCE_LIMIT_EXCEEDED ||
+               status == NOC_LOGICAL_SOURCE_OUT_OF_MEMORY);
+    if (status != NOC_LOGICAL_SOURCE_OK) return;
+    FUZZ_CHECK(noc_logical_source_is_valid(output));
+    FUZZ_CHECK(noc_logical_source_text(output).data[
+                   noc_logical_source_text(output).count] == '\0');
+    for (index = 0; index < noc_logical_source_token_count(output); ++index) {
+        const Noc_Logical_Token *token =
+            noc_logical_source_token_at(output, index);
+        Noc_Logical_Token_Macro_Provenance provenance;
+        FUZZ_CHECK(token != NULL);
+        FUZZ_CHECK(token->bytes.begin == previous_end);
+        FUZZ_CHECK(token->bytes.begin <= token->bytes.end);
+        FUZZ_CHECK(token->bytes.end <= noc_logical_source_text(output).count);
+        FUZZ_CHECK(noc_logical_source_token_text(output, index).data ==
+                   noc_logical_source_text(output).data + token->bytes.begin);
+        if ((token->flags & NOC_LOGICAL_TOKEN_GENERATED_SEPARATOR) != 0) {
+            FUZZ_CHECK(!noc_logical_source_token_macro_provenance(
+                output, index, &provenance));
+        } else {
+            FUZZ_CHECK(noc_logical_source_token_macro_provenance(
+                output, index, &provenance));
+            FUZZ_CHECK(provenance.anchor.file_index <
+                       noc_logical_source_file_count(output));
+            FUZZ_CHECK(provenance.macro_frame_index == NOC_TOKEN_INDEX_NONE ||
+                       provenance.macro_frame_index <
+                           noc_logical_source_macro_frame_count(output));
+        }
+        previous_end = token->bytes.end;
+    }
+    FUZZ_CHECK(previous_end == noc_logical_source_text(output).count);
+    for (index = 0; index < noc_logical_source_file_count(output); ++index) {
+        const Noc_Logical_Source_File *file =
+            noc_logical_source_file_at(output, index);
+        FUZZ_CHECK(file != NULL && file->path.data != NULL);
+        FUZZ_CHECK(file->path.data[file->path.count] == '\0');
+    }
+    for (index = 0;
+         index < noc_logical_source_macro_frame_count(output);
+         ++index) {
+        const Noc_Logical_Macro_Frame *frame =
+            noc_logical_source_macro_frame_at(output, index);
+        FUZZ_CHECK(frame != NULL);
+        FUZZ_CHECK(frame->definition.file_index <
+                   noc_logical_source_file_count(output));
+        FUZZ_CHECK(frame->invocation.file_index <
+                   noc_logical_source_file_count(output));
+        FUZZ_CHECK(frame->parent_macro_frame_index == NOC_TOKEN_INDEX_NONE ||
+                   frame->parent_macro_frame_index < index);
+    }
+    status = noc_logical_source_build_macro_expansion(expansion,
+                                                       options,
+                                                       &repeated);
+    FUZZ_CHECK(status == NOC_LOGICAL_SOURCE_OK ||
+               status == NOC_LOGICAL_SOURCE_OUT_OF_MEMORY);
+    if (status == NOC_LOGICAL_SOURCE_OK) {
+        FUZZ_CHECK(noc_logical_source_is_valid(&repeated));
+        fuzz_compare_logical_sources(output, &repeated);
+    }
+    noc_logical_source_free(&repeated);
+}
+
 static void fuzz_preprocessor(Noc_Context *context,
                               const uint8_t *data,
                               size_t size,
@@ -182,6 +347,7 @@ static void fuzz_preprocessor(Noc_Context *context,
     Noc_Preprocessor_Conditional_Groups groups = {0};
     Noc_Include_Operand include_operand = {0};
     Noc_Include_Expansion include_expansion = {0};
+    Noc_Logical_Source logical_source = {0};
     size_t index;
     noc_workspace_init(&workspace);
     FUZZ_CHECK(noc_workspace_open_document(
@@ -539,6 +705,9 @@ static void fuzz_preprocessor(Noc_Context *context,
                     FUZZ_CHECK(noc_macro_expansion_builtin_is_available(
                                    &expansion, NOC_MACRO_BUILTIN_TIME) ==
                                (options.translation_time.count != 0));
+                    if ((selector & 7u) == 0) {
+                        fuzz_logical_source(&expansion, &logical_source);
+                    }
                 }
                 for (index = 0; index < unit.count; ++index) {
                     const Noc_Preprocessor_Directive *directive =
@@ -665,10 +834,14 @@ static void fuzz_preprocessor(Noc_Context *context,
     noc_macro_expansion_free(&expansion);
     noc_macro_environment_free(&environment);
     noc_preprocessor_unit_free(&unit);
+    if (logical_source.impl) {
+        FUZZ_CHECK(noc_logical_source_is_valid(&logical_source));
+    }
     FUZZ_CHECK(!noc_include_expansion_is_valid(&include_expansion));
     FUZZ_CHECK(!noc_include_operand_is_valid(&include_operand));
     noc_include_expansion_free(&include_expansion);
     noc_include_operand_free(&include_operand);
+    noc_logical_source_free(&logical_source);
     noc_document_snapshot_free(&snapshot);
     noc_workspace_deinit(&workspace);
 }

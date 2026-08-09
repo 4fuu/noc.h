@@ -41,7 +41,9 @@ Run one independently buildable suite on demand with `./nob test <suite>`.
 The suite names are `header-c`, `header-cpp`, `public-header-c`,
 `public-header-cpp`, `modules`, `workspace`,
 `preprocessing-tokens`, `macro-directives`, `macro-environment`,
-`macro-invocations`, `macro-expansion`, `function-macro-expansion`,
+`macro-invocations`, `macro-expansion`, `logical-source`,
+`logical-source-lifecycle`,
+`function-macro-expansion`,
 `variadic-macro-expansion`, `macro-stringification`, `macro-token-paste`,
 `macro-builtins`, `configured-builtins`, `preprocessor-expressions`,
 `conditional-groups`, `include-operands`, `include-resolver`,
@@ -115,6 +117,7 @@ be declared by `src/internal.h`; module-local helpers remain static. Current own
 | `src/macro_directives.c` | Recoverable `#define`/`#undef` grammar and queries |
 | `src/macro_invocations.c` | Lossless, recoverable function-like invocation/argument syntax |
 | `src/macro_environment.c`, `src/macro_expansion.c` | Effective macro state and bounded expansion |
+| `src/logical_source.c` | Owning canonical macro-fragment bytes, physical sites, and normalized provenance frames |
 | `src/conditional.c`, `src/conditional_groups.c` | C11 condition evaluation and recoverable balanced conditional analysis |
 | `src/include_control.c` | Read-only pragma-once and strict canonical include-guard recognition |
 | `src/include_resolver.c`, `src/include_expansion.c` | Physical/expanded include operands and host-configurable snapshot resolution |
@@ -416,6 +419,29 @@ threaded through normal expansion, condition expansion, `defined`, direct
 the owning expansion, and `noc_macro_expansion_builtin_is_available` exposes the
 exact configured fallback set to IDE clients without interpreting private bits.
 
+`noc_logical_source_build_macro_expansion` is the durable parser bridge for one
+successful macro-expansion fragment. It removes phase-2 line splices from each
+token spelling and gives the result a separate logical byte coordinate domain;
+existing physical CST/AST byte ranges are never reinterpreted. When two
+significant preprocessing tokens have no nonempty logical trivia between them,
+the serializer inserts an explicitly marked ASCII-space token. That conservative
+rule preserves token boundaries on re-lexing (`/` plus `*` cannot become a
+comment, and separate punctuators or identifiers cannot merge); paste and
+stringification results already arrive as one generated token.
+
+The result owns its canonical NUL-terminated text, logical token ranges, copied
+file paths and document identities, immediate physical token sites, and nested
+definition/invocation frame chain. It therefore remains queryable after the
+temporary expansion, environment, preprocessing units, snapshots, and workspace
+are destroyed. Input scanning, output bytes, token/frame/file counts, copied path
+bytes, and cancellation are explicitly bounded, and every failure preserves the
+previous generation. These records are suitable for diagnostics, expansion
+preview, and a later logical C CST/AST; they do not execute directives, choose
+conditional branches, traverse includes, or claim that an arbitrary fragment is
+a complete preprocessed translation unit. Run source-map/serialization coverage
+with `./nob test logical-source`, and ownership, cancellation, generation, and
+limit coverage with `./nob test logical-source-lifecycle`.
+
 Conditional preprocessing is staged rather than hidden inside a monolithic
 driver. `noc_preprocessor_directive_body_tokens` returns the significant
 `#if`/`#elif` body span while retaining internal trivia.
@@ -512,7 +538,8 @@ Run the token and recovery coverage independently with
 `tests/fuzz_noc.c` and `tests/fuzz_c_parser.c` are deterministic cross-platform
 smoke runners and separate Clang libFuzzer targets. The general target covers
 lexer bytes, token streams/cursors, lossless syntax queries, C structure
-analysis, preprocessing, and rewrite callbacks. The parser target isolates the
+analysis, preprocessing, sampled owning logical-source/provenance invariants,
+and rewrite callbacks. The parser target isolates the
 recoverable physical CST and normalized AST, checking ranges, topology,
 generation-aware rebuilds, typed details, and deterministic recovery for
 arbitrary bytes. Both smoke campaigns are part of `./nob test` and run on demand

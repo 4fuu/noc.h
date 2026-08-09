@@ -4,7 +4,7 @@ This file is the long-running implementation checklist. A milestone is checked
 only after its interfaces have tests or examples, the complete local suite
 passes, and the milestone has been committed and pushed.
 
-The 0.19 public API remains the compatibility baseline while the 0.41
+The 0.19 public API remains the compatibility baseline while the 0.42
 compiler frontend is built. Dialect inputs continue to use ordinary `.c` and
 `.h` names. Development code may be split into normal C modules, but releases
 must be generated reproducibly as one self-contained `noc.h`.
@@ -230,6 +230,12 @@ must be generated reproducibly as one self-contained `noc.h`.
         recovery state, bounded work, cancellation, and generations.
   - [ ] Attach preprocessing-token, macro-expansion, and include provenance to
         logical AST nodes without weakening physical spelling/source queries.
+    - [x] Add a fully owning, bounded canonical logical-source fragment for one
+          macro expansion, with a separate byte domain, parser-safe token
+          separators, copied physical file/sites, nested macro frames,
+          cancellation, transactional generations, focused tests, and sampled
+          fuzz invariants. Logical C parsing and complete translation-unit
+          preprocessing remain separate work.
   - [x] Patch and deterministically regenerate the pinned tree-sitter-c 0.24.2
         grammar for required C11 `_Bool`, `_Complex`, `_Thread_local`, and
         `_Static_assert` spellings, `_Atomic(type-name)`, and anonymous

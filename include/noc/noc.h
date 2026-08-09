@@ -32,8 +32,8 @@
 
 #define NOC_VERSION_MAJOR 0
 #define NOC_VERSION_MINOR 42
-#define NOC_VERSION_PATCH 6
-#define NOC_VERSION "0.42.6"
+#define NOC_VERSION_PATCH 7
+#define NOC_VERSION "0.42.7"
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -1903,6 +1903,122 @@ typedef struct {
     size_t generation;
 } Noc_Macro_Expansion;
 
+/* Owning canonical logical source for later preprocessing-aware C parsing.
+   This layer gives macro-expanded tokens their own byte coordinate domain
+   without changing Noc_Byte_Range or any physical CST/AST query. It currently
+   builds one expansion fragment; it does not execute directives, remove
+   conditional branches, traverse includes, or claim to be a complete
+   preprocessed translation unit.
+
+   Stored token spellings have translation-phase-2 line splices removed. Every
+   expansion token is retained in order, including trivia and zero-width
+   splice-only trivia. When two non-trivia preprocessing tokens would otherwise
+   become adjacent with no nonempty logical trivia, Noc inserts one ASCII space
+   token marked GENERATED_SEPARATOR. This conservative canonical spelling keeps
+   separately produced tokens from accidentally re-lexing as one token; only
+   macro ##/%:%: expansion may intentionally create a combined token.
+
+   Noc_Logical_Source is initialized with {0}, is fully owning, and must not be
+   shallow-copied. Text, token pointers, file/path records, and frame pointers
+   remain valid until a successful rebuild or free. Successful builds copy
+   rendered bytes, physical source identity/sites, and normalized macro frames;
+   the expansion, environment, preprocessing units, snapshots, and workspace may
+   all then be rebuilt or freed. File IDs retain only their original workspace-
+   local meaning, while the copied path and document generation identify the
+   physical revision for durable diagnostics and IDE/LSP source lookup. Failed
+   builds preserve the previous result and generation. */
+typedef struct {
+    size_t begin;
+    size_t end;
+} Noc_Logical_Byte_Range;
+
+enum {
+    /* One owned ASCII space inserted solely to preserve a token boundary. It
+       has no physical anchor or macro provenance. */
+    NOC_LOGICAL_TOKEN_GENERATED_SEPARATOR = 1u << 0,
+};
+
+typedef struct {
+    Noc_Token_Kind kind;
+    Noc_Logical_Byte_Range bytes;
+    size_t generation;
+    unsigned int flags;
+} Noc_Logical_Token;
+
+typedef struct {
+    Noc_File_Id file_id;
+    size_t document_generation;
+    Noc_Source_Class source_class;
+    /* Owned by the logical source and NUL-terminated; count excludes NUL. */
+    Noc_Slice path;
+} Noc_Logical_Source_File;
+
+typedef struct {
+    /* Index in this logical source's file table. */
+    size_t file_index;
+    /* Half-open physical spelling range in that exact document revision. */
+    Noc_Byte_Range bytes;
+    /* One-based physical line and byte column at bytes.begin. */
+    size_t line;
+    size_t byte_column;
+} Noc_Logical_Physical_Site;
+
+typedef struct {
+    /* Immediate physical source token. For stringification, paste, and
+       built-ins this is an operator/name anchor, not a claim that generated
+       bytes have a physical spelling range. */
+    Noc_Logical_Physical_Site anchor;
+    /* Index in this logical source's normalized frame array, or
+       NOC_TOKEN_INDEX_NONE. */
+    size_t macro_frame_index;
+    Noc_Macro_Expansion_Token_Origin macro_origin;
+    Noc_Macro_Builtin_Kind builtin_kind;
+} Noc_Logical_Token_Macro_Provenance;
+
+typedef struct {
+    /* The macro-name token in its definition and at this invocation. */
+    Noc_Logical_Physical_Site definition;
+    Noc_Logical_Physical_Site invocation;
+    /* Earlier enclosing frame in this source, or NOC_TOKEN_INDEX_NONE. */
+    size_t parent_macro_frame_index;
+} Noc_Logical_Macro_Frame;
+
+typedef bool (*Noc_Logical_Source_Cancel_Fn)(void *user_data);
+
+typedef struct {
+    /* All limits must be nonzero, and max_source_bytes must be less than
+       SIZE_MAX. Source bytes include generated separators but exclude the
+       terminating NUL; max_tokens includes separator tokens.
+       max_input_bytes_examined bounds physical/generated spelling bytes scanned
+       before phase-2 normalization. Path bytes include one NUL per unique source
+       file. */
+    size_t max_source_bytes;
+    size_t max_input_bytes_examined;
+    size_t max_tokens;
+    size_t max_macro_frames;
+    size_t max_source_files;
+    size_t max_path_bytes;
+    Noc_Logical_Source_Cancel_Fn should_cancel;
+    void *cancel_user_data;
+} Noc_Logical_Source_Options;
+
+typedef enum {
+    NOC_LOGICAL_SOURCE_OK = 0,
+    NOC_LOGICAL_SOURCE_INVALID_ARGUMENT,
+    NOC_LOGICAL_SOURCE_STALE,
+    NOC_LOGICAL_SOURCE_CANCELLED,
+    NOC_LOGICAL_SOURCE_LIMIT_EXCEEDED,
+    NOC_LOGICAL_SOURCE_GENERATION_EXHAUSTED,
+    NOC_LOGICAL_SOURCE_OUT_OF_MEMORY,
+} Noc_Logical_Source_Status;
+
+typedef struct Noc_Logical_Source_Impl Noc_Logical_Source_Impl;
+
+typedef struct {
+    Noc_Logical_Source_Impl *impl;
+    size_t generation;
+} Noc_Logical_Source;
+
 /* Owning result of applying normal C11 macro replacement to one physical
    EXPANSION_REQUIRED #include operand and then interpreting the complete token
    sequence as a header name. Initialize to {0}, do not shallow-copy, treat all
@@ -2458,6 +2574,49 @@ NOCDEF const Noc_Macro_Expansion_Frame *noc_macro_expansion_frame_at(
    owned by the expansion. Success replaces output; failure preserves it. */
 NOCDEF bool noc_macro_expansion_render(const Noc_Macro_Expansion *expansion,
                                        Noc_Buffer *output);
+NOCDEF Noc_Logical_Source_Options noc_logical_source_default_options(void);
+NOCDEF const char *noc_logical_source_status_name(
+    Noc_Logical_Source_Status status);
+NOCDEF void noc_logical_source_free(Noc_Logical_Source *source);
+/* Validity checks only owned storage and topology; successful results have no
+   lifetime dependency on their build inputs. */
+NOCDEF bool noc_logical_source_is_valid(const Noc_Logical_Source *source);
+NOCDEF size_t noc_logical_source_generation(
+    const Noc_Logical_Source *source);
+/* Build polls cancellation before work and while copying tokens/frames. Limits,
+   cancellation, stale input, allocation failure, invalid input, and exhausted
+   generation preserve an existing output exactly. */
+NOCDEF Noc_Logical_Source_Status noc_logical_source_build_macro_expansion(
+    const Noc_Macro_Expansion *expansion,
+    Noc_Logical_Source_Options options,
+    Noc_Logical_Source *output);
+/* Owned, NUL-terminated text; the NUL is excluded from count. Invalid or stale
+   sources return {0}. */
+NOCDEF Noc_Slice noc_logical_source_text(const Noc_Logical_Source *source);
+NOCDEF size_t noc_logical_source_token_count(
+    const Noc_Logical_Source *source);
+NOCDEF const Noc_Logical_Token *noc_logical_source_token_at(
+    const Noc_Logical_Source *source,
+    size_t token_index);
+NOCDEF Noc_Slice noc_logical_source_token_text(
+    const Noc_Logical_Source *source,
+    size_t token_index);
+/* Returns false and preserves output for generated separators, stale sources,
+   invalid indices, or NULL output. */
+NOCDEF bool noc_logical_source_token_macro_provenance(
+    const Noc_Logical_Source *source,
+    size_t token_index,
+    Noc_Logical_Token_Macro_Provenance *output);
+NOCDEF size_t noc_logical_source_file_count(
+    const Noc_Logical_Source *source);
+NOCDEF const Noc_Logical_Source_File *noc_logical_source_file_at(
+    const Noc_Logical_Source *source,
+    size_t file_index);
+NOCDEF size_t noc_logical_source_macro_frame_count(
+    const Noc_Logical_Source *source);
+NOCDEF const Noc_Logical_Macro_Frame *noc_logical_source_macro_frame_at(
+    const Noc_Logical_Source *source,
+    size_t frame_index);
 /* Evaluate a condition-mode macro expansion as a bounded C11 preprocessing
    integer constant expression. Remaining identifiers become zero and defined
    queries the expansion's selected environment prefix, including deterministic
