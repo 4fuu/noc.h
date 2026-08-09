@@ -164,6 +164,7 @@ static const char *const noc__c_ast_kind_names[] = {
     "true",
     "type_identifier",
     "static_assert_declaration",
+    "atomic_type_specifier",
     "error",
     "missing",
 };

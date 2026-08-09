@@ -75,6 +75,37 @@ static Noc_Include_Resolve_Status release_not_found(
     return NOC_INCLUDE_RESOLVE_NOT_FOUND;
 }
 
+static size_t release_find_source(const Noc_C_Ast *ast,
+                                  Noc_C_Ast_Kind kind,
+                                  const char *source)
+{
+    size_t index;
+    for (index = 0; index < noc_c_ast_node_count(ast); ++index) {
+        const Noc_C_Ast_Node *node = noc_c_ast_node_at(ast, index);
+        Noc_Slice spelling = noc_c_ast_node_source(ast, index);
+        if (node && node->kind == kind &&
+            spelling.count == strlen(source) && spelling.data &&
+            memcmp(spelling.data, source, spelling.count) == 0) {
+            return index;
+        }
+    }
+    return NOC_C_AST_NODE_NONE;
+}
+
+static size_t release_find_child_field(const Noc_C_Ast *ast,
+                                       size_t parent,
+                                       Noc_C_Ast_Field field)
+{
+    const Noc_C_Ast_Node *parent_node = noc_c_ast_node_at(ast, parent);
+    size_t child = parent_node ? parent_node->first_child : NOC_C_AST_NODE_NONE;
+    while (child != NOC_C_AST_NODE_NONE) {
+        const Noc_C_Ast_Node *node = noc_c_ast_node_at(ast, child);
+        if (node && node->field == field) return child;
+        child = node ? node->next_sibling : NOC_C_AST_NODE_NONE;
+    }
+    return NOC_C_AST_NODE_NONE;
+}
+
 int main(void)
 {
     static const char source[] =
@@ -90,6 +121,7 @@ int main(void)
         "_Bool release_flag;\n"
         "double _Complex release_complex;\n"
         "_Thread_local int release_thread_value;\n"
+        "_Atomic(int) release_atomic;\n"
         "_Static_assert(1, \"release parser\");\n";
     Noc_Context context;
     Noc_Workspace workspace = {0};
@@ -108,6 +140,8 @@ int main(void)
     Noc_Include_Graph graph = {0};
     Noc_C_Parse_Tree parse_tree = {0};
     Noc_C_Ast ast = {0};
+    size_t release_atomic;
+    size_t release_atomic_type;
     Noc_Include_Graph_Options graph_options =
         noc_include_graph_default_options();
     Noc_Include_Resolver resolver = {release_not_found, NULL};
@@ -248,6 +282,21 @@ int main(void)
                             &ast) == NOC_C_AST_OK);
     REQUIRE(noc_c_ast_is_syntax_complete(&ast));
     REQUIRE(noc_c_ast_issues(&ast) == 0);
+    release_atomic = release_find_source(&ast,
+                                         NOC_C_AST_KIND_ATOMIC_TYPE_SPECIFIER,
+                                         "_Atomic(int)");
+    REQUIRE(release_atomic != NOC_C_AST_NODE_NONE);
+    release_atomic_type = release_find_child_field(&ast,
+                                                   release_atomic,
+                                                   NOC_C_AST_FIELD_TYPE);
+    REQUIRE(release_atomic_type != NOC_C_AST_NODE_NONE);
+    REQUIRE(noc_c_ast_node_at(&ast, release_atomic_type)->kind ==
+            NOC_C_AST_KIND_TYPE_DESCRIPTOR);
+    REQUIRE(noc_c_ast_node_extension(&ast, release_atomic) ==
+            NOC_C_AST_EXTENSION_NONE);
+    REQUIRE(strcmp(noc_c_ast_kind_name(
+                       NOC_C_AST_KIND_ATOMIC_TYPE_SPECIFIER),
+                   "atomic_type_specifier") == 0);
     REQUIRE(strcmp(noc_c_ast_kind_name(
                        NOC_C_AST_KIND_STATIC_ASSERT_DECLARATION),
                    "static_assert_declaration") == 0);

@@ -47,9 +47,12 @@ The suite names are `header-c`, `header-cpp`, `public-header-c`,
 `conditional-groups`, `include-operands`, `include-resolver`,
 `include-expansion`, `include-expansion-resolver`,
 `include-graph`, `include-graph-limits`, `include-graph-queries`,
+`pragma-once`, `include-guard`, `include-control-queries`,
 `release-header-runtime`,
 `preprocessor`, `lexing`, `syntax`, `c-analysis`, `c-parse-tree`,
 `c-parse-recovery`, `c-parse-lifecycle`, `c-parse-cpp-runtime`,
+`c-ast`, `c-ast-details`, `c-ast-c11`, `c-ast-c11-constructs`,
+`c-ast-declarators`, `c-ast-recovery`,
 `tree-sitter-coexistence`, `rewriter`, and `artifacts`, for example:
 
 ```console
@@ -238,12 +241,14 @@ header and link that C object normally.
 
 The pinned upstream C grammar is reproducibly regenerated with a small,
 authenticated-toolchain downstream patch for the required C11 `_Bool`,
-`_Complex`, `_Thread_local`, and `_Static_assert` spellings. Noc's normalized
-AST exposes these through stable primitive/type flags, storage specifiers,
-`STATIC_ASSERT_DECLARATION`, and `condition`/`message` fields rather than parser
-symbol IDs. ISO C11 spellings have no extension marker; the C23 `static_assert`
-alias is distinguished for later feature-policy validation. Run this focused
-coverage with `./nob test c-ast-c11`.
+`_Complex`, `_Thread_local`, `_Static_assert`, and `_Atomic(type-name)`
+spellings. Noc's normalized AST exposes these through stable primitive/type
+flags, storage specifiers, `STATIC_ASSERT_DECLARATION`,
+`ATOMIC_TYPE_SPECIFIER`, and typed fields rather than parser symbol IDs. ISO
+C11 spellings have no extension marker; the C23 `static_assert` alias is
+distinguished for later feature-policy validation. Run focused spelling and
+broader construct coverage with `./nob test c-ast-c11` and `./nob test
+c-ast-c11-constructs`.
 
 ## Preprocessing tokens, directives, and macro policy
 

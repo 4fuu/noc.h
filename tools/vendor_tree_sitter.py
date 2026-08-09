@@ -47,7 +47,7 @@ GRAMMAR_ARCHIVE_SHA256 = (
 
 LANGUAGE_ABI = 15
 TREE_SITTER_CLI_VERSION = "0.25.4"
-GRAMMAR_PATCH = "noc-c11-required-spellings-v1"
+GRAMMAR_PATCH = "noc-c11-required-grammar-v2"
 TREE_SITTER_CLI_BASE_URL = (
     "https://github.com/tree-sitter/tree-sitter/releases/download/"
     f"v{TREE_SITTER_CLI_VERSION}"
@@ -517,6 +517,22 @@ def patch_and_generate_c11_grammar(
             "      '_Bool',\n"
             "      'bool',",
         ),
+        (
+            "    type_specifier: $ => choice(\n      $.struct_specifier,",
+            "    type_specifier: $ => choice(\n"
+            "      $.atomic_type_specifier,\n"
+            "      $.struct_specifier,",
+        ),
+        (
+            "    sized_type_specifier: $ => choice(\n",
+            "    atomic_type_specifier: $ => seq(\n"
+            "      '_Atomic',\n"
+            "      '(',\n"
+            "      field('type', $.type_descriptor),\n"
+            "      ')',\n"
+            "    ),\n\n"
+            "    sized_type_specifier: $ => choice(\n",
+        ),
     )
     for old, new in replacements:
         if grammar.count(old) != 1:
@@ -864,7 +880,8 @@ def generate(runtime_root: Path, grammar_root: Path) -> tuple[str, str, str, str
         f"v{TREE_SITTER_CLI_VERSION}\n"
         "\n"
         "   Local transformations: add required ISO C11 _Bool, _Complex,\n"
-        "   _Thread_local, and _Static_assert grammar productions; recursively\n"
+        "   _Thread_local, _Static_assert, and _Atomic(type-name) grammar\n"
+        "   productions; recursively\n"
         "   inline the fixed native source\n"
         "   graph, prefix Tree-sitter APIs/types/generated grammar identifiers,\n"
         "   prefix upstream macros, normalize trailing horizontal whitespace,\n"

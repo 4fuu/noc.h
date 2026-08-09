@@ -32,8 +32,8 @@
 
 #define NOC_VERSION_MAJOR 0
 #define NOC_VERSION_MINOR 42
-#define NOC_VERSION_PATCH 1
-#define NOC_VERSION "0.42.1"
+#define NOC_VERSION_PATCH 2
+#define NOC_VERSION "0.42.2"
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -725,6 +725,9 @@ typedef enum {
     /* ISO C11 `_Static_assert(condition, "message");`; the recognized C23
        `static_assert` alias has the same shape and a distinct extension tag. */
     NOC_C_AST_KIND_STATIC_ASSERT_DECLARATION,
+    /* ISO C11 atomic type specifier `_Atomic(type-name)`. Its TYPE field is a
+       TYPE_DESCRIPTOR; qualifier spelling `_Atomic T` remains TYPE_QUALIFIER. */
+    NOC_C_AST_KIND_ATOMIC_TYPE_SPECIFIER,
     NOC_C_AST_KIND_ERROR,
     NOC_C_AST_KIND_MISSING,
 } Noc_C_Ast_Kind;

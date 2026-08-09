@@ -232,12 +232,15 @@ must be generated reproducibly as one self-contained `noc.h`.
         logical AST nodes without weakening physical spelling/source queries.
   - [x] Patch and deterministically regenerate the pinned tree-sitter-c 0.24.2
         grammar for required C11 `_Bool`, `_Complex`, `_Thread_local`, and
-        `_Static_assert` spellings; retain direct AST/recovery tests rather than
-        treating extension aliases as proof of C11 coverage.
-- [ ] Replace lightweight C structure analysis with a grammar-complete parser for
-      declarations/declarators, initializers, statements, and expressions.
-- [ ] Parse structs/unions/enums, bit-fields, compound literals, designated
-      initializers, `_Generic`, `_Atomic`, `_Alignas`, and static assertions.
+        `_Static_assert` spellings plus `_Atomic(type-name)`; retain direct
+        AST/recovery tests rather than treating extension aliases as proof of
+        C11 coverage.
+- [x] Parse declarations/declarators, initializers, statements, and expressions
+      through the pinned grammar rather than the lightweight structure analyzer;
+      retain direct normalized-AST declarator/precedence coverage.
+- [x] Parse structs/unions/enums, bit-fields, compound literals, designated
+      initializers, `_Generic`, both `_Atomic` forms, `_Alignas`, and static
+      assertions with independently runnable C11 construct tests.
 - [ ] Preserve trivia and spelling ranges while recording expanded/logical ranges
       and physical macro/include provenance on AST nodes.
 - [ ] Add error recovery and incomplete-source parsing with expected-token and
