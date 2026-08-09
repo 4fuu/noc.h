@@ -4,4 +4,5 @@ src/*.c text eol=lf
 src/internal.h text eol=lf
 third_party/tree-sitter/*.c text eol=lf
 third_party/tree-sitter/*.h text eol=lf
+third_party/tree-sitter/LICENSE.* text eol=lf
 release/noc.h text eol=lf
