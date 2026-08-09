@@ -142,6 +142,7 @@ int main(void)
     Noc_C_Ast ast = {0};
     size_t release_atomic;
     size_t release_atomic_type;
+    size_t release_query_node;
     Noc_Include_Graph_Options graph_options =
         noc_include_graph_default_options();
     Noc_Include_Resolver resolver = {release_not_found, NULL};
@@ -263,6 +264,21 @@ int main(void)
             NOC_C_AST_KIND_TRANSLATION_UNIT);
     REQUIRE(noc_c_ast_node_source(&ast, 0).count ==
             sizeof(guard_source) - 1);
+    release_query_node = noc_c_ast_node_at_offset(
+        &ast,
+        (size_t)(strstr(guard_source, "release_runtime") - guard_source));
+    REQUIRE(release_query_node != NOC_C_AST_NODE_NONE);
+    REQUIRE(noc_c_ast_node_at(&ast, release_query_node)->kind ==
+            NOC_C_AST_KIND_IDENTIFIER);
+    REQUIRE(noc_c_ast_node_covering_range(
+                &ast,
+                noc_c_ast_node_at(&ast, release_query_node)->bytes) ==
+            release_query_node);
+    REQUIRE(noc_c_ast_depth(&ast, release_query_node) > 0);
+    REQUIRE(noc_c_ast_common_ancestor(&ast,
+                                      release_query_node,
+                                      noc_c_ast_root(&ast)) ==
+            noc_c_ast_root(&ast));
 
     noc_c_parse_tree_free(&parse_tree);
     REQUIRE(noc_c_ast_is_valid(&ast));

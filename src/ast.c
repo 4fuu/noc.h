@@ -1134,6 +1134,96 @@ NOCDEF Noc_Location noc_c_ast_node_location(const Noc_C_Ast *ast,
     return location;
 }
 
+NOCDEF size_t noc_c_ast_node_covering_range(const Noc_C_Ast *ast,
+                                            Noc_Byte_Range range)
+{
+    Noc_Slice source;
+    size_t node_index;
+    if (!noc_c_ast_is_valid(ast) || range.begin >= range.end) {
+        return NOC_C_AST_NODE_NONE;
+    }
+    source = noc_document_snapshot_source(&ast->impl->snapshot);
+    if (range.end > source.count) return NOC_C_AST_NODE_NONE;
+    node_index = noc_c_ast_root(ast);
+    for (;;) {
+        const Noc_C_Ast_Node *node = noc_c_ast_node_at(ast, node_index);
+        size_t child;
+        size_t covering = NOC_C_AST_NODE_NONE;
+        if (!node || range.begin < node->bytes.begin ||
+            range.end > node->bytes.end) {
+            return NOC_C_AST_NODE_NONE;
+        }
+        child = node->first_child;
+        while (child != NOC_C_AST_NODE_NONE) {
+            const Noc_C_Ast_Node *candidate = noc_c_ast_node_at(ast, child);
+            if (!candidate) return NOC_C_AST_NODE_NONE;
+            if (candidate->bytes.begin <= range.begin &&
+                range.end <= candidate->bytes.end) {
+                covering = child;
+                break;
+            }
+            child = candidate->next_sibling;
+        }
+        if (covering == NOC_C_AST_NODE_NONE) return node_index;
+        node_index = covering;
+    }
+}
+
+NOCDEF size_t noc_c_ast_node_at_offset(const Noc_C_Ast *ast, size_t offset)
+{
+    Noc_Byte_Range range;
+    Noc_Slice source;
+    if (!noc_c_ast_is_valid(ast)) return NOC_C_AST_NODE_NONE;
+    source = noc_document_snapshot_source(&ast->impl->snapshot);
+    if (offset >= source.count) return NOC_C_AST_NODE_NONE;
+    range.begin = offset;
+    range.end = offset + 1;
+    return noc_c_ast_node_covering_range(ast, range);
+}
+
+NOCDEF size_t noc_c_ast_depth(const Noc_C_Ast *ast, size_t node_index)
+{
+    const Noc_C_Ast_Node *node = noc_c_ast_node_at(ast, node_index);
+    size_t depth = 0;
+    size_t count = noc_c_ast_node_count(ast);
+    if (!node) return NOC_C_AST_NODE_NONE;
+    while (node->parent != NOC_C_AST_NODE_NONE) {
+        if (depth >= count) return NOC_C_AST_NODE_NONE;
+        depth += 1;
+        node = noc_c_ast_node_at(ast, node->parent);
+        if (!node) return NOC_C_AST_NODE_NONE;
+    }
+    return depth;
+}
+
+NOCDEF size_t noc_c_ast_common_ancestor(const Noc_C_Ast *ast,
+                                        size_t left,
+                                        size_t right)
+{
+    size_t left_depth = noc_c_ast_depth(ast, left);
+    size_t right_depth = noc_c_ast_depth(ast, right);
+    if (left_depth == NOC_C_AST_NODE_NONE ||
+        right_depth == NOC_C_AST_NODE_NONE) {
+        return NOC_C_AST_NODE_NONE;
+    }
+    while (left_depth > right_depth) {
+        left = ast->impl->nodes[left].parent;
+        left_depth -= 1;
+    }
+    while (right_depth > left_depth) {
+        right = ast->impl->nodes[right].parent;
+        right_depth -= 1;
+    }
+    while (left != right) {
+        if (left == NOC_C_AST_NODE_NONE || right == NOC_C_AST_NODE_NONE) {
+            return NOC_C_AST_NODE_NONE;
+        }
+        left = ast->impl->nodes[left].parent;
+        right = ast->impl->nodes[right].parent;
+    }
+    return left;
+}
+
 NOCDEF Noc_C_Ast_Operator noc_c_ast_node_operator(const Noc_C_Ast *ast,
                                                   size_t node_index)
 {

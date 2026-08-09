@@ -53,7 +53,7 @@ The suite names are `header-c`, `header-cpp`, `public-header-c`,
 `c-parse-recovery`, `c-parse-lifecycle`, `c-parse-corpus`,
 `c-parse-malformed-corpus`, `c-parse-cpp-runtime`,
 `c-ast`, `c-ast-details`, `c-ast-c11`, `c-ast-c11-constructs`,
-`c-ast-declarators`, `c-ast-recovery`,
+`c-ast-declarators`, `c-ast-queries`, `c-ast-recovery`,
 `tree-sitter-coexistence`, `rewriter`, and `artifacts`, for example:
 
 ```console
@@ -250,6 +250,14 @@ symbol IDs. ISO C11 spellings have no extension marker; the C23 `static_assert`
 alias is distinguished for later feature-policy validation. Run focused
 spelling, construct, and corpus coverage with `./nob test c-ast-c11`, `./nob
 test c-ast-c11-constructs`, and `./nob test c-parse-corpus`.
+
+The normalized AST also supports physical byte navigation without exposing
+Tree-sitter objects. `noc_c_ast_node_at_offset` and
+`noc_c_ast_node_covering_range` return the deepest retained node for editor
+selection, while `noc_c_ast_depth` and `noc_c_ast_common_ancestor` support
+context reconstruction. These queries intentionally exclude the EOF insertion
+position and zero-width missing nodes; expected-symbol and completion queries
+remain explicit recovery operations rather than ambiguous byte ownership.
 
 ## Preprocessing tokens, directives, and macro policy
 

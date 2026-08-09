@@ -32,8 +32,8 @@
 
 #define NOC_VERSION_MAJOR 0
 #define NOC_VERSION_MINOR 42
-#define NOC_VERSION_PATCH 3
-#define NOC_VERSION "0.42.3"
+#define NOC_VERSION_PATCH 4
+#define NOC_VERSION "0.42.4"
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -1065,6 +1065,23 @@ NOCDEF Noc_Slice noc_c_ast_node_source(const Noc_C_Ast *ast,
                                        size_t node_index);
 NOCDEF Noc_Location noc_c_ast_node_location(const Noc_C_Ast *ast,
                                             size_t node_index);
+/* Physical-source navigation for editor and compiler clients. Offset queries
+   accept an existing source byte (offset < source_count), not the EOF insertion
+   position. Range queries accept a non-empty half-open physical byte range.
+   Both return the deepest normalized node that contains the requested bytes;
+   trivia and anonymous punctuation therefore resolve to their nearest retained
+   AST ancestor. Zero-width recovery nodes do not own source bytes and are
+   queried separately with noc_c_ast_node_expected(). Invalid ASTs, offsets,
+   ranges, and node indices return NOC_C_AST_NODE_NONE. */
+NOCDEF size_t noc_c_ast_node_at_offset(const Noc_C_Ast *ast, size_t offset);
+NOCDEF size_t noc_c_ast_node_covering_range(const Noc_C_Ast *ast,
+                                            Noc_Byte_Range range);
+/* The translation-unit root has depth zero. Common-ancestor results and all
+   input node indices belong to the current AST generation. */
+NOCDEF size_t noc_c_ast_depth(const Noc_C_Ast *ast, size_t node_index);
+NOCDEF size_t noc_c_ast_common_ancestor(const Noc_C_Ast *ast,
+                                        size_t left,
+                                        size_t right);
 NOCDEF Noc_C_Ast_Operator noc_c_ast_node_operator(const Noc_C_Ast *ast,
                                                   size_t node_index);
 NOCDEF Noc_C_Ast_Specifier noc_c_ast_node_specifier(const Noc_C_Ast *ast,
