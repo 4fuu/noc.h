@@ -881,6 +881,8 @@ int main(void)
         ("#define ID(x) x\n#define CALL(f,x) f(x)\n"
          "#define OPEN ID(\n#define V(...) __VA_ARGS__\n"
          "CALL(ID, ID(1)) OPEN 2) V(ID(3),4)\n"),
+        ("_Bool flag; double _Complex value;\n"
+         "_Thread_local int tls; _Static_assert(1, \"ok\");\n"),
         "([{}]) <::> %:%: /\\\n* block *\\\n/",
         "\"string\\n\\x41\" '\\123' 0x1p+2",
     };

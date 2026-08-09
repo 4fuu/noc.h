@@ -163,6 +163,7 @@ static const char *const noc__c_ast_kind_names[] = {
     "system_lib_string",
     "true",
     "type_identifier",
+    "static_assert_declaration",
     "error",
     "missing",
 };
@@ -175,7 +176,7 @@ static const char *const noc__c_ast_field_names[] = {
     "input_operands", "label", "left", "member", "name", "operand",
     "operator", "output_operands", "parameters", "path", "prefix",
     "register", "right", "size", "start", "symbol", "type",
-    "underlying_type", "update", "value",
+    "underlying_type", "update", "value", "message",
 };
 
 typedef char Noc__C_Ast_Kind_Name_Count[
@@ -185,7 +186,7 @@ typedef char Noc__C_Ast_Kind_Name_Count[
         : -1];
 typedef char Noc__C_Ast_Field_Name_Count[
     NOC__C_AST_ARRAY_COUNT(noc__c_ast_field_names) ==
-            NOC_C_AST_FIELD_VALUE + 1
+            NOC_C_AST_FIELD_MESSAGE + 1
         ? 1
         : -1];
 
@@ -231,7 +232,7 @@ static Noc_C_Ast_Field noc__c_ast_field(Noc_Slice field)
     size_t index;
     if (field.count == 0) return NOC_C_AST_FIELD_NONE;
     for (index = (size_t)NOC_C_AST_FIELD_ALTERNATIVE;
-         index <= (size_t)NOC_C_AST_FIELD_VALUE;
+         index <= (size_t)NOC_C_AST_FIELD_MESSAGE;
          ++index) {
         if (noc__c_ast_slice_equal(field, noc__c_ast_field_names[index])) {
             return (Noc_C_Ast_Field)index;
@@ -501,6 +502,13 @@ static Noc_C_Ast_Extension noc__c_ast_extension(Noc_C_Ast_Kind kind,
         return NOC_C_AST_EXTENSION_C23_FALSE;
     case NOC_C_AST_KIND_NULL:
         return NOC_C_AST_EXTENSION_C23_NULL;
+    case NOC_C_AST_KIND_STATIC_ASSERT_DECLARATION:
+        return spelling.count >= sizeof("static_assert") - 1 &&
+                       memcmp(spelling.data,
+                              "static_assert",
+                              sizeof("static_assert") - 1) == 0
+                   ? NOC_C_AST_EXTENSION_C23_STATIC_ASSERT
+                   : NOC_C_AST_EXTENSION_NONE;
     default:
         return NOC_C_AST_EXTENSION_NONE;
     }
@@ -584,7 +592,11 @@ static Noc_C_Ast_Expected_Kind noc__c_ast_expected_kind(
         if (noc__c_ast_slice_equal(spelling, "statement")) {
             return NOC_C_AST_EXPECTED_STATEMENT;
         }
-        if (noc__c_ast_slice_equal(spelling, "expression")) {
+        if (noc__c_ast_slice_equal(spelling, "expression") ||
+            noc__c_ast_slice_equal(spelling, "char_literal") ||
+            noc__c_ast_slice_equal(spelling, "concatenated_string") ||
+            noc__c_ast_slice_equal(spelling, "number_literal") ||
+            noc__c_ast_slice_equal(spelling, "string_literal")) {
             return NOC_C_AST_EXPECTED_EXPRESSION;
         }
         return NOC_C_AST_EXPECTED_UNKNOWN;
@@ -602,29 +614,6 @@ static bool noc__c_ast_is_array_kind(Noc_C_Ast_Kind kind)
 {
     return kind == NOC_C_AST_KIND_ARRAY_DECLARATOR ||
            kind == NOC_C_AST_KIND_ABSTRACT_ARRAY_DECLARATOR;
-}
-
-static bool noc__c_ast_is_unclassified_required_c11_spelling(
-    Noc_C_Ast_Kind kind,
-    const Noc__C_Ast_Detail *detail,
-    Noc_Slice spelling)
-{
-    spelling = noc__c_ast_trim(spelling);
-    if (noc__c_ast_slice_equal(spelling, "_Bool")) {
-        return kind != NOC_C_AST_KIND_PRIMITIVE_TYPE ||
-               detail->type_spelling.primitive != NOC_C_AST_PRIMITIVE_C11_BOOL;
-    }
-    if (noc__c_ast_slice_equal(spelling, "_Complex")) {
-        return kind != NOC_C_AST_KIND_SIZED_TYPE_SPECIFIER ||
-               (detail->type_spelling.flags & NOC_C_AST_TYPE_COMPLEX) == 0;
-    }
-    if (noc__c_ast_slice_equal(spelling, "_Thread_local")) {
-        return kind != NOC_C_AST_KIND_STORAGE_CLASS_SPECIFIER ||
-               detail->specifier != NOC_C_AST_SPECIFIER_C11_THREAD_LOCAL;
-    }
-    /* The pinned grammar has no static-assert node. A future grammar mapping
-       must replace this guard with a stable Noc kind before claiming support. */
-    return noc__c_ast_slice_equal(spelling, "_Static_assert");
 }
 
 static void noc__c_ast_impl_free(Noc_C_Ast_Impl *implementation)
@@ -1023,11 +1012,6 @@ NOCDEF Noc_C_Ast_Status noc_c_ast_build(const Noc_C_Parse_Tree *tree,
                 node->kind = NOC_C_AST_KIND_IDENTIFIER;
                 detail->extension = NOC_C_AST_EXTENSION_NONE;
             }
-            if (noc__c_ast_is_unclassified_required_c11_spelling(node->kind,
-                                                                  detail,
-                                                                  spelling)) {
-                noc__c_ast_mark_unknown_detail(parsed, node_index);
-            }
             cst_to_ast[index] = node_index;
         }
     }
@@ -1317,7 +1301,7 @@ NOCDEF const char *noc_c_ast_extension_name(Noc_C_Ast_Extension extension)
         "ms-seh-finally", "ms-seh-leave", "cxx-linkage",
         "c23-thread-local", "c23-constexpr", "c23-noreturn", "c23-alignas",
         "c23-bool", "c23-true", "c23-false", "c23-null", "clang-nonnull",
-        "macro-type",
+        "macro-type", "c23-static-assert",
     };
     return (unsigned int)extension < NOC__C_AST_ARRAY_COUNT(names)
                ? names[(unsigned int)extension]

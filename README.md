@@ -115,7 +115,8 @@ be declared by `src/internal.h`; module-local helpers remain static. Current own
 | `src/include_control.c` | Read-only pragma-once and strict canonical include-guard recognition |
 | `src/include_resolver.c`, `src/include_expansion.c` | Physical/expanded include operands and host-configurable snapshot resolution |
 | `src/include_graph.c` | Bounded conditional include discovery, recursion, cycles, and stable IDE queries |
-| `src/parser.c`, `src/ast.c` | Token cursors/arguments and syntax/C structure analysis |
+| `src/parser.c` | Token cursors/arguments and lossless delimiter/C structure analysis |
+| `src/ast.c` | Stable normalized physical C AST and typed spelling/recovery details |
 | `src/c_parse.c` | Recoverable physical C concrete-syntax adapter and Noc-owned flat node views |
 | `src/features.c` | Context, rules, feature controls, and metadata interfaces |
 | `src/lower.c`, `src/emit_c.c` | Rewrite/edit lowering and transformation/artifact/CLI emission |
@@ -234,6 +235,15 @@ maintainer operation described in `third_party/README.md`. Because the embedded
 runtime is C, compile the one translation unit that defines
 `NOC_IMPLEMENTATION` as C11; C++ consumers may include the declaration-only
 header and link that C object normally.
+
+The pinned upstream C grammar is reproducibly regenerated with a small,
+authenticated-toolchain downstream patch for the required C11 `_Bool`,
+`_Complex`, `_Thread_local`, and `_Static_assert` spellings. Noc's normalized
+AST exposes these through stable primitive/type flags, storage specifiers,
+`STATIC_ASSERT_DECLARATION`, and `condition`/`message` fields rather than parser
+symbol IDs. ISO C11 spellings have no extension marker; the C23 `static_assert`
+alias is distinguished for later feature-policy validation. Run this focused
+coverage with `./nob test c-ast-c11`.
 
 ## Preprocessing tokens, directives, and macro policy
 

@@ -10,11 +10,15 @@ selected native runtime and generated C grammar sources are amalgamated.
 from __future__ import annotations
 
 import argparse
+import gzip
 import hashlib
 import io
 import os
 from pathlib import Path
+import platform
 import re
+import shutil
+import subprocess
 import sys
 import tarfile
 import tempfile
@@ -42,6 +46,34 @@ GRAMMAR_ARCHIVE_SHA256 = (
 )
 
 LANGUAGE_ABI = 15
+TREE_SITTER_CLI_VERSION = "0.25.4"
+GRAMMAR_PATCH = "noc-c11-required-spellings-v1"
+TREE_SITTER_CLI_BASE_URL = (
+    "https://github.com/tree-sitter/tree-sitter/releases/download/"
+    f"v{TREE_SITTER_CLI_VERSION}"
+)
+TREE_SITTER_CLI_ASSETS = {
+    ("linux", "x86_64"): (
+        "tree-sitter-linux-x64.gz",
+        "b4d78db9f7a320e978ff289d1f0b60ffae2a3e1522cc9fff56c7cb9c734c57e3",
+    ),
+    ("linux", "aarch64"): (
+        "tree-sitter-linux-arm64.gz",
+        "e9a01ba8c5a5fe93fbe92e8fb9fd9f43445e3a6c45513b119f37f3f492e1e5db",
+    ),
+    ("darwin", "x86_64"): (
+        "tree-sitter-macos-x64.gz",
+        "5ae042ce00d885472b7c8181abf6ce11bdae30df23c5ecb7697414660edf1c95",
+    ),
+    ("darwin", "arm64"): (
+        "tree-sitter-macos-arm64.gz",
+        "a2a6e3b0ab7faa4d3d18bd018f6439f14b4f2de821ec737ade7639666c08379f",
+    ),
+    ("win32", "amd64"): (
+        "tree-sitter-windows-x64.gz",
+        "a18d451d6e487b4b6f43453988772e693a80c6a770fc690360c6fa22dfb01785",
+    ),
+}
 IDENTIFIER = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 QUOTED_INCLUDE = re.compile(
     r'^(?P<indent>\s*)#\s*include\s*"(?P<name>[^"]+)"(?P<tail>[^\r\n]*)$',
@@ -383,6 +415,137 @@ def download_and_extract(url: str, expected_sha256: str, destination: Path) -> P
     return roots[0]
 
 
+def download_tree_sitter_cli(destination: Path) -> Path:
+    machine = platform.machine().lower()
+    if machine == "amd64":
+        machine = "x86_64" if sys.platform != "win32" else machine
+    elif machine == "arm64" and sys.platform == "linux":
+        machine = "aarch64"
+    asset = TREE_SITTER_CLI_ASSETS.get((sys.platform, machine))
+    if asset is None:
+        raise RuntimeError(
+            "no authenticated Tree-sitter CLI asset for "
+            f"{sys.platform}/{platform.machine()}"
+        )
+    name, expected_sha256 = asset
+    url = f"{TREE_SITTER_CLI_BASE_URL}/{name}"
+    print(f"vendor-tree-sitter: downloading {url}", file=sys.stderr)
+    with urllib.request.urlopen(url) as response:
+        archive = response.read()
+    actual = sha256(archive)
+    if actual != expected_sha256:
+        raise RuntimeError(
+            f"CLI archive hash mismatch: expected {expected_sha256}, got {actual}"
+        )
+    try:
+        executable = gzip.decompress(archive)
+    except gzip.BadGzipFile as error:
+        raise RuntimeError("invalid Tree-sitter CLI gzip payload") from error
+    path = destination / ("tree-sitter.exe" if sys.platform == "win32" else "tree-sitter")
+    path.write_bytes(executable)
+    path.chmod(0o755)
+    return path
+
+
+def patch_and_generate_c11_grammar(
+    grammar_root: Path,
+    destination: Path,
+    tree_sitter_cli: Path,
+) -> Path:
+    """Apply Noc's minimal ISO C11 grammar delta and regenerate ABI 15 C."""
+    if shutil.which("node") is None:
+        raise RuntimeError("Node.js is required to regenerate the patched C grammar")
+    shutil.copytree(
+        grammar_root,
+        destination,
+        ignore=shutil.ignore_patterns(".git", "node_modules"),
+    )
+    grammar_path = destination / "grammar.js"
+    grammar = read_text(grammar_path)
+    replacements = (
+        (
+            "      $.declaration,\n      $._top_level_statement,",
+            "      $.declaration,\n"
+            "      $.static_assert_declaration,\n"
+            "      $._top_level_statement,",
+        ),
+        (
+            "      $.declaration,\n      $.statement,",
+            "      $.declaration,\n"
+            "      $.static_assert_declaration,\n"
+            "      $.statement,",
+        ),
+        (
+            "    _field_declaration_list_item: $ => choice(\n"
+            "      $.field_declaration,",
+            "    _field_declaration_list_item: $ => choice(\n"
+            "      $.field_declaration,\n"
+            "      $.static_assert_declaration,",
+        ),
+        (
+            "      '__forceinline',\n      'thread_local',",
+            "      '__forceinline',\n"
+            "      '_Thread_local',\n"
+            "      'thread_local',",
+        ),
+        (
+            "    type_qualifier: $ => choice(\n",
+            "    static_assert_declaration: $ => choice(\n"
+            "      seq(\n"
+            "        '_Static_assert',\n"
+            "        '(',\n"
+            "        field('condition', $.expression),\n"
+            "        ',',\n"
+            "        field('message', $._string),\n"
+            "        ')',\n"
+            "        ';',\n"
+            "      ),\n"
+            "      seq(\n"
+            "        'static_assert',\n"
+            "        '(',\n"
+            "        field('condition', $.expression),\n"
+            "        optional(seq(',', field('message', $._string))),\n"
+            "        ')',\n"
+            "        ';',\n"
+            "      ),\n"
+            "    ),\n\n"
+            "    type_qualifier: $ => choice(\n",
+        ),
+        (
+            "    primitive_type: _ => token(choice(\n      'bool',",
+            "    primitive_type: _ => token(choice(\n"
+            "      '_Bool',\n"
+            "      'bool',",
+        ),
+    )
+    for old, new in replacements:
+        if grammar.count(old) != 1:
+            raise RuntimeError("pinned C grammar no longer matches the C11 patch")
+        grammar = grammar.replace(old, new, 1)
+    sized_begin = grammar.find("    sized_type_specifier: $ => choice(\n")
+    sized_end = grammar.find("\n\n    primitive_type:", sized_begin)
+    if sized_begin < 0 or sized_end < 0:
+        raise RuntimeError("pinned C grammar has no recognized sized type rule")
+    sized_rule = grammar[sized_begin:sized_end]
+    if sized_rule.count("          'short',") != 4:
+        raise RuntimeError("pinned C sized type rule no longer matches the C11 patch")
+    sized_rule = sized_rule.replace(
+        "          'short',",
+        "          'short',\n          '_Complex',",
+    )
+    grammar = grammar[:sized_begin] + sized_rule + grammar[sized_end:]
+    grammar_path.write_text(grammar, encoding="utf-8", newline="\n")
+    try:
+        subprocess.run(
+            [str(tree_sitter_cli), "generate"],
+            cwd=destination,
+            check=True,
+        )
+    except subprocess.CalledProcessError as error:
+        raise RuntimeError("Tree-sitter C11 grammar generation failed") from error
+    return destination
+
+
 class Inliner:
     def __init__(self, roots: list[Path], labels: dict[Path, str]) -> None:
         self.roots = [root.resolve() for root in roots]
@@ -697,8 +860,12 @@ def generate(runtime_root: Path, grammar_root: Path) -> tuple[str, str, str, str
         "\n"
         f"   Tree-sitter runtime v{RUNTIME_VERSION} ({RUNTIME_COMMIT})\n"
         f"   tree-sitter-c v{GRAMMAR_VERSION} ({GRAMMAR_COMMIT}), ABI {LANGUAGE_ABI}\n"
+        f"   downstream grammar patch {GRAMMAR_PATCH}, generated by Tree-sitter CLI "
+        f"v{TREE_SITTER_CLI_VERSION}\n"
         "\n"
-        "   Local transformations: recursively inline the fixed native source\n"
+        "   Local transformations: add required ISO C11 _Bool, _Complex,\n"
+        "   _Thread_local, and _Static_assert grammar productions; recursively\n"
+        "   inline the fixed native source\n"
         "   graph, prefix Tree-sitter APIs/types/generated grammar identifiers,\n"
         "   prefix upstream macros, normalize trailing horizontal whitespace,\n"
         "   disable exported visibility, and omit WASM by leaving\n"
@@ -782,13 +949,12 @@ def main() -> int:
         parser.error("--runtime-root and --grammar-root must be supplied together")
 
     try:
-        if arguments.runtime_root is not None:
-            private_header, source, runtime_license, grammar_license = generate(
-                arguments.runtime_root.resolve(), arguments.grammar_root.resolve()
-            )
-        else:
-            with tempfile.TemporaryDirectory(prefix="noc-tree-sitter-") as temporary:
-                temporary_path = Path(temporary)
+        with tempfile.TemporaryDirectory(prefix="noc-tree-sitter-") as temporary:
+            temporary_path = Path(temporary)
+            if arguments.runtime_root is not None:
+                runtime_root = arguments.runtime_root.resolve()
+                grammar_root = arguments.grammar_root.resolve()
+            else:
                 runtime_root = download_and_extract(
                     RUNTIME_URL,
                     RUNTIME_ARCHIVE_SHA256,
@@ -799,9 +965,16 @@ def main() -> int:
                     GRAMMAR_ARCHIVE_SHA256,
                     temporary_path / "grammar",
                 )
-                private_header, source, runtime_license, grammar_license = generate(
-                    runtime_root, grammar_root
-                )
+            tree_sitter_cli = download_tree_sitter_cli(temporary_path)
+            patched_grammar_root = patch_and_generate_c11_grammar(
+                grammar_root,
+                temporary_path / "patched-grammar",
+                tree_sitter_cli,
+            )
+            private_header, source, runtime_license, grammar_license = generate(
+                runtime_root,
+                patched_grammar_root,
+            )
         output = arguments.output_directory
         ok = write_if_changed(
             output / "tree_sitter_private.h", private_header, arguments.check
@@ -814,7 +987,7 @@ def main() -> int:
             output / "LICENSE.grammar", grammar_license, arguments.check
         ) and ok
         return 0 if ok else 1
-    except (OSError, RuntimeError, tarfile.TarError) as error:
+    except (OSError, RuntimeError, subprocess.SubprocessError, tarfile.TarError) as error:
         print(f"vendor-tree-sitter: {error}", file=sys.stderr)
         return 1
 

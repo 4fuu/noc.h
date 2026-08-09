@@ -375,51 +375,6 @@ static void test_statuses_generation_exhaustion_and_empty_queries(void)
     noc_workspace_deinit(&workspace);
 }
 
-static void check_pinned_c11_grammar_gap(const char *path,
-                                         const char *source)
-{
-    Noc_Workspace workspace = {0};
-    Noc_Document_Snapshot snapshot = {0};
-    Noc_C_Parse_Tree tree = {0};
-    Noc_C_Ast ast = {0};
-
-    noc_workspace_init(&workspace);
-    CHECK(noc_workspace_open_document(&workspace,
-                                      path,
-                                      source,
-                                      strlen(source),
-                                      NOC_SOURCE_CLASS_PROJECT,
-                                      &snapshot) == NOC_WORKSPACE_OK);
-    CHECK(noc_c_parse_tree_build(&snapshot,
-                                 noc_c_parse_default_options(),
-                                 &tree) == NOC_C_PARSE_OK);
-    CHECK(noc_c_ast_build(&tree, noc_c_ast_default_options(), &ast) ==
-          NOC_C_AST_OK);
-    CHECK(!noc_c_ast_is_syntax_complete(&ast));
-    CHECK((noc_c_ast_issues(&ast) &
-           (NOC_C_AST_ISSUE_PARSE_ERROR | NOC_C_AST_ISSUE_UNKNOWN_DETAIL)) !=
-          0);
-
-    noc_c_ast_free(&ast);
-    noc_c_parse_tree_free(&tree);
-    noc_document_snapshot_free(&snapshot);
-    noc_workspace_deinit(&workspace);
-}
-
-static void test_pinned_c11_grammar_gaps_are_not_silently_classified(void)
-{
-    /* tree-sitter-c 0.24.2 lacks these required C11 spellings. Test each one
-       independently until the grammar is patched or replaced: accepting a
-       nearby C23/GNU alias must never be reported as C11 support. */
-    check_pinned_c11_grammar_gap("ast/c11-bool-gap.c", "_Bool flag;\n");
-    check_pinned_c11_grammar_gap("ast/c11-complex-gap.c",
-                                 "_Complex value;\n");
-    check_pinned_c11_grammar_gap("ast/c11-thread-gap.c",
-                                 "_Thread_local int local_value;\n");
-    check_pinned_c11_grammar_gap("ast/c11-assert-gap.c",
-                                 "_Static_assert(1, \"ok\");\n");
-}
-
 int main(void)
 {
     test_missing_token_keeps_expected_spelling();
@@ -427,6 +382,5 @@ int main(void)
     test_error_and_skipped_source_recovery();
     test_limits_cancellation_and_rebuild_are_transactional();
     test_statuses_generation_exhaustion_and_empty_queries();
-    test_pinned_c11_grammar_gaps_are_not_silently_classified();
     return finish_suite("recoverable physical C AST");
 }

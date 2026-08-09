@@ -108,6 +108,7 @@ static const Test_Suite test_suites[] = {
     {"c-parse-cpp-runtime", "tests/test_c_parse_cpp_runtime.c", "build/noc-test-c-parse-cpp-runtime" NOC_EXE, true},
     {"c-ast", "tests/test_c_ast.c", "build/noc-test-c-ast" NOC_EXE, false},
     {"c-ast-details", "tests/test_c_ast_details.c", "build/noc-test-c-ast-details" NOC_EXE, false},
+    {"c-ast-c11", "tests/test_c_ast_c11.c", "build/noc-test-c-ast-c11" NOC_EXE, false},
     {"c-ast-recovery", "tests/test_c_ast_recovery.c", "build/noc-test-c-ast-recovery" NOC_EXE, false},
     {"tree-sitter-coexistence", "tests/test_tree_sitter_coexistence.c", "build/noc-test-tree-sitter-coexistence" NOC_EXE, false},
     {"rewriter", "tests/test_rewriter.c", "build/noc-test-rewriter" NOC_EXE, false},

@@ -86,10 +86,16 @@ int main(void)
         "#define RELEASE_RUNTIME_H\n"
         "int release_runtime;\n"
         "#endif\n";
+    static const char c11_source[] =
+        "_Bool release_flag;\n"
+        "double _Complex release_complex;\n"
+        "_Thread_local int release_thread_value;\n"
+        "_Static_assert(1, \"release parser\");\n";
     Noc_Context context;
     Noc_Workspace workspace = {0};
     Noc_Document_Snapshot snapshot = {0};
     Noc_Document_Snapshot guard_snapshot = {0};
+    Noc_Document_Snapshot c11_snapshot = {0};
     Noc_Preprocessor_Unit unit = {0};
     Noc_Preprocessor_Unit guard_unit = {0};
     Noc_Macro_Environment environment = {0};
@@ -227,6 +233,27 @@ int main(void)
     noc_c_parse_tree_free(&parse_tree);
     REQUIRE(noc_c_ast_is_valid(&ast));
     noc_c_ast_free(&ast);
+    REQUIRE(noc_workspace_open_document(&workspace,
+                                        "release-c11.c",
+                                        c11_source,
+                                        sizeof(c11_source) - 1,
+                                        NOC_SOURCE_CLASS_PROJECT,
+                                        &c11_snapshot) == NOC_WORKSPACE_OK);
+    REQUIRE(noc_c_parse_tree_build(&c11_snapshot,
+                                   noc_c_parse_default_options(),
+                                   &parse_tree) == NOC_C_PARSE_OK);
+    REQUIRE(!noc_c_parse_tree_has_error(&parse_tree));
+    REQUIRE(noc_c_ast_build(&parse_tree,
+                            noc_c_ast_default_options(),
+                            &ast) == NOC_C_AST_OK);
+    REQUIRE(noc_c_ast_is_syntax_complete(&ast));
+    REQUIRE(noc_c_ast_issues(&ast) == 0);
+    REQUIRE(strcmp(noc_c_ast_kind_name(
+                       NOC_C_AST_KIND_STATIC_ASSERT_DECLARATION),
+                   "static_assert_declaration") == 0);
+    noc_c_ast_free(&ast);
+    noc_c_parse_tree_free(&parse_tree);
+    noc_document_snapshot_free(&c11_snapshot);
     noc_preprocessor_conditional_groups_free(&guard_groups);
     noc_macro_environment_free(&guard_environment);
     noc_preprocessor_unit_free(&guard_unit);

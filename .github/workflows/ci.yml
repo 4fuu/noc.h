@@ -9,6 +9,24 @@ permissions:
   contents: read
 
 jobs:
+  portable-grammar-regeneration:
+    name: ${{ matrix.os }} grammar regeneration
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Reproduce patched C grammar and private payload
+        run: python tools/vendor_tree_sitter.py --check
+
   vendored-parser:
     name: Authenticated vendored parser
     runs-on: ubuntu-latest
@@ -117,7 +135,7 @@ jobs:
                        include_graph include_graph_limits include_graph_queries \
                        preprocessor lexing syntax c_analysis c_parse_tree \
                        c_parse_recovery c_parse_lifecycle c_ast c_ast_details \
-                       c_ast_recovery \
+                       c_ast_c11 c_ast_recovery \
                        tree_sitter_coexistence \
                        rewriter artifacts; do
             cc $common_flags -Ibuild/generated -Iinclude -I. \

@@ -32,8 +32,8 @@
 
 #define NOC_VERSION_MAJOR 0
 #define NOC_VERSION_MINOR 42
-#define NOC_VERSION_PATCH 0
-#define NOC_VERSION "0.42.0"
+#define NOC_VERSION_PATCH 1
+#define NOC_VERSION "0.42.1"
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -722,6 +722,9 @@ typedef enum {
     NOC_C_AST_KIND_SYSTEM_LIB_STRING,
     NOC_C_AST_KIND_TRUE,
     NOC_C_AST_KIND_TYPE_IDENTIFIER,
+    /* ISO C11 `_Static_assert(condition, "message");`; the recognized C23
+       `static_assert` alias has the same shape and a distinct extension tag. */
+    NOC_C_AST_KIND_STATIC_ASSERT_DECLARATION,
     NOC_C_AST_KIND_ERROR,
     NOC_C_AST_KIND_MISSING,
 } Noc_C_Ast_Kind;
@@ -768,6 +771,8 @@ typedef enum {
     NOC_C_AST_FIELD_UNDERLYING_TYPE,
     NOC_C_AST_FIELD_UPDATE,
     NOC_C_AST_FIELD_VALUE,
+    /* String-literal child of a static assertion; absent for one-argument C23. */
+    NOC_C_AST_FIELD_MESSAGE,
 } Noc_C_Ast_Field;
 
 /* Operators are classified by syntactic role. In particular, unary positive
@@ -875,6 +880,8 @@ enum {
     NOC_C_AST_TYPE_SIGNED = 1u << 0,
     NOC_C_AST_TYPE_UNSIGNED = 1u << 1,
     NOC_C_AST_TYPE_SHORT = 1u << 2,
+    /* ISO C11 `_Complex` combines with float/double and therefore remains a
+       spelling flag instead of replacing the underlying primitive category. */
     NOC_C_AST_TYPE_COMPLEX = 1u << 3,
 };
 
@@ -949,6 +956,8 @@ typedef enum {
     NOC_C_AST_EXTENSION_C23_NULL,
     NOC_C_AST_EXTENSION_CLANG_NONNULL,
     NOC_C_AST_EXTENSION_MACRO_TYPE,
+    /* The C23 `static_assert` alias; ISO C11 `_Static_assert` reports NONE. */
+    NOC_C_AST_EXTENSION_C23_STATIC_ASSERT,
 } Noc_C_Ast_Extension;
 
 typedef enum {
