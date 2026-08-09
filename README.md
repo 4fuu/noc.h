@@ -440,13 +440,28 @@ offset/line/byte-column conversion with the same CRLF convention as physical
 snapshots. A binary-search byte-range query maps future logical CST/AST ranges
 back to the minimal token interval, where callers can inspect each token's
 physical and macro provenance without conflating coordinate domains. These
-records are suitable for diagnostics, expansion preview, and a later logical C
-CST/AST; they do not execute directives, choose conditional branches, traverse
-includes, or claim that an arbitrary fragment is a complete preprocessed
-translation unit. Run source-map/serialization coverage with `./nob test
-logical-source`, ownership/cancellation/generation/limit coverage with `./nob
-test logical-source-lifecycle`, and coordinate/range coverage with `./nob test
-logical-source-queries`.
+records are suitable for diagnostics and expansion preview.
+`noc_logical_source_clone` retains one immutable revision without copying its
+bytes, token maps, source-file table, or macro frames.
+
+`noc_logical_c_parse_tree_build` parses that retained logical text with the same
+embedded recoverable C grammar as the physical CST while publishing a separate
+`Noc_Logical_C_Parse_Node` topology. Its ranges never enter the physical
+`Noc_Byte_Range` domain. Node source/location queries stay logical, and
+`noc_logical_c_parse_node_token_range` maps a node to the smallest contributing
+token interval; callers then use the retained logical source to inspect each
+token's physical anchor and nested macro frames. The parse tree survives source
+rebuild/free, is transactional, generation-scoped, bounded, and cancellable.
+This bridge still does not execute directives, choose conditional branches,
+traverse includes, or claim that an arbitrary macro fragment is a complete
+preprocessed translation unit.
+
+Run source-map/serialization coverage with `./nob test logical-source`,
+ownership/cancellation/generation/limit coverage with `./nob test
+logical-source-lifecycle`, coordinate/range coverage with `./nob test
+logical-source-queries`, logical grammar/provenance coverage with `./nob test
+logical-c-parse`, and retained-revision/transactional coverage with `./nob test
+logical-c-parse-lifecycle`.
 
 Conditional preprocessing is staged rather than hidden inside a monolithic
 driver. `noc_preprocessor_directive_body_tokens` returns the significant
@@ -1059,14 +1074,16 @@ This version handles explicit token/AST-assisted transformations, a lossless
 delimiter tree, lightweight C structure discovery, and bounded
 object/fixed-arity/C11-variadic macro inspection expansion. It does not provide a
 complete integrated preprocessor, every implementation-specific built-in macro,
-a semantic C AST, typedef resolution, or a C type system. C11 macro
+a logical normalized AST, typedef resolution, or a C type system. C11 macro
 stringification, token pasting, deterministic file/line/standard built-ins, and
 preprocessing integer-expression evaluation are supported. Recoverable
 conditional-group execution and active-only macro state are available as an
 explicit analysis API;
 translation-configured hosted/date/time built-ins are available without reading
-the host or clock. Include traversal and broader target semantics are not. Rules
-inside preprocessor directives are left untouched. More
+the host or clock. A durable macro-fragment logical source and recoverable
+logical C CST preserve token-level physical/macro provenance, but complete
+directive/include preprocessing and broader target semantics are not integrated.
+Rules inside preprocessor directives are left untouched. More
 structured statement and declaration helpers can be added without changing the
 registration model.
 

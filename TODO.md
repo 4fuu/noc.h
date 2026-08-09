@@ -242,6 +242,11 @@ must be generated reproducibly as one self-contained `noc.h`.
     - [x] Add durable logical line coordinates and binary-search byte-to-token
           range queries so future logical CST/AST nodes can reach token-level
           physical and macro provenance without reinterpreting physical ranges.
+    - [x] Add a retained-revision logical C concrete-syntax tree with distinct
+          logical byte ranges, node-to-token provenance queries, recoverable
+          grammar nodes, transactional generations, limits, cancellation, and
+          separate parser/lifecycle test suites. Complete translation-unit
+          preprocessing and normalized logical AST mapping remain separate.
   - [x] Patch and deterministically regenerate the pinned tree-sitter-c 0.24.2
         grammar for required C11 `_Bool`, `_Complex`, `_Thread_local`, and
         `_Static_assert` spellings, `_Atomic(type-name)`, and anonymous

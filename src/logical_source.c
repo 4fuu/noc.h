@@ -21,6 +21,7 @@ enum {
 };
 
 struct Noc_Logical_Source_Impl {
+    size_t reference_count;
     char *text;
     size_t text_count;
     size_t *line_starts;
@@ -49,7 +50,7 @@ typedef struct {
     const Noc_Logical_Source_Options *options;
 } Noc__Logical_Source_Builder;
 
-static void noc__logical_source_impl_free(
+static void noc__logical_source_impl_destroy(
     Noc_Logical_Source_Impl *implementation)
 {
     size_t index;
@@ -64,6 +65,28 @@ static void noc__logical_source_impl_free(
     free(implementation->line_starts);
     free(implementation->text);
     free(implementation);
+}
+
+static bool noc__logical_source_impl_retain(
+    Noc_Logical_Source_Impl *implementation)
+{
+    if (!implementation || implementation->reference_count == 0 ||
+        implementation->reference_count == SIZE_MAX) {
+        return false;
+    }
+    implementation->reference_count += 1;
+    return true;
+}
+
+static void noc__logical_source_impl_free(
+    Noc_Logical_Source_Impl *implementation)
+{
+    if (!implementation) return;
+    if (implementation->reference_count == 0) return;
+    implementation->reference_count -= 1;
+    if (implementation->reference_count == 0) {
+        noc__logical_source_impl_destroy(implementation);
+    }
 }
 
 static void noc__logical_source_builder_deinit(
@@ -133,7 +156,8 @@ static bool noc__logical_source_owned_is_valid(
     size_t previous_end = 0;
     if (!source || !source->impl || source->generation == 0) return false;
     implementation = source->impl;
-    if (implementation->generation != source->generation ||
+    if (implementation->reference_count == 0 ||
+        implementation->generation != source->generation ||
         !implementation->text ||
         implementation->text[implementation->text_count] != '\0' ||
         !implementation->line_starts || implementation->line_count == 0 ||
@@ -243,6 +267,26 @@ NOCDEF const char *noc_logical_source_status_name(
     case NOC_LOGICAL_SOURCE_OUT_OF_MEMORY: return "out-of-memory";
     }
     return "unknown";
+}
+
+NOCDEF Noc_Logical_Source_Status noc_logical_source_clone(
+    const Noc_Logical_Source *source,
+    Noc_Logical_Source *output)
+{
+    Noc_Logical_Source_Impl *previous;
+    if (!output || !noc__logical_source_handle_is_current(source) ||
+        (output->impl && !noc__logical_source_handle_is_current(output))) {
+        return NOC_LOGICAL_SOURCE_INVALID_ARGUMENT;
+    }
+    if (source == output) return NOC_LOGICAL_SOURCE_OK;
+    if (!noc__logical_source_impl_retain(source->impl)) {
+        return NOC_LOGICAL_SOURCE_LIMIT_EXCEEDED;
+    }
+    previous = output->impl;
+    output->impl = source->impl;
+    output->generation = source->generation;
+    noc__logical_source_impl_free(previous);
+    return NOC_LOGICAL_SOURCE_OK;
 }
 
 NOCDEF void noc_logical_source_free(Noc_Logical_Source *source)
@@ -980,6 +1024,7 @@ NOCDEF Noc_Logical_Source_Status noc_logical_source_build_macro_expansion(
     generation = output->generation + 1;
     built = (Noc_Logical_Source_Impl *)calloc(1, sizeof(*built));
     if (!built) return NOC_LOGICAL_SOURCE_OUT_OF_MEMORY;
+    built->reference_count = 1;
     built->generation = generation;
     builder.implementation = built;
     builder.options = &options;

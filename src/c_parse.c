@@ -50,7 +50,8 @@ struct Noc_C_Parse_Tree_Impl {
     size_t nodes_capacity;
 };
 
-static void noc__c_parse_impl_free(Noc_C_Parse_Tree_Impl *implementation)
+NOC__PRIVATE void noc__c_parse_impl_free(
+    Noc_C_Parse_Tree_Impl *implementation)
 {
     if (!implementation) return;
     free(implementation->metadata);
@@ -298,6 +299,7 @@ static Noc_C_Parse_Status noc__c_parse_make_node(
 
 static Noc_C_Parse_Status noc__c_parse_flatten(
     Noc_C_Parse_Tree_Impl *implementation,
+    size_t source_count,
     size_t generation,
     size_t max_nodes,
     Noc__C_Parse_Control *control)
@@ -316,23 +318,19 @@ static Noc_C_Parse_Status noc__c_parse_flatten(
     status = noc__c_parse_make_node(root,
                                     NULL,
                                     NOC_C_PARSE_NODE_NONE,
-                                    noc_document_snapshot_source(
-                                        &implementation->snapshot).count,
+                                    source_count,
                                     generation,
                                     &root_node);
     if (status != NOC_C_PARSE_OK) return status;
     /* Tree-sitter can exclude an unrecognized leading or trailing byte from
        its root range while still publishing a recoverable tree. Noc's root is
-       the physical document view, so retain those skipped bytes at the root;
-       grammar children keep their exact engine ranges and error flags. */
-    if (root_node.bytes.begin != 0 ||
-        root_node.bytes.end != noc_document_snapshot_source(
-                                   &implementation->snapshot).count) {
+       the complete supplied source view, so retain those skipped bytes at the
+       root; grammar children keep their exact engine ranges and error flags. */
+    if (root_node.bytes.begin != 0 || root_node.bytes.end != source_count) {
         root_node.flags |= NOC_C_PARSE_NODE_SKIPPED_SOURCE;
     }
     root_node.bytes.begin = 0;
-    root_node.bytes.end = noc_document_snapshot_source(
-                              &implementation->snapshot).count;
+    root_node.bytes.end = source_count;
     status = noc__c_parse_append_node(implementation,
                                       max_nodes,
                                       root_node,
@@ -374,7 +372,7 @@ static Noc_C_Parse_Status noc__c_parse_flatten(
                 child,
                 field,
                 parent_index,
-                noc_document_snapshot_source(&implementation->snapshot).count,
+                source_count,
                 generation,
                 &child_node);
             if (status != NOC_C_PARSE_OK) break;
@@ -438,36 +436,27 @@ NOCDEF const char *noc_c_parse_status_name(Noc_C_Parse_Status status)
     return "unknown";
 }
 
-NOCDEF Noc_C_Parse_Status noc_c_parse_tree_build(
-    const Noc_Document_Snapshot *snapshot,
+NOC__PRIVATE Noc_C_Parse_Status noc__c_parse_source_build(
+    Noc_Slice source,
     Noc_C_Parse_Options options,
-    Noc_C_Parse_Tree *output)
+    size_t generation,
+    Noc_C_Parse_Tree_Impl **output)
 {
     Noc_C_Parse_Tree_Impl *parsed;
-    Noc_C_Parse_Tree_Impl *previous;
     Noc__Vendor_TSParser *parser;
     Noc__Vendor_TSInput input;
     Noc__Vendor_TSParseOptions parse_options;
     Noc__C_Parse_Input input_payload;
     Noc__C_Parse_Control control;
     Noc_C_Parse_Status status;
-    Noc_Workspace_Status snapshot_status;
-    Noc_Slice source;
-    size_t generation;
 
-    if (!noc_document_snapshot_is_valid(snapshot) || !output ||
-        options.max_source_bytes == 0 || options.max_nodes == 0 ||
-        (output->impl && !noc_c_parse_tree_is_valid(output))) {
+    if (!output || !source.data || generation == 0 ||
+        options.max_source_bytes == 0 || options.max_nodes == 0) {
         return NOC_C_PARSE_INVALID_ARGUMENT;
     }
-    source = noc_document_snapshot_source(snapshot);
     if (source.count > options.max_source_bytes || source.count > UINT32_MAX) {
         return NOC_C_PARSE_LIMIT_EXCEEDED;
     }
-    if (output->generation == SIZE_MAX) {
-        return NOC_C_PARSE_GENERATION_EXHAUSTED;
-    }
-    generation = output->generation + 1;
     control.should_cancel = options.should_cancel;
     control.user_data = options.cancel_user_data;
     control.cancelled = false;
@@ -475,14 +464,6 @@ NOCDEF Noc_C_Parse_Status noc_c_parse_tree_build(
 
     parsed = (Noc_C_Parse_Tree_Impl *)calloc(1, sizeof(*parsed));
     if (!parsed) return NOC_C_PARSE_OUT_OF_MEMORY;
-    snapshot_status = noc_document_snapshot_clone(snapshot, &parsed->snapshot);
-    if (snapshot_status != NOC_WORKSPACE_OK) {
-        noc__c_parse_impl_free(parsed);
-        return snapshot_status == NOC_WORKSPACE_LIMIT_EXCEEDED
-                   ? NOC_C_PARSE_LIMIT_EXCEEDED
-                   : NOC_C_PARSE_INVALID_ARGUMENT;
-    }
-
     parser = noc__vendor_ts_parser_new();
     if (!parser) {
         noc__c_parse_impl_free(parsed);
@@ -515,6 +496,7 @@ NOCDEF Noc_C_Parse_Status noc_c_parse_tree_build(
         return status;
     }
     status = noc__c_parse_flatten(parsed,
+                                  source.count,
                                   generation,
                                   options.max_nodes,
                                   &control);
@@ -522,6 +504,73 @@ NOCDEF Noc_C_Parse_Status noc_c_parse_tree_build(
         noc__c_parse_impl_free(parsed);
         return status;
     }
+    *output = parsed;
+    return NOC_C_PARSE_OK;
+}
+
+NOC__PRIVATE size_t noc__c_parse_impl_node_count(
+    const Noc_C_Parse_Tree_Impl *implementation)
+{
+    return implementation ? implementation->nodes_count : 0;
+}
+
+NOC__PRIVATE const Noc_C_Parse_Node *noc__c_parse_impl_node_at(
+    const Noc_C_Parse_Tree_Impl *implementation,
+    size_t node_index)
+{
+    if (!implementation || node_index >= implementation->nodes_count) {
+        return NULL;
+    }
+    return &implementation->nodes[node_index];
+}
+
+NOCDEF Noc_C_Parse_Status noc_c_parse_tree_build(
+    const Noc_Document_Snapshot *snapshot,
+    Noc_C_Parse_Options options,
+    Noc_C_Parse_Tree *output)
+{
+    Noc_C_Parse_Tree_Impl *parsed;
+    Noc_C_Parse_Tree_Impl *previous;
+    Noc_C_Parse_Status status;
+    Noc_Workspace_Status snapshot_status;
+    Noc_Document_Snapshot retained = {0};
+    Noc_Slice source;
+    size_t generation;
+
+    if (!noc_document_snapshot_is_valid(snapshot) || !output ||
+        options.max_source_bytes == 0 || options.max_nodes == 0 ||
+        (output->impl && !noc_c_parse_tree_is_valid(output))) {
+        return NOC_C_PARSE_INVALID_ARGUMENT;
+    }
+    source = noc_document_snapshot_source(snapshot);
+    if (source.count > options.max_source_bytes || source.count > UINT32_MAX) {
+        return NOC_C_PARSE_LIMIT_EXCEEDED;
+    }
+    if (output->generation == SIZE_MAX) {
+        return NOC_C_PARSE_GENERATION_EXHAUSTED;
+    }
+    generation = output->generation + 1;
+    /* Retain the immutable input before the first cancellation callback can run.
+       A callback may update the caller's workspace, but parser input bytes must
+       remain stable until Tree-sitter and flattening have both returned. */
+    snapshot_status = noc_document_snapshot_clone(snapshot, &retained);
+    if (snapshot_status != NOC_WORKSPACE_OK) {
+        return snapshot_status == NOC_WORKSPACE_LIMIT_EXCEEDED
+                   ? NOC_C_PARSE_LIMIT_EXCEEDED
+                   : NOC_C_PARSE_INVALID_ARGUMENT;
+    }
+    source = noc_document_snapshot_source(&retained);
+    status = noc__c_parse_source_build(source,
+                                       options,
+                                       generation,
+                                       &parsed);
+    if (status != NOC_C_PARSE_OK) {
+        noc_document_snapshot_free(&retained);
+        return status;
+    }
+    /* Internal move: parsed owns the one retained reference from here onward. */
+    parsed->snapshot = retained;
+    retained.impl = NULL;
 
     previous = output->impl;
     output->impl = parsed;

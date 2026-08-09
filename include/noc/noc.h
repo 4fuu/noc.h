@@ -32,8 +32,8 @@
 
 #define NOC_VERSION_MAJOR 0
 #define NOC_VERSION_MINOR 42
-#define NOC_VERSION_PATCH 8
-#define NOC_VERSION "0.42.8"
+#define NOC_VERSION_PATCH 9
+#define NOC_VERSION "0.42.9"
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -2031,6 +2031,52 @@ typedef struct {
     size_t generation;
 } Noc_Logical_Source;
 
+/* Recoverable C concrete syntax over an owning logical macro-expansion source.
+   This is the preprocessing-aware counterpart of Noc_C_Parse_Tree, not a
+   reinterpretation of its physical ranges. Every node uses the separate
+   Noc_Logical_Byte_Range domain and can be mapped to the smallest contributing
+   logical-token interval, whose tokens retain exact physical sites and nested
+   macro provenance through the tree's retained Noc_Logical_Source.
+
+   The accepted syntax and recovery flags are otherwise the same embedded C
+   grammar used by the physical parser. Parsing does not grant permission for a
+   feature, perform semantic analysis, or turn a fragment into a complete
+   preprocessing translation unit: directives, conditional selection, and
+   include traversal must have happened before a complete logical source is
+   supplied. A macro expansion fragment may therefore parse successfully as a
+   complete C fragment or recover with ERROR, MISSING, HAS_ERROR, and
+   SKIPPED_SOURCE nodes.
+
+   Noc_Logical_C_Parse_Tree is initialized with {0}, owns a retained immutable
+   logical source, and must not be shallow-copied. A successful build
+   transactionally replaces the previous tree and increments its independent
+   parse generation. Limits, cancellation, invalid input, allocation/engine
+   failure, and generation exhaustion preserve the previous tree exactly. Node
+   pointers and indices remain valid until successful rebuild or free. The
+   thread-safety and bounded-work rules of Noc_C_Parse_Options apply. */
+typedef struct {
+    Noc_Logical_Byte_Range bytes;
+    size_t parent;
+    size_t first_child;
+    size_t last_child;
+    size_t next_sibling;
+    size_t child_count;
+    /* Borrowed immutable grammar labels with the same contract as
+       Noc_C_Parse_Node.kind/field. */
+    Noc_Slice kind;
+    Noc_Slice field;
+    size_t generation;
+    unsigned int flags;
+} Noc_Logical_C_Parse_Node;
+
+typedef struct Noc_Logical_C_Parse_Tree_Impl
+    Noc_Logical_C_Parse_Tree_Impl;
+
+typedef struct {
+    Noc_Logical_C_Parse_Tree_Impl *impl;
+    size_t generation;
+} Noc_Logical_C_Parse_Tree;
+
 /* Owning result of applying normal C11 macro replacement to one physical
    EXPANSION_REQUIRED #include operand and then interpreting the complete token
    sequence as a header name. Initialize to {0}, do not shallow-copy, treat all
@@ -2589,6 +2635,12 @@ NOCDEF bool noc_macro_expansion_render(const Noc_Macro_Expansion *expansion,
 NOCDEF Noc_Logical_Source_Options noc_logical_source_default_options(void);
 NOCDEF const char *noc_logical_source_status_name(
     Noc_Logical_Source_Status status);
+/* Retains the exact immutable logical revision without copying its bytes.
+   SOURCE == OUTPUT is a no-op. Success transactionally replaces OUTPUT;
+   invalid handles or exhausted internal retain capacity preserve it. */
+NOCDEF Noc_Logical_Source_Status noc_logical_source_clone(
+    const Noc_Logical_Source *source,
+    Noc_Logical_Source *output);
 NOCDEF void noc_logical_source_free(Noc_Logical_Source *source);
 /* Validity checks only owned storage and topology; successful results have no
    lifetime dependency on their build inputs. */
@@ -2654,6 +2706,44 @@ NOCDEF size_t noc_logical_source_macro_frame_count(
 NOCDEF const Noc_Logical_Macro_Frame *noc_logical_source_macro_frame_at(
     const Noc_Logical_Source *source,
     size_t frame_index);
+
+NOCDEF Noc_C_Parse_Status noc_logical_c_parse_tree_build(
+    const Noc_Logical_Source *source,
+    Noc_C_Parse_Options options,
+    Noc_Logical_C_Parse_Tree *output);
+NOCDEF void noc_logical_c_parse_tree_free(Noc_Logical_C_Parse_Tree *tree);
+NOCDEF bool noc_logical_c_parse_tree_is_valid(
+    const Noc_Logical_C_Parse_Tree *tree);
+NOCDEF size_t noc_logical_c_parse_tree_generation(
+    const Noc_Logical_C_Parse_Tree *tree);
+/* Borrowed immutable view retained by TREE. */
+NOCDEF const Noc_Logical_Source *noc_logical_c_parse_tree_source(
+    const Noc_Logical_C_Parse_Tree *tree);
+NOCDEF size_t noc_logical_c_parse_tree_node_count(
+    const Noc_Logical_C_Parse_Tree *tree);
+NOCDEF size_t noc_logical_c_parse_tree_root(
+    const Noc_Logical_C_Parse_Tree *tree);
+NOCDEF const Noc_Logical_C_Parse_Node *noc_logical_c_parse_tree_node_at(
+    const Noc_Logical_C_Parse_Tree *tree,
+    size_t node_index);
+NOCDEF bool noc_logical_c_parse_tree_has_error(
+    const Noc_Logical_C_Parse_Tree *tree);
+/* Invalid tree/index returns {0}; valid zero-width nodes return an empty slice
+   pointing at their insertion byte in the retained logical text. */
+NOCDEF Noc_Slice noc_logical_c_parse_node_source(
+    const Noc_Logical_C_Parse_Tree *tree,
+    size_t node_index);
+NOCDEF Noc_Logical_Location noc_logical_c_parse_node_location(
+    const Noc_Logical_C_Parse_Tree *tree,
+    size_t node_index);
+/* Maps the node's complete logical byte range to the smallest contributing
+   token interval. Empty/missing nodes use the logical insertion-point rule.
+   Failure preserves OUTPUT. Inspect those tokens on the retained source for
+   physical anchors, source revisions, generated separators, and macro frames. */
+NOCDEF bool noc_logical_c_parse_node_token_range(
+    const Noc_Logical_C_Parse_Tree *tree,
+    size_t node_index,
+    Noc_Logical_Token_Range *output);
 /* Evaluate a condition-mode macro expansion as a bounded C11 preprocessing
    integer constant expression. Remaining identifiers become zero and defined
    queries the expansion's selected environment prefix, including deterministic

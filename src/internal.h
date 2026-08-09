@@ -90,6 +90,17 @@ NOC__PRIVATE bool noc__logical_pair(const char *, size_t, size_t, char, char, si
 NOC__PRIVATE bool noc__source_class_is_valid(Noc_Source_Class);
 NOC__PRIVATE Noc__Line_Map_Status noc__line_starts_build(
     const char *, size_t, Noc__Line_Map_Cancel_Fn, void *, size_t **, size_t *);
+/* Shared embedded-C parser core. Logical parsing consumes the flat physical
+   node representation only long enough to copy it into a distinct logical
+   range type; physical parsing retains the engine tree and parser metadata for
+   grammar-state queries. */
+NOC__PRIVATE Noc_C_Parse_Status noc__c_parse_source_build(
+    Noc_Slice, Noc_C_Parse_Options, size_t, Noc_C_Parse_Tree_Impl **);
+NOC__PRIVATE void noc__c_parse_impl_free(Noc_C_Parse_Tree_Impl *);
+NOC__PRIVATE size_t noc__c_parse_impl_node_count(
+    const Noc_C_Parse_Tree_Impl *);
+NOC__PRIVATE const Noc_C_Parse_Node *noc__c_parse_impl_node_at(
+    const Noc_C_Parse_Tree_Impl *, size_t);
 NOC__PRIVATE Noc_Token noc__make_token(Noc_Lexer *, Noc_Token_Kind, size_t, size_t,
                                       Noc_Location);
 NOC__PRIVATE void noc__report(Noc_Context *, Noc_Diagnostic_Severity,

@@ -138,6 +138,7 @@ jobs:
                        preprocessor lexing syntax c_analysis c_parse_tree \
                        c_parse_recovery c_parse_lifecycle c_parse_corpus \
                        c_parse_malformed_corpus c_parse_completion \
+                       logical_c_parse logical_c_parse_lifecycle \
                        c_ast c_ast_details \
                        c_ast_c11 c_ast_c11_constructs c_ast_declarators \
                        c_ast_completion c_ast_queries c_ast_recovery \
@@ -161,7 +162,8 @@ jobs:
              src/conditional.c \
              src/conditional_groups.c src/include_control.c src/include_resolver.c \
              src/include_expansion.c src/include_graph.c \
-             src/parser.c src/ast.c src/c_parse.c src/lower.c src/emit_c.c
+             src/parser.c src/ast.c src/c_parse.c src/logical_c_parse.c \
+             src/lower.c src/emit_c.c
           ASAN_OPTIONS=detect_leaks=1 ./build/noc-test-modules-sanitize
           cc $common_flags -Ibuild/generated -Iinclude -I. \
              -o noc-fuzz-sanitize tests/fuzz_noc.c \
