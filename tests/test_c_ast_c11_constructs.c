@@ -118,7 +118,7 @@ static void test_c11_aggregate_initializer_and_expression_constructs(void)
     static const char source[] =
         "struct Pair {\n"
         "    _Atomic(int) first;\n"
-        "    unsigned int bits : 3;\n"
+        "    unsigned int bits : 3, : 0, more_bits : 2;\n"
         "};\n"
         "union Number { int integer; double real; };\n"
         "enum Color { COLOR_RED, COLOR_GREEN = 3 };\n"
@@ -190,7 +190,10 @@ static void test_c11_aggregate_initializer_and_expression_constructs(void)
                       "struct Pair");
     CHECK(count_kind(&fixture.ast, NOC_C_AST_KIND_UNION_SPECIFIER) == 1);
     CHECK(count_kind(&fixture.ast, NOC_C_AST_KIND_ENUM_SPECIFIER) == 1);
-    CHECK(count_kind(&fixture.ast, NOC_C_AST_KIND_BITFIELD_CLAUSE) == 1);
+    CHECK(count_kind(&fixture.ast, NOC_C_AST_KIND_BITFIELD_CLAUSE) == 3);
+    check_kind_source(&fixture.ast,
+                      NOC_C_AST_KIND_BITFIELD_CLAUSE,
+                      ": 0");
     CHECK(count_kind(&fixture.ast, NOC_C_AST_KIND_FIELD_DESIGNATOR) >= 4);
     CHECK(count_kind(&fixture.ast, NOC_C_AST_KIND_SUBSCRIPT_DESIGNATOR) == 2);
     CHECK(count_kind(&fixture.ast, NOC_C_AST_KIND_INITIALIZER_PAIR) >= 6);

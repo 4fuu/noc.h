@@ -105,6 +105,7 @@ static const Test_Suite test_suites[] = {
     {"c-parse-tree", "tests/test_c_parse_tree.c", "build/noc-test-c-parse-tree" NOC_EXE, false},
     {"c-parse-recovery", "tests/test_c_parse_recovery.c", "build/noc-test-c-parse-recovery" NOC_EXE, false},
     {"c-parse-lifecycle", "tests/test_c_parse_lifecycle.c", "build/noc-test-c-parse-lifecycle" NOC_EXE, false},
+    {"c-parse-corpus", "tests/test_c_parse_corpus.c", "build/noc-test-c-parse-corpus" NOC_EXE, false},
     {"c-parse-cpp-runtime", "tests/test_c_parse_cpp_runtime.c", "build/noc-test-c-parse-cpp-runtime" NOC_EXE, true},
     {"c-ast", "tests/test_c_ast.c", "build/noc-test-c-ast" NOC_EXE, false},
     {"c-ast-details", "tests/test_c_ast_details.c", "build/noc-test-c-ast-details" NOC_EXE, false},

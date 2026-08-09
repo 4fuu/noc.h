@@ -232,9 +232,9 @@ must be generated reproducibly as one self-contained `noc.h`.
         logical AST nodes without weakening physical spelling/source queries.
   - [x] Patch and deterministically regenerate the pinned tree-sitter-c 0.24.2
         grammar for required C11 `_Bool`, `_Complex`, `_Thread_local`, and
-        `_Static_assert` spellings plus `_Atomic(type-name)`; retain direct
-        AST/recovery tests rather than treating extension aliases as proof of
-        C11 coverage.
+        `_Static_assert` spellings, `_Atomic(type-name)`, and anonymous
+        bit-fields; retain direct AST/recovery tests rather than treating
+        extension aliases as proof of C11 coverage.
 - [x] Parse declarations/declarators, initializers, statements, and expressions
       through the pinned grammar rather than the lightweight structure analyzer;
       retain direct normalized-AST declarator/precedence coverage.
@@ -247,6 +247,9 @@ must be generated reproducibly as one self-contained `noc.h`.
       completion-context queries; never invent a successful complete AST.
 - [ ] Add parser corpus tests, round-trip checks, malformed-input regression
       suites, and parser fuzzing independently of semantic analysis.
+  - [x] Add a deterministic table-driven ISO C11 corpus whose exact retained
+        physical source is reparsed and compared node-for-node across the CST
+        and normalized AST, including comments, whitespace, and CRLF spelling.
 
 ## Milestone 10 — semantic AST, types, constants, and target ABI
 

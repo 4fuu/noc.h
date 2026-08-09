@@ -32,8 +32,8 @@
 
 #define NOC_VERSION_MAJOR 0
 #define NOC_VERSION_MINOR 42
-#define NOC_VERSION_PATCH 2
-#define NOC_VERSION "0.42.2"
+#define NOC_VERSION_PATCH 3
+#define NOC_VERSION "0.42.3"
 
 #include <stdbool.h>
 #include <stddef.h>

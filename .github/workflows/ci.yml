@@ -134,7 +134,8 @@ jobs:
                        include_expansion include_expansion_resolver \
                        include_graph include_graph_limits include_graph_queries \
                        preprocessor lexing syntax c_analysis c_parse_tree \
-                       c_parse_recovery c_parse_lifecycle c_ast c_ast_details \
+                       c_parse_recovery c_parse_lifecycle c_parse_corpus \
+                       c_ast c_ast_details \
                        c_ast_c11 c_ast_c11_constructs c_ast_declarators \
                        c_ast_recovery \
                        tree_sitter_coexistence \

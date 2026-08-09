@@ -44,7 +44,7 @@ int main(void)
                    NOC_INCLUDE_FORM_QUOTED != NOC_INCLUDE_FORM_ANGLED &&
                    NOC_VERSION_MAJOR == 0 &&
                    NOC_VERSION_MINOR == 42 &&
-                   NOC_VERSION_PATCH == 2
+                   NOC_VERSION_PATCH == 3
                ? 0
                : 1;
 }

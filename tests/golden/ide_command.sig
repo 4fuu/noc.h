@@ -1,5 +1,5 @@
 noc-command-signature 1
-noc-version 6:0.42.2
+noc-version 6:0.42.3
 arguments 5
 argument 2:cc
 argument 8:-std=c11

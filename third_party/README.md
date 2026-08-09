@@ -26,14 +26,13 @@ needed by Noc's recoverable physical C parser.
 - License: MIT; copied to `tree-sitter/LICENSE.grammar`
 
 Noc applies the minimal downstream patch
-`noc-c11-required-grammar-v2` before regenerating the parser. The patch adds
+`noc-c11-required-grammar-v3` before regenerating the parser. The patch adds
 the ISO C11 `_Bool`, `_Complex`, `_Thread_local`, and `_Static_assert`
 productions absent from the pinned upstream grammar and gives the valid
 `_Atomic(type-name)` form its own node instead of recovering it as a cast
-expression. It also recognizes the C23 `static_assert` alias without making
-that alias part of the C11 profile. Direct AST and recovery tests cover each C11
-spelling at translation-unit, block, and structure-member scope where
-applicable.
+expression. It also accepts standard anonymous bit-fields and recognizes the
+C23 `static_assert` alias without making that alias part of the C11 profile.
+Direct AST, recovery, and parser-corpus tests cover these downstream rules.
 
 Regeneration uses Tree-sitter CLI `v0.25.4` and preserves language ABI 15. The
 generator downloads the matching official compressed executable for Linux
