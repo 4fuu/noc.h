@@ -245,7 +245,7 @@ must be generated reproducibly as one self-contained `noc.h`.
       and physical macro/include provenance on AST nodes.
 - [ ] Add error recovery and incomplete-source parsing with expected-token and
       completion-context queries; never invent a successful complete AST.
-- [ ] Add parser corpus tests, round-trip checks, malformed-input regression
+- [x] Add parser corpus tests, round-trip checks, malformed-input regression
       suites, and parser fuzzing independently of semantic analysis.
   - [x] Add a deterministic table-driven ISO C11 corpus whose exact retained
         physical source is reparsed and compared node-for-node across the CST
@@ -253,6 +253,9 @@ must be generated reproducibly as one self-contained `noc.h`.
   - [x] Add an independently runnable malformed-editor corpus that proves
         recovery CST/AST output is deterministic and never reports malformed
         input as a syntax-complete normalized AST.
+  - [x] Split parser fuzzing from the general lexer/preprocessor/rewriter target;
+        run deterministic arbitrary-byte smoke plus bounded ASan/UBSan
+        libFuzzer campaigns over CST/AST topology, recovery, and rebuilds.
 
 ## Milestone 10 — semantic AST, types, constants, and target ABI
 

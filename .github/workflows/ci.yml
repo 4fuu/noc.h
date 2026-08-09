@@ -164,6 +164,10 @@ jobs:
              -o noc-fuzz-sanitize tests/fuzz_noc.c \
              build/noc-implementation-sanitize.o
           ASAN_OPTIONS=detect_leaks=1 ./noc-fuzz-sanitize
+          cc $common_flags -Ibuild/generated -Iinclude -I. \
+             -o noc-c-parse-fuzz-sanitize tests/fuzz_c_parser.c \
+             build/noc-implementation-sanitize.o
+          ASAN_OPTIONS=detect_leaks=1 ./noc-c-parse-fuzz-sanitize
 
   fuzz:
     name: Linux Clang libFuzzer
@@ -182,3 +186,11 @@ jobs:
                 -Iinclude -I. \
                 -o noc-fuzz tests/fuzz_noc.c
           ASAN_OPTIONS=detect_leaks=1 ./noc-fuzz -runs=20000 -max_len=2048
+          clang -std=c11 -Wall -Wextra -Wpedantic \
+                -Werror -DNOC_IMPLEMENTATION -DNOC_LIBFUZZER \
+                -fsanitize=fuzzer,address,undefined \
+                -fno-omit-frame-pointer -include build/generated/noc.h \
+                -Iinclude -I. \
+                -o noc-c-parse-fuzz tests/fuzz_c_parser.c
+          ASAN_OPTIONS=detect_leaks=1 \
+            ./noc-c-parse-fuzz -runs=20000 -max_len=4096

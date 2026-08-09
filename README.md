@@ -479,23 +479,35 @@ Run the token and recovery coverage independently with
 
 ## Fuzzing
 
-`tests/fuzz_noc.c` is both a deterministic cross-platform smoke runner and a
-Clang libFuzzer target. The smoke campaign is part of `./nob test` and exercises
-lexer byte coverage, token streams/cursors, lossless syntax trees and lookup
-invariants, C analysis, preprocessor activity maps, and rewrite callbacks.
-Run it independently with `./nob fuzz`.
+`tests/fuzz_noc.c` and `tests/fuzz_c_parser.c` are deterministic cross-platform
+smoke runners and separate Clang libFuzzer targets. The general target covers
+lexer bytes, token streams/cursors, lossless syntax queries, C structure
+analysis, preprocessing, and rewrite callbacks. The parser target isolates the
+recoverable physical CST and normalized AST, checking ranges, topology,
+generation-aware rebuilds, typed details, and deterministic recovery for
+arbitrary bytes. Both smoke campaigns are part of `./nob test` and run on demand
+with `./nob fuzz`.
 
 For a bounded sanitizer-backed libFuzzer campaign:
 
 ```console
-$ clang -std=c11 -DNOC_LIBFUZZER \
-    -fsanitize=fuzzer,address,undefined -fno-omit-frame-pointer -I. \
+$ ./nob header
+$ clang -std=c11 -DNOC_IMPLEMENTATION -DNOC_LIBFUZZER \
+    -fsanitize=fuzzer,address,undefined -fno-omit-frame-pointer \
+    -include build/generated/noc.h -Iinclude -I. \
     -o noc-fuzz tests/fuzz_noc.c
 $ ASAN_OPTIONS=detect_leaks=1 ./noc-fuzz -runs=20000 -max_len=2048
+
+$ clang -std=c11 -DNOC_IMPLEMENTATION -DNOC_LIBFUZZER \
+    -fsanitize=fuzzer,address,undefined -fno-omit-frame-pointer \
+    -include build/generated/noc.h -Iinclude -I. \
+    -o noc-c-parse-fuzz tests/fuzz_c_parser.c
+$ ASAN_OPTIONS=detect_leaks=1 \
+    ./noc-c-parse-fuzz -runs=20000 -max_len=4096
 ```
 
-CI runs the deterministic harness on Linux, macOS, and Windows, then runs the
-bounded libFuzzer campaign in a dedicated Linux Clang job.
+CI runs both deterministic harnesses on Linux, macOS, and Windows, then runs
+both bounded libFuzzer campaigns in a dedicated Linux Clang job.
 
 ## Define a dialect
 
