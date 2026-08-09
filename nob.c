@@ -84,6 +84,7 @@ static const Test_Suite test_suites[] = {
     {"macro-directives", "tests/test_macro_directives.c", "build/noc-test-macro-directives" NOC_EXE, false},
     {"macro-invocations", "tests/test_macro_invocations.c", "build/noc-test-macro-invocations" NOC_EXE, false},
     {"macro-environment", "tests/test_macro_environment.c", "build/noc-test-macro-environment" NOC_EXE, false},
+    {"macro-environment-clone", "tests/test_macro_environment_clone.c", "build/noc-test-macro-environment-clone" NOC_EXE, false},
     {"macro-expansion", "tests/test_macro_expansion.c", "build/noc-test-macro-expansion" NOC_EXE, false},
     {"logical-source", "tests/test_logical_source.c", "build/noc-test-logical-source" NOC_EXE, false},
     {"logical-source-lifecycle", "tests/test_logical_source_lifecycle.c", "build/noc-test-logical-source-lifecycle" NOC_EXE, false},

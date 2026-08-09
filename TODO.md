@@ -159,6 +159,8 @@ must be generated reproducibly as one self-contained `noc.h`.
         parameter/replacement ranges, C11 variadic slots, and syntax status.
   - [x] Add a caller-ordered, multi-unit macro environment with definition/undef
         history, policy filtering, stale generation checks, and lookup-before.
+    - [x] Add transactional owning prefix clones, including safe in-place
+          truncation, for translation rollback and final-environment publication.
   - [x] Add bounded object-like substitution/rescan, direct and indirect
         recursion suppression, and invocation/definition provenance frames.
   - [x] Add a generation-aware function-like invocation query with balanced,

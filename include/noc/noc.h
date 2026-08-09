@@ -32,8 +32,8 @@
 
 #define NOC_VERSION_MAJOR 0
 #define NOC_VERSION_MINOR 42
-#define NOC_VERSION_PATCH 14
-#define NOC_VERSION "0.42.14"
+#define NOC_VERSION_PATCH 15
+#define NOC_VERSION "0.42.15"
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -2477,6 +2477,15 @@ NOCDEF const char *noc_macro_environment_status_name(
 NOCDEF void noc_macro_environment_free(Noc_Macro_Environment *environment);
 NOCDEF bool noc_macro_environment_is_valid(
     const Noc_Macro_Environment *environment);
+/* Clone entries [0,entry_limit) into an independently owned environment while
+   continuing to borrow the same unchanged preprocessing units. Success
+   transactionally replaces output and increments its generation; failure
+   preserves output. Source and output may be the same object, which truncates
+   the environment in place without aliasing its entry storage. */
+NOCDEF Noc_Macro_Environment_Status noc_macro_environment_clone_prefix(
+    const Noc_Macro_Environment *source,
+    size_t entry_limit,
+    Noc_Macro_Environment *output);
 /* Applies one structurally valid, policy-enabled directive by index. #undef of
    an absent name is still recorded as an event. Successful apply increments
    environment.generation; every failure leaves the environment unchanged. */

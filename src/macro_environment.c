@@ -107,6 +107,37 @@ NOCDEF bool noc_macro_environment_is_valid(
     return true;
 }
 
+NOCDEF Noc_Macro_Environment_Status noc_macro_environment_clone_prefix(
+    const Noc_Macro_Environment *source,
+    size_t entry_limit,
+    Noc_Macro_Environment *output)
+{
+    Noc_Macro_Environment copy;
+    Noc_Macro_Environment_Status status;
+    size_t generation;
+    if (!source || !output || entry_limit > source->count) {
+        return NOC_MACRO_ENVIRONMENT_INVALID_ARGUMENT;
+    }
+    if (!noc_macro_environment_is_valid(source)) {
+        return NOC_MACRO_ENVIRONMENT_STALE;
+    }
+    if (!noc_macro_environment_is_valid(output)) {
+        return NOC_MACRO_ENVIRONMENT_INVALID_ARGUMENT;
+    }
+    if (output->generation == SIZE_MAX) {
+        return NOC_MACRO_ENVIRONMENT_GENERATION_EXHAUSTED;
+    }
+    generation = output->generation + 1;
+    status = noc__macro_environment_clone_prefix(source,
+                                                 entry_limit,
+                                                 generation,
+                                                 &copy);
+    if (status != NOC_MACRO_ENVIRONMENT_OK) return status;
+    noc_macro_environment_free(output);
+    *output = copy;
+    return NOC_MACRO_ENVIRONMENT_OK;
+}
+
 static size_t noc__macro_environment_previous_entry(
     const Noc_Macro_Environment *environment,
     Noc_Slice name)

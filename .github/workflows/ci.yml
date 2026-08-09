@@ -126,7 +126,8 @@ jobs:
           cc $common_flags -DNOC_IMPLEMENTATION -x c -c release/noc.h \
              -o build/noc-implementation-sanitize.o
           for suite in workspace preprocessing_tokens macro_directives macro_invocations \
-                       macro_environment macro_expansion logical_source \
+                       macro_environment macro_environment_clone \
+                       macro_expansion logical_source \
                        logical_source_lifecycle logical_source_queries \
                        logical_source_fragments logical_source_fragments_lifecycle \
                        preprocessor_logical_source \

@@ -358,11 +358,15 @@ IDE expansion previews and definition navigation.
 
 The environment borrows its referenced units. Those owning unit objects must
 outlive it and must not be rebuilt; generation checks reject a stale environment
-after a legal rebuild. Apply is transactional, increments the environment
-generation only on success, and rejects malformed or policy-disabled directives
-without changing prior state. Run this layer independently with
-`./nob test macro-environment`. It still does not perform macro expansion or
-conditional evaluation.
+after a legal rebuild. `noc_macro_environment_clone_prefix` creates independent
+entry storage for any half-open history prefix while continuing to borrow those
+same units. It transactionally replaces its output, supports in-place truncation,
+and is the rollback/commit boundary used by ordered translation drivers. Apply
+and clone are transactional, increment the destination generation only on
+success, and reject stale, malformed, or policy-disabled input without changing
+prior state. Run behavior and clone/lifecycle coverage independently with
+`./nob test macro-environment` and `./nob test macro-environment-clone`. This
+layer still does not guess conditional activity.
 
 `noc_macro_expansion_build` performs bounded object-like, fixed-arity, and strict
 C11 variadic function-like macro substitution and recursive rescan against a
