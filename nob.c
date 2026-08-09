@@ -247,7 +247,6 @@ static void append_compile_command(Nob_Cmd *command,
         nob_cmd_append(command, "-x", "c++");
     }
     nob_cmd_append(command, "-o", output, source);
-    if (compile_as_cpp) nob_cmd_append(command, "-x", "none");
 #endif
 }
 
@@ -348,6 +347,11 @@ static bool build_test_suite(const Test_Suite *suite)
                            suite->source,
                            suite->compile_as_cpp);
     if (link_implementation) {
+#if !defined(_MSC_VER) || defined(__clang__)
+        /* -x applies to following inputs. Reset it only when the C++ source is
+           followed by the separately compiled C implementation object. */
+        if (suite->compile_as_cpp) nob_cmd_append(&command, "-x", "none");
+#endif
         nob_cmd_append(&command, NOC_IMPLEMENTATION_OBJECT);
     }
     return nob_cmd_run(&command);

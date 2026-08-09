@@ -65,6 +65,13 @@ static int copy_file(FILE *output, const char *path)
         }
         line[count++] = (unsigned char)character;
         if (character == '\n') {
+            /* Repository attributes keep generated inputs on LF, but normalize
+               defensively so an archive export or foreign checkout still
+               produces the same release bytes on every host. */
+            if (count >= 2 && line[count - 2] == '\r') {
+                line[count - 2] = '\n';
+                count -= 1;
+            }
             if (!is_redundant_local_include(line, count)) {
                 if (fwrite(line, 1, count, output) != count) {
                     ok = 0;
