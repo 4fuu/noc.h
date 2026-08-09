@@ -101,6 +101,7 @@ int main(void)
     Noc_Include_Expansion expansion = {0};
     Noc_Include_Graph graph = {0};
     Noc_C_Parse_Tree parse_tree = {0};
+    Noc_C_Ast ast = {0};
     Noc_Include_Graph_Options graph_options =
         noc_include_graph_default_options();
     Noc_Include_Resolver resolver = {release_not_found, NULL};
@@ -213,8 +214,19 @@ int main(void)
     REQUIRE(!noc_c_parse_tree_has_error(&parse_tree));
     REQUIRE(noc_c_parse_tree_node_count(&parse_tree) > 1);
     REQUIRE(noc_c_parse_tree_root(&parse_tree) == 0);
+    REQUIRE(noc_c_ast_build(&parse_tree,
+                            noc_c_ast_default_options(),
+                            &ast) == NOC_C_AST_OK);
+    REQUIRE(noc_c_ast_is_valid(&ast));
+    REQUIRE(noc_c_ast_is_syntax_complete(&ast));
+    REQUIRE(noc_c_ast_node_at(&ast, noc_c_ast_root(&ast))->kind ==
+            NOC_C_AST_KIND_TRANSLATION_UNIT);
+    REQUIRE(noc_c_ast_node_source(&ast, 0).count ==
+            sizeof(guard_source) - 1);
 
     noc_c_parse_tree_free(&parse_tree);
+    REQUIRE(noc_c_ast_is_valid(&ast));
+    noc_c_ast_free(&ast);
     noc_preprocessor_conditional_groups_free(&guard_groups);
     noc_macro_environment_free(&guard_environment);
     noc_preprocessor_unit_free(&guard_unit);

@@ -225,11 +225,16 @@ must be generated reproducibly as one self-contained `noc.h`.
       semantic compiler contract.
   - [x] Record skipped physical source explicitly when the parser normalizes a
         recoverable grammar root to the complete document range.
-  - [ ] Add an owning normalized physical AST with stable Noc kinds, fields,
+  - [x] Add an owning normalized physical AST with stable Noc kinds, fields,
         operators, specifiers, qualifiers, extension variants, missing symbols,
         recovery state, bounded work, cancellation, and generations.
   - [ ] Attach preprocessing-token, macro-expansion, and include provenance to
         logical AST nodes without weakening physical spelling/source queries.
+  - [ ] Audit a pinned-grammar gap: tree-sitter-c 0.24.2's `grammar.js` appears
+        not to recognize the required C11 spellings `_Bool`, `_Complex`,
+        `_Thread_local`, and `_Static_assert`; keep direct regression tests for
+        these spellings
+        rather than treating extension aliases as proof of C11 coverage.
 - [ ] Replace lightweight C structure analysis with a grammar-complete parser for
       declarations/declarators, initializers, statements, and expressions.
 - [ ] Parse structs/unions/enums, bit-fields, compound literals, designated

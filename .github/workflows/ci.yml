@@ -116,7 +116,9 @@ jobs:
                        include_expansion include_expansion_resolver \
                        include_graph include_graph_limits include_graph_queries \
                        preprocessor lexing syntax c_analysis c_parse_tree \
-                       c_parse_recovery c_parse_lifecycle tree_sitter_coexistence \
+                       c_parse_recovery c_parse_lifecycle c_ast c_ast_details \
+                       c_ast_recovery \
+                       tree_sitter_coexistence \
                        rewriter artifacts; do
             cc $common_flags -Ibuild/generated -Iinclude -I. \
                -o "build/noc-test-${suite}-sanitize" "tests/test_${suite}.c" \

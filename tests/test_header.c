@@ -7,8 +7,8 @@ int main(void)
     Noc_Slice version = {NOC_VERSION, sizeof(NOC_VERSION) - 1};
     return version.count == strlen(NOC_VERSION) &&
                    NOC_VERSION_MAJOR == 0 &&
-                   NOC_VERSION_MINOR == 41 &&
-                   NOC_VERSION_PATCH == 1
+                   NOC_VERSION_MINOR == 42 &&
+                   NOC_VERSION_PATCH == 0
                ? 0
                : 1;
 }

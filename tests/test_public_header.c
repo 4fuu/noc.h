@@ -22,10 +22,14 @@ int main(void)
     Noc_Include_Expansion expansion;
     Noc_Include_Graph graph;
     Noc_Include_Resolver resolver;
+    Noc_C_Ast ast;
+    Noc_C_Ast_Options ast_options;
     memset(&pragma_once, 0, sizeof(pragma_once));
     memset(&guard, 0, sizeof(guard));
     memset(&expansion, 0, sizeof(expansion));
     memset(&graph, 0, sizeof(graph));
+    memset(&ast, 0, sizeof(ast));
+    memset(&ast_options, 0, sizeof(ast_options));
     resolver.resolve = public_header_resolver;
     resolver.user_data = NULL;
     return version.count == strlen(NOC_VERSION) &&
@@ -34,11 +38,13 @@ int main(void)
                    guard.generation == 0 &&
                    expansion.generation == 0 &&
                    graph.generation == 0 &&
+                   ast.generation == 0 &&
+                   ast_options.max_nodes == 0 &&
                    resolver.resolve != NULL &&
                    NOC_INCLUDE_FORM_QUOTED != NOC_INCLUDE_FORM_ANGLED &&
                    NOC_VERSION_MAJOR == 0 &&
-                   NOC_VERSION_MINOR == 41 &&
-                   NOC_VERSION_PATCH == 1
+                   NOC_VERSION_MINOR == 42 &&
+                   NOC_VERSION_PATCH == 0
                ? 0
                : 1;
 }

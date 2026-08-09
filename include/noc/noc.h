@@ -31,9 +31,9 @@
 #define NOC_H_INCLUDED
 
 #define NOC_VERSION_MAJOR 0
-#define NOC_VERSION_MINOR 41
-#define NOC_VERSION_PATCH 1
-#define NOC_VERSION "0.41.1"
+#define NOC_VERSION_MINOR 42
+#define NOC_VERSION_PATCH 0
+#define NOC_VERSION "0.42.0"
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -43,6 +43,7 @@
 #define NOC_TOKEN_INDEX_NONE ((size_t)-1)
 #define NOC_SYNTAX_NONE NOC_TOKEN_INDEX_NONE
 #define NOC_C_PARSE_NODE_NONE ((size_t)-1)
+#define NOC_C_AST_NODE_NONE ((size_t)-1)
 
 #ifndef NOCDEF
 #define NOCDEF extern
@@ -566,6 +567,519 @@ NOCDEF Noc_Slice noc_c_parse_node_source(const Noc_C_Parse_Tree *tree,
                                          size_t node_index);
 NOCDEF Noc_Location noc_c_parse_node_location(const Noc_C_Parse_Tree *tree,
                                               size_t node_index);
+
+/* Noc-owned normalized physical C AST. This is a stable compiler-facing
+   classification layer, not a public view of the embedded parser: nodes carry
+   Noc enums rather than grammar symbol IDs or borrowed grammar strings. Named
+   non-trivia CST nodes are retained, and anonymous ERROR/MISSING recovery nodes
+   are represented explicitly. Operators and keyword spellings that the
+   concrete grammar stores in anonymous children are normalized into typed
+   side queries instead of being lost.
+
+   Every range is a half-open physical spelling range in the AST's independently
+   retained immutable snapshot. Macro expansion, include provenance, and future
+   logical ranges are deliberately separate; recognizing GNU, Microsoft, or C23
+   syntax does not grant permission to use it under a feature profile.
+
+   Noc_C_Ast is an owning handle initialized with {0}; do not shallow-copy it.
+   A successful build clones the parse tree snapshot and then has no lifetime
+   dependency on that tree. Failed builds preserve the prior AST exactly. Each
+   successful rebuild increments the AST generation and invalidates prior node
+   pointers and indices. The document generation identifies the retained source
+   revision and is independent of the AST generation. Shared-handle rebuild/free
+   and reads require external synchronization. */
+typedef enum {
+    NOC_C_AST_KIND_UNKNOWN = 0,
+    NOC_C_AST_KIND_ABSTRACT_DECLARATOR,
+    NOC_C_AST_KIND_DECLARATOR,
+    NOC_C_AST_KIND_FIELD_DECLARATOR,
+    NOC_C_AST_KIND_TYPE_DECLARATOR,
+    NOC_C_AST_KIND_EXPRESSION,
+    NOC_C_AST_KIND_STATEMENT,
+    NOC_C_AST_KIND_TYPE_SPECIFIER,
+    NOC_C_AST_KIND_ABSTRACT_ARRAY_DECLARATOR,
+    NOC_C_AST_KIND_ABSTRACT_FUNCTION_DECLARATOR,
+    NOC_C_AST_KIND_ABSTRACT_PARENTHESIZED_DECLARATOR,
+    NOC_C_AST_KIND_ABSTRACT_POINTER_DECLARATOR,
+    NOC_C_AST_KIND_ALIGNAS_QUALIFIER,
+    NOC_C_AST_KIND_ALIGNOF_EXPRESSION,
+    NOC_C_AST_KIND_ARGUMENT_LIST,
+    NOC_C_AST_KIND_ARRAY_DECLARATOR,
+    NOC_C_AST_KIND_ASSIGNMENT_EXPRESSION,
+    NOC_C_AST_KIND_ATTRIBUTE,
+    NOC_C_AST_KIND_ATTRIBUTE_DECLARATION,
+    NOC_C_AST_KIND_ATTRIBUTE_SPECIFIER,
+    NOC_C_AST_KIND_ATTRIBUTED_DECLARATOR,
+    NOC_C_AST_KIND_ATTRIBUTED_STATEMENT,
+    NOC_C_AST_KIND_BINARY_EXPRESSION,
+    NOC_C_AST_KIND_BITFIELD_CLAUSE,
+    NOC_C_AST_KIND_BREAK_STATEMENT,
+    NOC_C_AST_KIND_CALL_EXPRESSION,
+    NOC_C_AST_KIND_CASE_STATEMENT,
+    NOC_C_AST_KIND_CAST_EXPRESSION,
+    NOC_C_AST_KIND_CHAR_LITERAL,
+    NOC_C_AST_KIND_COMMA_EXPRESSION,
+    NOC_C_AST_KIND_COMPOUND_LITERAL_EXPRESSION,
+    NOC_C_AST_KIND_COMPOUND_STATEMENT,
+    NOC_C_AST_KIND_CONCATENATED_STRING,
+    NOC_C_AST_KIND_CONDITIONAL_EXPRESSION,
+    NOC_C_AST_KIND_CONTINUE_STATEMENT,
+    NOC_C_AST_KIND_DECLARATION,
+    NOC_C_AST_KIND_DECLARATION_LIST,
+    NOC_C_AST_KIND_DO_STATEMENT,
+    NOC_C_AST_KIND_ELSE_CLAUSE,
+    NOC_C_AST_KIND_ENUM_SPECIFIER,
+    NOC_C_AST_KIND_ENUMERATOR,
+    NOC_C_AST_KIND_ENUMERATOR_LIST,
+    NOC_C_AST_KIND_EXPRESSION_STATEMENT,
+    NOC_C_AST_KIND_EXTENSION_EXPRESSION,
+    NOC_C_AST_KIND_FIELD_DECLARATION,
+    NOC_C_AST_KIND_FIELD_DECLARATION_LIST,
+    NOC_C_AST_KIND_FIELD_DESIGNATOR,
+    NOC_C_AST_KIND_FIELD_EXPRESSION,
+    NOC_C_AST_KIND_FOR_STATEMENT,
+    NOC_C_AST_KIND_FUNCTION_DECLARATOR,
+    NOC_C_AST_KIND_FUNCTION_DEFINITION,
+    NOC_C_AST_KIND_GENERIC_EXPRESSION,
+    NOC_C_AST_KIND_GNU_ASM_CLOBBER_LIST,
+    NOC_C_AST_KIND_GNU_ASM_EXPRESSION,
+    NOC_C_AST_KIND_GNU_ASM_GOTO_LIST,
+    NOC_C_AST_KIND_GNU_ASM_INPUT_OPERAND,
+    NOC_C_AST_KIND_GNU_ASM_INPUT_OPERAND_LIST,
+    NOC_C_AST_KIND_GNU_ASM_OUTPUT_OPERAND,
+    NOC_C_AST_KIND_GNU_ASM_OUTPUT_OPERAND_LIST,
+    NOC_C_AST_KIND_GNU_ASM_QUALIFIER,
+    NOC_C_AST_KIND_GOTO_STATEMENT,
+    NOC_C_AST_KIND_IF_STATEMENT,
+    NOC_C_AST_KIND_INIT_DECLARATOR,
+    NOC_C_AST_KIND_INITIALIZER_LIST,
+    NOC_C_AST_KIND_INITIALIZER_PAIR,
+    NOC_C_AST_KIND_LABELED_STATEMENT,
+    NOC_C_AST_KIND_LINKAGE_SPECIFICATION,
+    NOC_C_AST_KIND_MACRO_TYPE_SPECIFIER,
+    NOC_C_AST_KIND_MS_BASED_MODIFIER,
+    NOC_C_AST_KIND_MS_CALL_MODIFIER,
+    NOC_C_AST_KIND_MS_DECLSPEC_MODIFIER,
+    NOC_C_AST_KIND_MS_POINTER_MODIFIER,
+    NOC_C_AST_KIND_MS_UNALIGNED_PTR_MODIFIER,
+    NOC_C_AST_KIND_NULL,
+    NOC_C_AST_KIND_OFFSETOF_EXPRESSION,
+    NOC_C_AST_KIND_PARAMETER_DECLARATION,
+    NOC_C_AST_KIND_PARAMETER_LIST,
+    NOC_C_AST_KIND_PARENTHESIZED_DECLARATOR,
+    NOC_C_AST_KIND_PARENTHESIZED_EXPRESSION,
+    NOC_C_AST_KIND_POINTER_DECLARATOR,
+    NOC_C_AST_KIND_POINTER_EXPRESSION,
+    NOC_C_AST_KIND_PREPROC_CALL,
+    NOC_C_AST_KIND_PREPROC_DEF,
+    NOC_C_AST_KIND_PREPROC_DEFINED,
+    NOC_C_AST_KIND_PREPROC_ELIF,
+    NOC_C_AST_KIND_PREPROC_ELIFDEF,
+    NOC_C_AST_KIND_PREPROC_ELSE,
+    NOC_C_AST_KIND_PREPROC_FUNCTION_DEF,
+    NOC_C_AST_KIND_PREPROC_IF,
+    NOC_C_AST_KIND_PREPROC_IFDEF,
+    NOC_C_AST_KIND_PREPROC_INCLUDE,
+    NOC_C_AST_KIND_PREPROC_PARAMS,
+    NOC_C_AST_KIND_RETURN_STATEMENT,
+    NOC_C_AST_KIND_SEH_EXCEPT_CLAUSE,
+    NOC_C_AST_KIND_SEH_FINALLY_CLAUSE,
+    NOC_C_AST_KIND_SEH_LEAVE_STATEMENT,
+    NOC_C_AST_KIND_SEH_TRY_STATEMENT,
+    NOC_C_AST_KIND_SIZED_TYPE_SPECIFIER,
+    NOC_C_AST_KIND_SIZEOF_EXPRESSION,
+    NOC_C_AST_KIND_STORAGE_CLASS_SPECIFIER,
+    NOC_C_AST_KIND_STRING_LITERAL,
+    NOC_C_AST_KIND_STRUCT_SPECIFIER,
+    NOC_C_AST_KIND_SUBSCRIPT_DESIGNATOR,
+    NOC_C_AST_KIND_SUBSCRIPT_EXPRESSION,
+    NOC_C_AST_KIND_SUBSCRIPT_RANGE_DESIGNATOR,
+    NOC_C_AST_KIND_SWITCH_STATEMENT,
+    NOC_C_AST_KIND_TRANSLATION_UNIT,
+    NOC_C_AST_KIND_TYPE_DEFINITION,
+    NOC_C_AST_KIND_TYPE_DESCRIPTOR,
+    NOC_C_AST_KIND_TYPE_QUALIFIER,
+    NOC_C_AST_KIND_UNARY_EXPRESSION,
+    NOC_C_AST_KIND_UNION_SPECIFIER,
+    NOC_C_AST_KIND_UPDATE_EXPRESSION,
+    NOC_C_AST_KIND_VARIADIC_PARAMETER,
+    NOC_C_AST_KIND_WHILE_STATEMENT,
+    NOC_C_AST_KIND_CHARACTER,
+    NOC_C_AST_KIND_COMMENT,
+    NOC_C_AST_KIND_ESCAPE_SEQUENCE,
+    NOC_C_AST_KIND_FALSE,
+    NOC_C_AST_KIND_FIELD_IDENTIFIER,
+    NOC_C_AST_KIND_IDENTIFIER,
+    NOC_C_AST_KIND_MS_RESTRICT_MODIFIER,
+    NOC_C_AST_KIND_MS_SIGNED_PTR_MODIFIER,
+    NOC_C_AST_KIND_MS_UNSIGNED_PTR_MODIFIER,
+    NOC_C_AST_KIND_NUMBER_LITERAL,
+    NOC_C_AST_KIND_PREPROC_ARG,
+    NOC_C_AST_KIND_PREPROC_DIRECTIVE,
+    NOC_C_AST_KIND_PRIMITIVE_TYPE,
+    NOC_C_AST_KIND_STATEMENT_IDENTIFIER,
+    NOC_C_AST_KIND_STRING_CONTENT,
+    NOC_C_AST_KIND_SYSTEM_LIB_STRING,
+    NOC_C_AST_KIND_TRUE,
+    NOC_C_AST_KIND_TYPE_IDENTIFIER,
+    NOC_C_AST_KIND_ERROR,
+    NOC_C_AST_KIND_MISSING,
+} Noc_C_Ast_Kind;
+
+typedef enum {
+    NOC_C_AST_FIELD_NONE = 0,
+    NOC_C_AST_FIELD_UNKNOWN,
+    NOC_C_AST_FIELD_ALTERNATIVE,
+    NOC_C_AST_FIELD_ARGUMENT,
+    NOC_C_AST_FIELD_ARGUMENTS,
+    NOC_C_AST_FIELD_ASSEMBLY_CODE,
+    NOC_C_AST_FIELD_BODY,
+    NOC_C_AST_FIELD_CLOBBERS,
+    NOC_C_AST_FIELD_CONDITION,
+    NOC_C_AST_FIELD_CONSEQUENCE,
+    NOC_C_AST_FIELD_CONSTRAINT,
+    NOC_C_AST_FIELD_DECLARATOR,
+    NOC_C_AST_FIELD_DESIGNATOR,
+    NOC_C_AST_FIELD_DIRECTIVE,
+    NOC_C_AST_FIELD_END,
+    NOC_C_AST_FIELD_FIELD,
+    NOC_C_AST_FIELD_FILTER,
+    NOC_C_AST_FIELD_FUNCTION,
+    NOC_C_AST_FIELD_GOTO_LABELS,
+    NOC_C_AST_FIELD_INDEX,
+    NOC_C_AST_FIELD_INITIALIZER,
+    NOC_C_AST_FIELD_INPUT_OPERANDS,
+    NOC_C_AST_FIELD_LABEL,
+    NOC_C_AST_FIELD_LEFT,
+    NOC_C_AST_FIELD_MEMBER,
+    NOC_C_AST_FIELD_NAME,
+    NOC_C_AST_FIELD_OPERAND,
+    NOC_C_AST_FIELD_OPERATOR,
+    NOC_C_AST_FIELD_OUTPUT_OPERANDS,
+    NOC_C_AST_FIELD_PARAMETERS,
+    NOC_C_AST_FIELD_PATH,
+    NOC_C_AST_FIELD_PREFIX,
+    NOC_C_AST_FIELD_REGISTER,
+    NOC_C_AST_FIELD_RIGHT,
+    NOC_C_AST_FIELD_SIZE,
+    NOC_C_AST_FIELD_START,
+    NOC_C_AST_FIELD_SYMBOL,
+    NOC_C_AST_FIELD_TYPE,
+    NOC_C_AST_FIELD_UNDERLYING_TYPE,
+    NOC_C_AST_FIELD_UPDATE,
+    NOC_C_AST_FIELD_VALUE,
+} Noc_C_Ast_Field;
+
+/* Operators are classified by syntactic role. In particular, unary positive
+   and negative plus pointer-expression address/dereference are distinct from
+   arithmetic and bitwise forms. Updates preserve prefix/postfix placement. */
+typedef enum {
+    NOC_C_AST_OPERATOR_NONE = 0,
+    NOC_C_AST_OPERATOR_UNKNOWN,
+    NOC_C_AST_OPERATOR_ADD,
+    NOC_C_AST_OPERATOR_SUBTRACT,
+    NOC_C_AST_OPERATOR_MULTIPLY,
+    NOC_C_AST_OPERATOR_DIVIDE,
+    NOC_C_AST_OPERATOR_REMAINDER,
+    NOC_C_AST_OPERATOR_ASSIGN,
+    NOC_C_AST_OPERATOR_ADD_ASSIGN,
+    NOC_C_AST_OPERATOR_SUBTRACT_ASSIGN,
+    NOC_C_AST_OPERATOR_MULTIPLY_ASSIGN,
+    NOC_C_AST_OPERATOR_DIVIDE_ASSIGN,
+    NOC_C_AST_OPERATOR_REMAINDER_ASSIGN,
+    NOC_C_AST_OPERATOR_SHIFT_LEFT_ASSIGN,
+    NOC_C_AST_OPERATOR_SHIFT_RIGHT_ASSIGN,
+    NOC_C_AST_OPERATOR_BIT_AND_ASSIGN,
+    NOC_C_AST_OPERATOR_BIT_XOR_ASSIGN,
+    NOC_C_AST_OPERATOR_BIT_OR_ASSIGN,
+    NOC_C_AST_OPERATOR_BIT_AND,
+    NOC_C_AST_OPERATOR_BIT_OR,
+    NOC_C_AST_OPERATOR_BIT_XOR,
+    NOC_C_AST_OPERATOR_LOGICAL_AND,
+    NOC_C_AST_OPERATOR_LOGICAL_OR,
+    NOC_C_AST_OPERATOR_EQUAL,
+    NOC_C_AST_OPERATOR_NOT_EQUAL,
+    NOC_C_AST_OPERATOR_LESS,
+    NOC_C_AST_OPERATOR_LESS_EQUAL,
+    NOC_C_AST_OPERATOR_GREATER,
+    NOC_C_AST_OPERATOR_GREATER_EQUAL,
+    NOC_C_AST_OPERATOR_SHIFT_LEFT,
+    NOC_C_AST_OPERATOR_SHIFT_RIGHT,
+    NOC_C_AST_OPERATOR_LOGICAL_NOT,
+    NOC_C_AST_OPERATOR_BIT_NOT,
+    NOC_C_AST_OPERATOR_POSITIVE,
+    NOC_C_AST_OPERATOR_NEGATIVE,
+    NOC_C_AST_OPERATOR_ADDRESS,
+    NOC_C_AST_OPERATOR_DEREFERENCE,
+    NOC_C_AST_OPERATOR_MEMBER,
+    NOC_C_AST_OPERATOR_POINTER_MEMBER,
+    NOC_C_AST_OPERATOR_PREFIX_INCREMENT,
+    NOC_C_AST_OPERATOR_PREFIX_DECREMENT,
+    NOC_C_AST_OPERATOR_POSTFIX_INCREMENT,
+    NOC_C_AST_OPERATOR_POSTFIX_DECREMENT,
+} Noc_C_Ast_Operator;
+
+/* C storage classes and function specifiers share this spelling category.
+   TYPEDEF is reported on TYPE_DEFINITION; extension spellings also have a
+   matching Noc_C_Ast_Extension policy classification. */
+typedef enum {
+    NOC_C_AST_SPECIFIER_NONE = 0,
+    NOC_C_AST_SPECIFIER_UNKNOWN,
+    NOC_C_AST_SPECIFIER_EXTERN,
+    NOC_C_AST_SPECIFIER_STATIC,
+    NOC_C_AST_SPECIFIER_AUTO,
+    NOC_C_AST_SPECIFIER_REGISTER,
+    NOC_C_AST_SPECIFIER_TYPEDEF,
+    NOC_C_AST_SPECIFIER_INLINE,
+    NOC_C_AST_SPECIFIER_GNU_INLINE,
+    NOC_C_AST_SPECIFIER_GNU_INLINE_ALT,
+    NOC_C_AST_SPECIFIER_MS_FORCE_INLINE,
+    NOC_C_AST_SPECIFIER_C11_THREAD_LOCAL,
+    NOC_C_AST_SPECIFIER_C23_THREAD_LOCAL,
+    NOC_C_AST_SPECIFIER_GNU_THREAD_LOCAL,
+} Noc_C_Ast_Specifier;
+
+/* Type/function qualifiers preserve standard and extension spellings rather
+   than treating semantically similar GNU, Clang, C11, and C23 forms as equal. */
+typedef enum {
+    NOC_C_AST_QUALIFIER_NONE = 0,
+    NOC_C_AST_QUALIFIER_UNKNOWN,
+    NOC_C_AST_QUALIFIER_CONST,
+    NOC_C_AST_QUALIFIER_VOLATILE,
+    NOC_C_AST_QUALIFIER_RESTRICT,
+    NOC_C_AST_QUALIFIER_ATOMIC,
+    NOC_C_AST_QUALIFIER_NORETURN,
+    NOC_C_AST_QUALIFIER_C11_ALIGNAS,
+    NOC_C_AST_QUALIFIER_C23_CONSTEXPR,
+    NOC_C_AST_QUALIFIER_C23_NORETURN,
+    NOC_C_AST_QUALIFIER_C23_ALIGNAS,
+    NOC_C_AST_QUALIFIER_GNU_RESTRICT,
+    NOC_C_AST_QUALIFIER_GNU_EXTENSION,
+    NOC_C_AST_QUALIFIER_CLANG_NONNULL,
+} Noc_C_Ast_Qualifier;
+
+typedef enum {
+    NOC_C_AST_PRIMITIVE_NONE = 0,
+    NOC_C_AST_PRIMITIVE_UNKNOWN,
+    NOC_C_AST_PRIMITIVE_VOID,
+    NOC_C_AST_PRIMITIVE_CHAR,
+    NOC_C_AST_PRIMITIVE_INT,
+    NOC_C_AST_PRIMITIVE_FLOAT,
+    NOC_C_AST_PRIMITIVE_DOUBLE,
+    NOC_C_AST_PRIMITIVE_C11_BOOL,
+    NOC_C_AST_PRIMITIVE_C23_BOOL,
+    NOC_C_AST_PRIMITIVE_IMPLEMENTATION_TYPE,
+} Noc_C_Ast_Primitive;
+
+enum {
+    NOC_C_AST_TYPE_SIGNED = 1u << 0,
+    NOC_C_AST_TYPE_UNSIGNED = 1u << 1,
+    NOC_C_AST_TYPE_SHORT = 1u << 2,
+    NOC_C_AST_TYPE_COMPLEX = 1u << 3,
+};
+
+typedef struct {
+    /* This records source spelling only. Conflicting flags and implementation
+       types remain available to the later semantic/type-validation phase. */
+    Noc_C_Ast_Primitive primitive;
+    unsigned int flags;
+    size_t long_count;
+} Noc_C_Ast_Type_Spelling;
+
+typedef enum {
+    NOC_C_AST_ARRAY_SIZE_NONE = 0,
+    NOC_C_AST_ARRAY_SIZE_UNKNOWN,
+    NOC_C_AST_ARRAY_SIZE_EXPRESSION,
+    NOC_C_AST_ARRAY_SIZE_STAR,
+} Noc_C_Ast_Array_Size;
+
+typedef struct {
+    /* C99 parameter-array `static` promises the caller supplies at least the
+       written bound; it is not a storage-class specifier in this context. */
+    bool has_static_minimum;
+    Noc_C_Ast_Array_Size size;
+} Noc_C_Ast_Array_Detail;
+
+typedef enum {
+    NOC_C_AST_EXTENSION_NONE = 0,
+    NOC_C_AST_EXTENSION_UNKNOWN,
+    NOC_C_AST_EXTENSION_GNU_ATTRIBUTE,
+    NOC_C_AST_EXTENSION_C23_ATTRIBUTE,
+    NOC_C_AST_EXTENSION_GNU_EXPRESSION,
+    NOC_C_AST_EXTENSION_GNU_ASM,
+    NOC_C_AST_EXTENSION_GNU_ASM_VOLATILE,
+    NOC_C_AST_EXTENSION_GNU_ASM_VOLATILE_ALT,
+    NOC_C_AST_EXTENSION_GNU_ASM_INLINE,
+    NOC_C_AST_EXTENSION_GNU_ASM_GOTO,
+    NOC_C_AST_EXTENSION_GNU_SUBSCRIPT_RANGE,
+    NOC_C_AST_EXTENSION_GNU_ALIGNOF,
+    NOC_C_AST_EXTENSION_GNU_ALIGNOF_ALT,
+    NOC_C_AST_EXTENSION_C23_ALIGNOF,
+    NOC_C_AST_EXTENSION_GNU_RESTRICT,
+    NOC_C_AST_EXTENSION_GNU_EXTENSION_QUALIFIER,
+    NOC_C_AST_EXTENSION_GNU_INLINE,
+    NOC_C_AST_EXTENSION_GNU_INLINE_ALT,
+    NOC_C_AST_EXTENSION_GNU_THREAD_LOCAL,
+    NOC_C_AST_EXTENSION_MS_DECLSPEC,
+    NOC_C_AST_EXTENSION_MS_BASED,
+    NOC_C_AST_EXTENSION_MS_CDECL,
+    NOC_C_AST_EXTENSION_MS_CLRCALL,
+    NOC_C_AST_EXTENSION_MS_STDCALL,
+    NOC_C_AST_EXTENSION_MS_FASTCALL,
+    NOC_C_AST_EXTENSION_MS_THISCALL,
+    NOC_C_AST_EXTENSION_MS_VECTORCALL,
+    NOC_C_AST_EXTENSION_MS_FORCE_INLINE,
+    NOC_C_AST_EXTENSION_MS_RESTRICT,
+    NOC_C_AST_EXTENSION_MS_UNSIGNED_POINTER,
+    NOC_C_AST_EXTENSION_MS_SIGNED_POINTER,
+    NOC_C_AST_EXTENSION_MS_UNALIGNED_POINTER,
+    NOC_C_AST_EXTENSION_MS_UNALIGNED_POINTER_ALT,
+    NOC_C_AST_EXTENSION_MS_SEH_TRY,
+    NOC_C_AST_EXTENSION_MS_SEH_EXCEPT,
+    NOC_C_AST_EXTENSION_MS_SEH_FINALLY,
+    NOC_C_AST_EXTENSION_MS_SEH_LEAVE,
+    NOC_C_AST_EXTENSION_CXX_LINKAGE,
+    NOC_C_AST_EXTENSION_C23_THREAD_LOCAL,
+    NOC_C_AST_EXTENSION_C23_CONSTEXPR,
+    NOC_C_AST_EXTENSION_C23_NORETURN,
+    NOC_C_AST_EXTENSION_C23_ALIGNAS,
+    NOC_C_AST_EXTENSION_C23_BOOL,
+    NOC_C_AST_EXTENSION_C23_TRUE,
+    NOC_C_AST_EXTENSION_C23_FALSE,
+    NOC_C_AST_EXTENSION_C23_NULL,
+    NOC_C_AST_EXTENSION_CLANG_NONNULL,
+    NOC_C_AST_EXTENSION_MACRO_TYPE,
+} Noc_C_Ast_Extension;
+
+typedef enum {
+    NOC_C_AST_EXPECTED_NONE = 0,
+    NOC_C_AST_EXPECTED_UNKNOWN,
+    NOC_C_AST_EXPECTED_PUNCTUATOR,
+    NOC_C_AST_EXPECTED_KEYWORD,
+    NOC_C_AST_EXPECTED_IDENTIFIER,
+    NOC_C_AST_EXPECTED_TYPE,
+    NOC_C_AST_EXPECTED_DECLARATION,
+    NOC_C_AST_EXPECTED_STATEMENT,
+    NOC_C_AST_EXPECTED_EXPRESSION,
+} Noc_C_Ast_Expected_Kind;
+
+typedef struct {
+    Noc_C_Ast_Expected_Kind kind;
+    /* Borrowed from the AST. Punctuation/keywords are exact expected spelling;
+       category-only recovery may have an empty spelling. */
+    Noc_Slice spelling;
+} Noc_C_Ast_Expected;
+
+enum {
+    NOC_C_AST_NODE_ERROR = 1u << 0,
+    NOC_C_AST_NODE_MISSING = 1u << 1,
+    NOC_C_AST_NODE_HAS_ERROR = 1u << 2,
+    NOC_C_AST_NODE_UNKNOWN_KIND = 1u << 3,
+    NOC_C_AST_NODE_UNKNOWN_FIELD = 1u << 4,
+    NOC_C_AST_NODE_UNKNOWN_DETAIL = 1u << 5,
+};
+
+enum {
+    NOC_C_AST_ISSUE_PARSE_ERROR = 1u << 0,
+    NOC_C_AST_ISSUE_MISSING = 1u << 1,
+    NOC_C_AST_ISSUE_SKIPPED_SOURCE = 1u << 2,
+    NOC_C_AST_ISSUE_UNKNOWN_KIND = 1u << 3,
+    NOC_C_AST_ISSUE_UNKNOWN_FIELD = 1u << 4,
+    NOC_C_AST_ISSUE_UNKNOWN_DETAIL = 1u << 5,
+};
+
+typedef struct {
+    Noc_C_Ast_Kind kind;
+    Noc_C_Ast_Field field;
+    Noc_Byte_Range bytes;
+    size_t parent;
+    size_t first_child;
+    size_t last_child;
+    size_t next_sibling;
+    size_t child_count;
+    size_t generation;
+    unsigned int flags;
+} Noc_C_Ast_Node;
+
+typedef struct Noc_C_Ast_Impl Noc_C_Ast_Impl;
+
+typedef struct {
+    Noc_C_Ast_Impl *impl;
+    size_t generation;
+} Noc_C_Ast;
+
+typedef bool (*Noc_C_Ast_Cancel_Fn)(void *user_data);
+
+typedef struct {
+    /* Maximum number of selected normalized nodes, including recovery nodes. */
+    size_t max_nodes;
+    /* Polled before work and periodically while flattening. */
+    Noc_C_Ast_Cancel_Fn should_cancel;
+    void *cancel_user_data;
+} Noc_C_Ast_Options;
+
+typedef enum {
+    NOC_C_AST_OK = 0,
+    NOC_C_AST_INVALID_ARGUMENT,
+    NOC_C_AST_CANCELLED,
+    NOC_C_AST_LIMIT_EXCEEDED,
+    NOC_C_AST_GENERATION_EXHAUSTED,
+    NOC_C_AST_OUT_OF_MEMORY,
+} Noc_C_Ast_Status;
+
+NOCDEF Noc_C_Ast_Options noc_c_ast_default_options(void);
+NOCDEF const char *noc_c_ast_status_name(Noc_C_Ast_Status status);
+/* Build is transactional: limit, cancellation, allocation, and invalid-input
+   failures leave an existing valid output AST unchanged. */
+NOCDEF Noc_C_Ast_Status noc_c_ast_build(const Noc_C_Parse_Tree *tree,
+                                         Noc_C_Ast_Options options,
+                                         Noc_C_Ast *output);
+NOCDEF void noc_c_ast_free(Noc_C_Ast *ast);
+NOCDEF bool noc_c_ast_is_valid(const Noc_C_Ast *ast);
+/* Syntax completeness excludes parser recovery and unknown adapter mappings.
+   It does not imply preprocessing, feature, type, or semantic validity. */
+NOCDEF bool noc_c_ast_is_syntax_complete(const Noc_C_Ast *ast);
+NOCDEF unsigned int noc_c_ast_issues(const Noc_C_Ast *ast);
+NOCDEF size_t noc_c_ast_generation(const Noc_C_Ast *ast);
+NOCDEF size_t noc_c_ast_document_generation(const Noc_C_Ast *ast);
+NOCDEF const Noc_Document_Snapshot *noc_c_ast_snapshot(const Noc_C_Ast *ast);
+NOCDEF size_t noc_c_ast_node_count(const Noc_C_Ast *ast);
+NOCDEF size_t noc_c_ast_root(const Noc_C_Ast *ast);
+/* Node pointers and expected spellings remain valid until successful rebuild
+   or free. Invalid/inapplicable typed queries return their NONE value. */
+NOCDEF const Noc_C_Ast_Node *noc_c_ast_node_at(const Noc_C_Ast *ast,
+                                               size_t node_index);
+NOCDEF Noc_Slice noc_c_ast_node_source(const Noc_C_Ast *ast,
+                                       size_t node_index);
+NOCDEF Noc_Location noc_c_ast_node_location(const Noc_C_Ast *ast,
+                                            size_t node_index);
+NOCDEF Noc_C_Ast_Operator noc_c_ast_node_operator(const Noc_C_Ast *ast,
+                                                  size_t node_index);
+NOCDEF Noc_C_Ast_Specifier noc_c_ast_node_specifier(const Noc_C_Ast *ast,
+                                                    size_t node_index);
+NOCDEF Noc_C_Ast_Qualifier noc_c_ast_node_qualifier(const Noc_C_Ast *ast,
+                                                    size_t node_index);
+NOCDEF bool noc_c_ast_node_type_spelling(const Noc_C_Ast *ast,
+                                         size_t node_index,
+                                         Noc_C_Ast_Type_Spelling *output);
+NOCDEF bool noc_c_ast_node_array_detail(const Noc_C_Ast *ast,
+                                        size_t node_index,
+                                        Noc_C_Ast_Array_Detail *output);
+NOCDEF Noc_C_Ast_Extension noc_c_ast_node_extension(const Noc_C_Ast *ast,
+                                                    size_t node_index);
+NOCDEF Noc_C_Ast_Expected noc_c_ast_node_expected(const Noc_C_Ast *ast,
+                                                  size_t node_index);
+/* Stable diagnostic/serialization names; unknown enum values return
+   "unknown". These names are Noc API strings, not borrowed parser metadata. */
+NOCDEF const char *noc_c_ast_kind_name(Noc_C_Ast_Kind kind);
+NOCDEF const char *noc_c_ast_field_name(Noc_C_Ast_Field field);
+NOCDEF const char *noc_c_ast_operator_name(Noc_C_Ast_Operator operator_kind);
+NOCDEF const char *noc_c_ast_specifier_name(Noc_C_Ast_Specifier specifier);
+NOCDEF const char *noc_c_ast_qualifier_name(Noc_C_Ast_Qualifier qualifier);
+NOCDEF const char *noc_c_ast_primitive_name(Noc_C_Ast_Primitive primitive);
+NOCDEF const char *noc_c_ast_array_size_name(Noc_C_Ast_Array_Size size);
+NOCDEF const char *noc_c_ast_extension_name(Noc_C_Ast_Extension extension);
+NOCDEF const char *noc_c_ast_expected_kind_name(Noc_C_Ast_Expected_Kind kind);
 
 /* Policy-aware preprocessing frontend. Building a unit recognizes source
    directives regardless of whether policy permits them and also publishes a
