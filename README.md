@@ -51,7 +51,7 @@ The suite names are `header-c`, `header-cpp`, `public-header-c`,
 `release-header-runtime`,
 `preprocessor`, `lexing`, `syntax`, `c-analysis`, `c-parse-tree`,
 `c-parse-recovery`, `c-parse-lifecycle`, `c-parse-corpus`,
-`c-parse-malformed-corpus`, `c-parse-cpp-runtime`,
+`c-parse-malformed-corpus`, `c-parse-completion`, `c-parse-cpp-runtime`,
 `c-ast`, `c-ast-details`, `c-ast-c11`, `c-ast-c11-constructs`,
 `c-ast-declarators`, `c-ast-completion`, `c-ast-queries`, `c-ast-recovery`,
 `tree-sitter-coexistence`, `rewriter`, and `artifacts`, for example:
@@ -266,6 +266,20 @@ that position. `noc_c_ast_completion_next_expected_node` enumerates those
 expected nodes in one allocation-free linear scan. This is parser recovery
 context for IDE clients, not an exhaustive grammar-lookahead or semantic symbol
 completion result; a missing hint must never exclude another candidate.
+
+`noc_c_parse_grammar_candidates_build` complements that normalized AST context
+with an owning, bounded set of retained-parser-state hints. It works at every
+physical insertion offset, including BOF and EOF. Token interiors use whole
+grammar-leaf replacement semantics; trivia uses the next physical leaf; ERROR
+recovery uses its first leaf; and a MISSING symbol uses the previous non-extra
+leaf. These rules are deterministic heuristics because a materialized
+Tree-sitter tree does not retain one authoritative LR stack at every byte.
+Results are sorted and deduplicated by stable Noc categories and copied
+spellings, survive parse-tree rebuild/free, merge materialized MISSING origins,
+mark non-C11 exact spellings, and carry document/tree generations. They are not
+semantic completion and do not apply typedef, macro, target, or feature-policy
+filtering; callers combine them with AST context and later semantic/index data.
+Run the focused coverage with `./nob test c-parse-completion`.
 
 ## Preprocessing tokens, directives, and macro policy
 

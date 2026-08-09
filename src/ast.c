@@ -563,54 +563,6 @@ static void noc__c_ast_apply_spelling_extensions(Noc__C_Ast_Detail *detail)
     }
 }
 
-static Noc_C_Ast_Expected_Kind noc__c_ast_expected_kind(
-    const Noc_C_Parse_Node *node)
-{
-    Noc_Slice spelling = node->kind;
-    if (spelling.count == 0) return NOC_C_AST_EXPECTED_UNKNOWN;
-    if ((node->flags & NOC_C_PARSE_NODE_NAMED) != 0) {
-        if (noc__c_ast_slice_equal(spelling, "identifier") ||
-            noc__c_ast_slice_equal(spelling, "field_identifier") ||
-            noc__c_ast_slice_equal(spelling, "statement_identifier") ||
-            noc__c_ast_slice_equal(spelling, "_declarator") ||
-            noc__c_ast_slice_equal(spelling, "_field_declarator") ||
-            noc__c_ast_slice_equal(spelling, "_type_declarator") ||
-            noc__c_ast_slice_equal(spelling, "_abstract_declarator")) {
-            return NOC_C_AST_EXPECTED_IDENTIFIER;
-        }
-        if (noc__c_ast_slice_equal(spelling, "type_identifier") ||
-            noc__c_ast_slice_equal(spelling, "type_specifier") ||
-            noc__c_ast_slice_equal(spelling, "primitive_type") ||
-            noc__c_ast_slice_equal(spelling, "sized_type_specifier") ||
-            noc__c_ast_slice_equal(spelling, "type_descriptor")) {
-            return NOC_C_AST_EXPECTED_TYPE;
-        }
-        if (noc__c_ast_slice_equal(spelling, "declaration") ||
-            noc__c_ast_slice_equal(spelling, "field_declaration") ||
-            noc__c_ast_slice_equal(spelling, "parameter_declaration")) {
-            return NOC_C_AST_EXPECTED_DECLARATION;
-        }
-        if (noc__c_ast_slice_equal(spelling, "statement")) {
-            return NOC_C_AST_EXPECTED_STATEMENT;
-        }
-        if (noc__c_ast_slice_equal(spelling, "expression") ||
-            noc__c_ast_slice_equal(spelling, "char_literal") ||
-            noc__c_ast_slice_equal(spelling, "concatenated_string") ||
-            noc__c_ast_slice_equal(spelling, "number_literal") ||
-            noc__c_ast_slice_equal(spelling, "string_literal")) {
-            return NOC_C_AST_EXPECTED_EXPRESSION;
-        }
-        return NOC_C_AST_EXPECTED_UNKNOWN;
-    }
-    if (ispunct((unsigned char)spelling.data[0])) {
-        return NOC_C_AST_EXPECTED_PUNCTUATOR;
-    }
-    if (isalpha((unsigned char)spelling.data[0]) || spelling.data[0] == '_') {
-        return NOC_C_AST_EXPECTED_KEYWORD;
-    }
-    return NOC_C_AST_EXPECTED_UNKNOWN;
-}
-
 static bool noc__c_ast_is_array_kind(Noc_C_Ast_Kind kind)
 {
     return kind == NOC_C_AST_KIND_ARRAY_DECLARATOR ||
@@ -946,7 +898,9 @@ NOCDEF Noc_C_Ast_Status noc_c_ast_build(const Noc_C_Parse_Tree *tree,
             noc__c_ast_apply_spelling_extensions(detail);
 
             if ((cst->flags & NOC_C_PARSE_NODE_MISSING) != 0) {
-                detail->expected_kind = noc__c_ast_expected_kind(cst);
+                detail->expected_kind = noc__c_grammar_expected_kind(
+                    cst->kind,
+                    (cst->flags & NOC_C_PARSE_NODE_NAMED) != 0);
                 if ((cst->flags & NOC_C_PARSE_NODE_NAMED) == 0) {
                     detail->expected_spelling =
                         (char *)malloc(cst->kind.count + 1);

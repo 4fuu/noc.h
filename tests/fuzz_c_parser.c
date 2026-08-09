@@ -126,6 +126,125 @@ static uint64_t parse_tree_hash(const Noc_C_Parse_Tree *tree)
     return hash;
 }
 
+static int grammar_candidate_compare(const Noc_C_Grammar_Candidate *left,
+                                     const Noc_C_Grammar_Candidate *right)
+{
+    size_t common;
+    int compared;
+    if (left->kind != right->kind) return left->kind < right->kind ? -1 : 1;
+    common = left->spelling.count < right->spelling.count
+                 ? left->spelling.count
+                 : right->spelling.count;
+    compared = common == 0
+                   ? 0
+                   : memcmp(left->spelling.data,
+                            right->spelling.data,
+                            common);
+    if (compared != 0) return compared;
+    if (left->spelling.count == right->spelling.count) return 0;
+    return left->spelling.count < right->spelling.count ? -1 : 1;
+}
+
+static uint64_t grammar_candidates_hash(const Noc_C_Parse_Tree *tree,
+                                        size_t source_size)
+{
+    const Noc_Document_Snapshot *snapshot = noc_c_parse_tree_snapshot(tree);
+    Noc_C_Grammar_Candidate_Options options =
+        noc_c_grammar_candidate_default_options();
+    size_t offsets[] = {0, source_size / 2, source_size};
+    uint64_t hash = UINT64_C(1469598103934665603);
+    size_t offset_index;
+    options.max_candidates = 64;
+    options.max_nodes_examined = C_PARSER_FUZZ_MAX_NODES * 2 + 1;
+    for (offset_index = 0;
+         offset_index < sizeof(offsets) / sizeof(offsets[0]);
+         ++offset_index) {
+        Noc_C_Grammar_Candidates candidates = {0};
+        size_t candidate_index;
+        bool saw_missing = false;
+        FUZZ_CHECK(noc_c_parse_grammar_candidates_build(
+                       tree,
+                       offsets[offset_index],
+                       options,
+                       &candidates) == NOC_C_PARSE_OK);
+        FUZZ_CHECK(noc_c_grammar_candidates_is_valid(&candidates));
+        FUZZ_CHECK(candidates.count <= options.max_candidates);
+        FUZZ_CHECK(candidates.offset == offsets[offset_index]);
+        FUZZ_CHECK(candidates.file_id ==
+                   noc_document_snapshot_file_id(snapshot));
+        FUZZ_CHECK(candidates.document_generation ==
+                   noc_document_snapshot_generation(snapshot));
+        FUZZ_CHECK(candidates.parse_tree_generation ==
+                   noc_c_parse_tree_generation(tree));
+        FUZZ_CHECK(candidates.replacement.begin <= candidates.replacement.end);
+        FUZZ_CHECK(candidates.replacement.end <= source_size);
+        if ((candidates.flags &
+             NOC_C_GRAMMAR_CANDIDATES_TOKEN_REPLACEMENT) != 0) {
+            FUZZ_CHECK(candidates.replacement.begin <
+                       offsets[offset_index]);
+            FUZZ_CHECK(offsets[offset_index] < candidates.replacement.end);
+        } else {
+            FUZZ_CHECK(candidates.replacement.begin == offsets[offset_index]);
+            FUZZ_CHECK(candidates.replacement.end == offsets[offset_index]);
+        }
+        hash = hash_size(hash, candidates.offset);
+        hash = hash_size(hash, candidates.replacement.begin);
+        hash = hash_size(hash, candidates.replacement.end);
+        hash = hash_size(hash, candidates.flags);
+        hash = hash_size(hash, candidates.count);
+        for (candidate_index = 0;
+             candidate_index < candidates.count;
+             ++candidate_index) {
+            const Noc_C_Grammar_Candidate *candidate =
+                noc_c_grammar_candidate_at(&candidates, candidate_index);
+            FUZZ_CHECK(candidate != NULL);
+            FUZZ_CHECK(candidate->kind > NOC_C_AST_EXPECTED_UNKNOWN);
+            FUZZ_CHECK(candidate->kind <= NOC_C_AST_EXPECTED_EXPRESSION);
+            FUZZ_CHECK((candidate->flags &
+                        ~(NOC_C_GRAMMAR_CANDIDATE_LOOKAHEAD |
+                          NOC_C_GRAMMAR_CANDIDATE_MISSING |
+                          NOC_C_GRAMMAR_CANDIDATE_NON_C11)) == 0);
+            FUZZ_CHECK((candidate->flags &
+                        (NOC_C_GRAMMAR_CANDIDATE_LOOKAHEAD |
+                         NOC_C_GRAMMAR_CANDIDATE_MISSING)) != 0);
+            FUZZ_CHECK(candidate->spelling.count == 0 ||
+                       candidate->spelling.data != NULL);
+            if (candidate_index != 0) {
+                FUZZ_CHECK(grammar_candidate_compare(
+                               &candidates.items[candidate_index - 1],
+                               candidate) < 0);
+            }
+            if ((candidate->flags & NOC_C_GRAMMAR_CANDIDATE_MISSING) != 0) {
+                saw_missing = true;
+            }
+            hash = hash_size(hash, candidate->kind);
+            hash = hash_size(hash, candidate->flags);
+            hash = hash_slice(hash, candidate->spelling);
+        }
+        if (saw_missing) {
+            bool found = false;
+            size_t node_index;
+            for (node_index = 0;
+                 node_index < noc_c_parse_tree_node_count(tree);
+                 ++node_index) {
+                const Noc_C_Parse_Node *node =
+                    noc_c_parse_tree_node_at(tree, node_index);
+                if ((node->flags & NOC_C_PARSE_NODE_MISSING) != 0 &&
+                    node->bytes.begin == offsets[offset_index] &&
+                    node->bytes.end == offsets[offset_index]) {
+                    found = true;
+                    break;
+                }
+            }
+            FUZZ_CHECK(found);
+        }
+        FUZZ_CHECK(noc_c_grammar_candidate_at(&candidates,
+                                              candidates.count) == NULL);
+        noc_c_grammar_candidates_free(&candidates);
+    }
+    return hash;
+}
+
 static void check_ast_topology(const Noc_C_Ast *ast,
                                const uint8_t *data,
                                size_t size)
@@ -324,6 +443,7 @@ static void fuzz_c_parser(const uint8_t *data, size_t size)
     Noc_C_Parse_Options parse_options = noc_c_parse_default_options();
     Noc_C_Parse_Status parse_status;
     uint64_t first_tree_hash;
+    uint64_t first_candidates_hash;
     size_t first_tree_generation;
 
     noc_workspace_init(&workspace);
@@ -344,6 +464,7 @@ static void fuzz_c_parser(const uint8_t *data, size_t size)
         Noc_C_Ast_Status ast_status;
         check_parse_topology(&tree, data, size);
         first_tree_hash = parse_tree_hash(&tree);
+        first_candidates_hash = grammar_candidates_hash(&tree, size);
         first_tree_generation = noc_c_parse_tree_generation(&tree);
 
         ast_options.max_nodes = C_PARSER_FUZZ_MAX_NODES;
@@ -364,6 +485,8 @@ static void fuzz_c_parser(const uint8_t *data, size_t size)
                        first_tree_generation + 1);
             check_parse_topology(&tree, data, size);
             FUZZ_CHECK(parse_tree_hash(&tree) == first_tree_hash);
+            FUZZ_CHECK(grammar_candidates_hash(&tree, size) ==
+                       first_candidates_hash);
             FUZZ_CHECK(noc_c_ast_build(&tree, ast_options, &ast) ==
                        NOC_C_AST_OK);
             FUZZ_CHECK(noc_c_ast_generation(&ast) == first_ast_generation + 1);

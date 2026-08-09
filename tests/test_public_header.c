@@ -22,12 +22,16 @@ int main(void)
     Noc_Include_Expansion expansion;
     Noc_Include_Graph graph;
     Noc_Include_Resolver resolver;
+    Noc_C_Grammar_Candidates grammar_candidates;
+    Noc_C_Grammar_Candidate_Options grammar_options;
     Noc_C_Ast ast;
     Noc_C_Ast_Options ast_options;
     memset(&pragma_once, 0, sizeof(pragma_once));
     memset(&guard, 0, sizeof(guard));
     memset(&expansion, 0, sizeof(expansion));
     memset(&graph, 0, sizeof(graph));
+    memset(&grammar_candidates, 0, sizeof(grammar_candidates));
+    memset(&grammar_options, 0, sizeof(grammar_options));
     memset(&ast, 0, sizeof(ast));
     memset(&ast_options, 0, sizeof(ast_options));
     resolver.resolve = public_header_resolver;
@@ -38,13 +42,15 @@ int main(void)
                    guard.generation == 0 &&
                    expansion.generation == 0 &&
                    graph.generation == 0 &&
+                   grammar_candidates.generation == 0 &&
+                   grammar_options.max_candidates == 0 &&
                    ast.generation == 0 &&
                    ast_options.max_nodes == 0 &&
                    resolver.resolve != NULL &&
                    NOC_INCLUDE_FORM_QUOTED != NOC_INCLUDE_FORM_ANGLED &&
                    NOC_VERSION_MAJOR == 0 &&
                    NOC_VERSION_MINOR == 42 &&
-                   NOC_VERSION_PATCH == 5
+                   NOC_VERSION_PATCH == 6
                ? 0
                : 1;
 }

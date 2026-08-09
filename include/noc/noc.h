@@ -32,8 +32,8 @@
 
 #define NOC_VERSION_MAJOR 0
 #define NOC_VERSION_MINOR 42
-#define NOC_VERSION_PATCH 5
-#define NOC_VERSION "0.42.5"
+#define NOC_VERSION_PATCH 6
+#define NOC_VERSION "0.42.6"
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -372,6 +372,21 @@ typedef struct {
     Noc_Slice replacement;
 } Noc_Text_Edit;
 
+/* Stable syntax-expectation vocabulary shared by parser-state candidate hints
+   and normalized-AST MISSING nodes. Exact punctuation and keywords carry a
+   spelling; structural categories such as TYPE or EXPRESSION do not. */
+typedef enum {
+    NOC_C_AST_EXPECTED_NONE = 0,
+    NOC_C_AST_EXPECTED_UNKNOWN,
+    NOC_C_AST_EXPECTED_PUNCTUATOR,
+    NOC_C_AST_EXPECTED_KEYWORD,
+    NOC_C_AST_EXPECTED_IDENTIFIER,
+    NOC_C_AST_EXPECTED_TYPE,
+    NOC_C_AST_EXPECTED_DECLARATION,
+    NOC_C_AST_EXPECTED_STATEMENT,
+    NOC_C_AST_EXPECTED_EXPRESSION,
+} Noc_C_Ast_Expected_Kind;
+
 /* Recoverable physical C syntax for compiler and IDE clients. This parser
    recognizes the embedded tree-sitter-c grammar over one immutable document
    snapshot. It does not preprocess macros, select conditional branches, or
@@ -431,6 +446,76 @@ typedef struct {
     Noc_C_Parse_Cancel_Fn should_cancel;
     void *cancel_user_data;
 } Noc_C_Parse_Options;
+
+enum {
+    /* The candidate was normalized from the retained grammar parse state. */
+    NOC_C_GRAMMAR_CANDIDATE_LOOKAHEAD = 1u << 0,
+    /* A parser-materialized MISSING node at the query offset also requested it. */
+    NOC_C_GRAMMAR_CANDIDATE_MISSING = 1u << 1,
+    /* Exact spelling is accepted by the permissive embedded grammar but is
+       not an ISO C11 spelling. Feature policy still decides permission. */
+    NOC_C_GRAMMAR_CANDIDATE_NON_C11 = 1u << 2,
+};
+
+typedef struct {
+    Noc_C_Ast_Expected_Kind kind;
+    /* Owned by the containing Noc_C_Grammar_Candidates result. Exact keywords
+       and punctuators are nonempty; structural categories are empty. */
+    Noc_Slice spelling;
+    unsigned int flags;
+} Noc_C_Grammar_Candidate;
+
+enum {
+    /* A usable retained parser state contributed lookahead candidates. */
+    NOC_C_GRAMMAR_CANDIDATES_STATE_AVAILABLE = 1u << 0,
+    /* ERROR/MISSING recovery or a fallback state selected the anchor. */
+    NOC_C_GRAMMAR_CANDIDATES_RECOVERY_HEURISTIC = 1u << 1,
+    /* OFFSET is inside one physical grammar leaf. REPLACEMENT is that whole
+       leaf; candidates describe replacing it, not lexing its suffix. */
+    NOC_C_GRAMMAR_CANDIDATES_TOKEN_REPLACEMENT = 1u << 2,
+    /* More distinct normalized candidates existed than max_candidates. */
+    NOC_C_GRAMMAR_CANDIDATES_TRUNCATED = 1u << 3,
+};
+
+typedef struct {
+    /* All three limits must be nonzero. max_candidates bounds published
+       candidates after stable sorting and deduplication. */
+    size_t max_candidates;
+    /* Total flat CST node visits, including a possible ERROR-subtree pass. */
+    size_t max_nodes_examined;
+    /* Maximum raw symbols consumed from one grammar lookahead iterator. */
+    size_t max_symbols_examined;
+    Noc_C_Parse_Cancel_Fn should_cancel;
+    void *cancel_user_data;
+} Noc_C_Grammar_Candidate_Options;
+
+/* Owning retained-CST grammar hints for one physical cursor offset. Initialize
+   with {0}, do not shallow-copy, and free with
+   noc_c_grammar_candidates_free(). Candidate storage remains valid after the
+   source tree is rebuilt or freed; file/document/tree generations identify the
+   immutable revision from which it was derived. REPLACEMENT is an empty range
+   at ordinary token boundaries and in trivia, or a whole grammar leaf when
+   TOKEN_REPLACEMENT is set.
+
+   Candidate membership is grammar-derived and non-exhaustive. It does not
+   account for typedef symbols, macro state, target/feature policy, external
+   scanner constraints, or semantic visibility. Parser upgrades may change
+   membership, while Noc's kinds, flags, sorting, and deduplication remain the
+   stable contract. */
+typedef struct {
+    Noc_C_Grammar_Candidate *items;
+    size_t count;
+    size_t capacity;
+    char *spelling_storage;
+    size_t spelling_storage_count;
+    size_t offset;
+    Noc_Byte_Range replacement;
+    Noc_File_Id file_id;
+    size_t document_generation;
+    size_t parse_tree_generation;
+    size_t generation;
+    unsigned int flags;
+} Noc_C_Grammar_Candidates;
 
 enum {
     NOC_C_PARSE_NODE_NAMED = 1u << 0,
@@ -567,6 +652,25 @@ NOCDEF Noc_Slice noc_c_parse_node_source(const Noc_C_Parse_Tree *tree,
                                          size_t node_index);
 NOCDEF Noc_Location noc_c_parse_node_location(const Noc_C_Parse_Tree *tree,
                                               size_t node_index);
+NOCDEF Noc_C_Grammar_Candidate_Options
+noc_c_grammar_candidate_default_options(void);
+NOCDEF void noc_c_grammar_candidates_free(
+    Noc_C_Grammar_Candidates *candidates);
+NOCDEF bool noc_c_grammar_candidates_is_valid(
+    const Noc_C_Grammar_Candidates *candidates);
+/* Build is transactional. OFFSET accepts BOF through EOF. max_candidates is a
+   successful truncation bound; exhausting node/symbol work, cancellation,
+   invalid input, allocation failure, or generation exhaustion preserves the
+   previous output. The stable result order is kind then spelling bytes, and
+   duplicate lookahead/MISSING candidates are merged by OR-ing origin flags. */
+NOCDEF Noc_C_Parse_Status noc_c_parse_grammar_candidates_build(
+    const Noc_C_Parse_Tree *tree,
+    size_t offset,
+    Noc_C_Grammar_Candidate_Options options,
+    Noc_C_Grammar_Candidates *output);
+NOCDEF const Noc_C_Grammar_Candidate *noc_c_grammar_candidate_at(
+    const Noc_C_Grammar_Candidates *candidates,
+    size_t index);
 
 /* Noc-owned normalized physical C AST. This is a stable compiler-facing
    classification layer, not a public view of the embedded parser: nodes carry
@@ -962,18 +1066,6 @@ typedef enum {
     /* The C23 `static_assert` alias; ISO C11 `_Static_assert` reports NONE. */
     NOC_C_AST_EXTENSION_C23_STATIC_ASSERT,
 } Noc_C_Ast_Extension;
-
-typedef enum {
-    NOC_C_AST_EXPECTED_NONE = 0,
-    NOC_C_AST_EXPECTED_UNKNOWN,
-    NOC_C_AST_EXPECTED_PUNCTUATOR,
-    NOC_C_AST_EXPECTED_KEYWORD,
-    NOC_C_AST_EXPECTED_IDENTIFIER,
-    NOC_C_AST_EXPECTED_TYPE,
-    NOC_C_AST_EXPECTED_DECLARATION,
-    NOC_C_AST_EXPECTED_STATEMENT,
-    NOC_C_AST_EXPECTED_EXPRESSION,
-} Noc_C_Ast_Expected_Kind;
 
 typedef struct {
     Noc_C_Ast_Expected_Kind kind;

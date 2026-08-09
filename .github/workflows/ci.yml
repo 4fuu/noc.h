@@ -135,10 +135,10 @@ jobs:
                        include_graph include_graph_limits include_graph_queries \
                        preprocessor lexing syntax c_analysis c_parse_tree \
                        c_parse_recovery c_parse_lifecycle c_parse_corpus \
-                       c_parse_malformed_corpus \
+                       c_parse_malformed_corpus c_parse_completion \
                        c_ast c_ast_details \
                        c_ast_c11 c_ast_c11_constructs c_ast_declarators \
-                       c_ast_recovery \
+                       c_ast_completion c_ast_queries c_ast_recovery \
                        tree_sitter_coexistence \
                        rewriter artifacts; do
             cc $common_flags -Ibuild/generated -Iinclude -I. \

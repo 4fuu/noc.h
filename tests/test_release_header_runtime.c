@@ -139,6 +139,7 @@ int main(void)
     Noc_Include_Expansion expansion = {0};
     Noc_Include_Graph graph = {0};
     Noc_C_Parse_Tree parse_tree = {0};
+    Noc_C_Grammar_Candidates grammar_candidates = {0};
     Noc_C_Ast ast = {0};
     Noc_C_Ast_Completion_Context release_completion = {0};
     size_t release_atomic;
@@ -256,6 +257,17 @@ int main(void)
     REQUIRE(!noc_c_parse_tree_has_error(&parse_tree));
     REQUIRE(noc_c_parse_tree_node_count(&parse_tree) > 1);
     REQUIRE(noc_c_parse_tree_root(&parse_tree) == 0);
+    REQUIRE(noc_c_parse_grammar_candidates_build(
+                &parse_tree,
+                (size_t)(strstr(guard_source, "release_runtime") -
+                         guard_source) + 1,
+                noc_c_grammar_candidate_default_options(),
+                &grammar_candidates) == NOC_C_PARSE_OK);
+    REQUIRE(noc_c_grammar_candidates_is_valid(&grammar_candidates));
+    REQUIRE(grammar_candidates.count != 0);
+    REQUIRE((grammar_candidates.flags &
+             NOC_C_GRAMMAR_CANDIDATES_TOKEN_REPLACEMENT) != 0);
+    REQUIRE(noc_c_grammar_candidate_at(&grammar_candidates, 0) != NULL);
     REQUIRE(noc_c_ast_build(&parse_tree,
                             noc_c_ast_default_options(),
                             &ast) == NOC_C_AST_OK);
@@ -295,6 +307,8 @@ int main(void)
             NOC_C_AST_NODE_NONE);
 
     noc_c_parse_tree_free(&parse_tree);
+    REQUIRE(noc_c_grammar_candidates_is_valid(&grammar_candidates));
+    noc_c_grammar_candidates_free(&grammar_candidates);
     REQUIRE(noc_c_ast_is_valid(&ast));
     noc_c_ast_free(&ast);
     REQUIRE(noc_workspace_open_document(&workspace,

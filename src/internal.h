@@ -122,6 +122,10 @@ NOC__PRIVATE Noc_Include_Resolve_Status noc__include_resolve_request(
     Noc_Document_Snapshot *);
 NOC__PRIVATE void noc__string_list_free(Noc__String_List *);
 NOC__PRIVATE bool noc__string_list_append_unique(Noc__String_List *, const char *);
+/* Stable C syntax category normalization shared by physical parser lookahead
+   and normalized-AST MISSING-node details. */
+NOC__PRIVATE Noc_C_Ast_Expected_Kind noc__c_grammar_expected_kind(
+    Noc_Slice, bool);
 NOC__PRIVATE bool noc__transform_source(Noc_Context *, const char *, const char *, size_t,
                                        Noc_Transform_Result *, size_t, bool, bool);
 

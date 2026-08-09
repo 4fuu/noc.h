@@ -249,8 +249,10 @@ must be generated reproducibly as one self-contained `noc.h`.
         queries over normalized AST nodes as the cursor-context foundation.
   - [x] Add an allocation-free, generation-safe completion context for every
         insertion position, including all parser-materialized missing symbols.
-  - [ ] Add bounded stable grammar-lookahead candidate sets at arbitrary
-        incomplete insertion positions, beyond materialized recovery nodes.
+  - [x] Add bounded stable retained-CST grammar candidate hints at every
+        physical insertion position, with documented token-boundary/recovery
+        heuristics beyond materialized recovery nodes; membership remains
+        explicitly non-exhaustive and separate from semantic/policy completion.
 - [x] Add parser corpus tests, round-trip checks, malformed-input regression
       suites, and parser fuzzing independently of semantic analysis.
   - [x] Add a deterministic table-driven ISO C11 corpus whose exact retained
