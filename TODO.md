@@ -250,6 +250,9 @@ must be generated reproducibly as one self-contained `noc.h`.
   - [x] Add a deterministic table-driven ISO C11 corpus whose exact retained
         physical source is reparsed and compared node-for-node across the CST
         and normalized AST, including comments, whitespace, and CRLF spelling.
+  - [x] Add an independently runnable malformed-editor corpus that proves
+        recovery CST/AST output is deterministic and never reports malformed
+        input as a syntax-complete normalized AST.
 
 ## Milestone 10 — semantic AST, types, constants, and target ABI
 

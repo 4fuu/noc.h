@@ -51,7 +51,7 @@ The suite names are `header-c`, `header-cpp`, `public-header-c`,
 `release-header-runtime`,
 `preprocessor`, `lexing`, `syntax`, `c-analysis`, `c-parse-tree`,
 `c-parse-recovery`, `c-parse-lifecycle`, `c-parse-corpus`,
-`c-parse-cpp-runtime`,
+`c-parse-malformed-corpus`, `c-parse-cpp-runtime`,
 `c-ast`, `c-ast-details`, `c-ast-c11`, `c-ast-c11-constructs`,
 `c-ast-declarators`, `c-ast-recovery`,
 `tree-sitter-coexistence`, `rewriter`, and `artifacts`, for example:
