@@ -32,8 +32,8 @@
 
 #define NOC_VERSION_MAJOR 0
 #define NOC_VERSION_MINOR 42
-#define NOC_VERSION_PATCH 10
-#define NOC_VERSION "0.42.10"
+#define NOC_VERSION_PATCH 11
+#define NOC_VERSION "0.42.11"
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -2768,9 +2768,10 @@ NOCDEF bool noc_logical_c_parse_node_token_range(
    source, and must not be shallow-copied. It has no lifetime dependency on the
    input CST after a successful build. Failed builds preserve the previous AST
    exactly. Successful rebuilds increment the AST generation and invalidate old
-   node pointers/indices; source_generation identifies the retained logical
-   revision independently. Shared-handle reads/rebuild/free require external
-   synchronization. */
+   node pointers/indices; free preserves that counter so reusing the same handle
+   cannot revive stale borrowing contexts. source_generation identifies the
+   retained logical revision independently. Shared-handle reads/rebuild/free
+   require external synchronization. */
 typedef struct {
     Noc_C_Ast_Kind kind;
     Noc_C_Ast_Field field;
@@ -2790,6 +2791,30 @@ typedef struct {
     Noc_Logical_C_Ast_Impl *impl;
     size_t generation;
 } Noc_Logical_C_Ast;
+
+/* Borrowing syntactic context for one logical insertion position. LEFT and
+   RIGHT are the normalized nodes owning adjacent logical bytes. When MISSING
+   expectations exist at OFFSET, NODE is their common parent context; otherwise
+   it is the adjacent nodes' smallest common ancestor, with the translation-unit
+   root used at logical-source edges. EXPECTED_COUNT includes every zero-width
+   MISSING node there in AST preorder. These are parser recovery hints, not an
+   exhaustive semantic or feature-policy completion set.
+
+   The context owns no memory. OWNER plus AST/source generations reject foreign
+   or stale use even when two logical revisions happen to have equal counters.
+   Adjacent/context AST nodes map to contributing logical tokens and their
+   physical/macro provenance. Zero-width expectations map only to an empty
+   logical insertion range and carry no provenance themselves. */
+typedef struct {
+    const Noc_Logical_C_Ast *owner;
+    size_t offset;
+    size_t node;
+    size_t left_node;
+    size_t right_node;
+    size_t expected_count;
+    size_t generation;
+    size_t source_generation;
+} Noc_Logical_C_Ast_Completion_Context;
 
 /* Uses Noc_C_Ast_Options and Noc_C_Ast_Status because node selection, limits,
    cancellation, recovery, and normalization failures are coordinate-neutral.
@@ -2844,6 +2869,20 @@ NOCDEF size_t noc_logical_c_ast_common_ancestor(
     const Noc_Logical_C_Ast *ast,
     size_t left,
     size_t right);
+/* Construction is allocation-free and preserves OUTPUT on invalid ASTs,
+   out-of-range logical positions, or NULL output. Pass NOC_C_AST_NODE_NONE as
+   PREVIOUS to begin expectation iteration; then pass each returned node.
+   Foreign/stale contexts, invalid previous nodes, and end return
+   NOC_C_AST_NODE_NONE. Successful nodes can be queried with
+   noc_logical_c_ast_node_expected() and node_token_range(). */
+NOCDEF bool noc_logical_c_ast_completion_context(
+    const Noc_Logical_C_Ast *ast,
+    size_t offset,
+    Noc_Logical_C_Ast_Completion_Context *output);
+NOCDEF size_t noc_logical_c_ast_completion_next_expected_node(
+    const Noc_Logical_C_Ast *ast,
+    const Noc_Logical_C_Ast_Completion_Context *context,
+    size_t previous);
 /* Maps the node's whole logical byte range to token contributors. Empty MISSING
    nodes follow the logical insertion-point rule. Failure preserves OUTPUT. */
 NOCDEF bool noc_logical_c_ast_node_token_range(

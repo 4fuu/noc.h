@@ -122,6 +122,7 @@ static const Test_Suite test_suites[] = {
     {"logical-c-parse-lifecycle", "tests/test_logical_c_parse_lifecycle.c", "build/noc-test-logical-c-parse-lifecycle" NOC_EXE, false},
     {"logical-c-ast", "tests/test_logical_c_ast.c", "build/noc-test-logical-c-ast" NOC_EXE, false},
     {"logical-c-ast-lifecycle", "tests/test_logical_c_ast_lifecycle.c", "build/noc-test-logical-c-ast-lifecycle" NOC_EXE, false},
+    {"logical-c-ast-completion", "tests/test_logical_c_ast_completion.c", "build/noc-test-logical-c-ast-completion" NOC_EXE, false},
     {"c-ast", "tests/test_c_ast.c", "build/noc-test-c-ast" NOC_EXE, false},
     {"c-ast-details", "tests/test_c_ast_details.c", "build/noc-test-c-ast-details" NOC_EXE, false},
     {"c-ast-c11", "tests/test_c_ast_c11.c", "build/noc-test-c-ast-c11" NOC_EXE, false},

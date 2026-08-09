@@ -265,7 +265,7 @@ must be generated reproducibly as one self-contained `noc.h`.
       assertions with independently runnable C11 construct tests.
 - [ ] Preserve trivia and spelling ranges while recording expanded/logical ranges
       and physical macro/include provenance on AST nodes.
-- [ ] Add error recovery and incomplete-source parsing with expected-token and
+- [x] Add error recovery and incomplete-source parsing with expected-token and
       completion-context queries; never invent a successful complete AST.
   - [x] Add generation-scoped physical byte/range, depth, and common-ancestor
         queries over normalized AST nodes as the cursor-context foundation.
@@ -275,6 +275,9 @@ must be generated reproducibly as one self-contained `noc.h`.
         physical insertion position, with documented token-boundary/recovery
         heuristics beyond materialized recovery nodes; membership remains
         explicitly non-exhaustive and separate from semantic/policy completion.
+  - [x] Add allocation-free logical AST insertion contexts with adjacent-node,
+        common-ancestor, generation-safe MISSING expectation iteration, and
+        token-to-physical/macro provenance access for IDE completion consumers.
 - [x] Add parser corpus tests, round-trip checks, malformed-input regression
       suites, and parser fuzzing independently of semantic analysis.
   - [x] Add a deterministic table-driven ISO C11 corpus whose exact retained

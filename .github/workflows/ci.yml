@@ -140,6 +140,7 @@ jobs:
                        c_parse_malformed_corpus c_parse_completion \
                        logical_c_parse logical_c_parse_lifecycle \
                        logical_c_ast logical_c_ast_lifecycle \
+                       logical_c_ast_completion \
                        c_ast c_ast_details \
                        c_ast_c11 c_ast_c11_constructs c_ast_declarators \
                        c_ast_completion c_ast_queries c_ast_recovery \

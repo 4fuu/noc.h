@@ -73,8 +73,9 @@ NOCDEF Noc_C_Ast_Status noc_logical_c_ast_build(
     if (output->generation == SIZE_MAX) {
         return NOC_C_AST_GENERATION_EXHAUSTED;
     }
-    if ((output->impl || output->generation != 0) &&
-        !noc_logical_c_ast_is_valid(output)) {
+    /* A freed handle retains its generation so borrowing IDE contexts cannot
+       become valid again when the same handle address is rebuilt. */
+    if (output->impl && !noc_logical_c_ast_is_valid(output)) {
         return NOC_C_AST_INVALID_ARGUMENT;
     }
     if (options.should_cancel &&
@@ -172,9 +173,12 @@ NOCDEF Noc_C_Ast_Status noc_logical_c_ast_build(
 NOCDEF void noc_logical_c_ast_free(Noc_Logical_C_Ast *ast)
 {
     Noc_Logical_C_Ast_Impl *implementation;
+    size_t generation;
     if (!ast) return;
     implementation = ast->impl;
+    generation = ast->generation;
     memset(ast, 0, sizeof(*ast));
+    ast->generation = generation;
     noc__logical_c_ast_impl_free(implementation);
 }
 
@@ -376,6 +380,106 @@ NOCDEF size_t noc_logical_c_ast_common_ancestor(
         right = ast->impl->nodes[right].parent;
     }
     return left;
+}
+
+static bool noc__logical_c_ast_is_expected_at_offset(
+    const Noc_Logical_C_Ast_Node *node,
+    size_t offset)
+{
+    return node && (node->flags & NOC_C_AST_NODE_MISSING) != 0 &&
+           node->bytes.begin == offset && node->bytes.end == offset;
+}
+
+NOCDEF bool noc_logical_c_ast_completion_context(
+    const Noc_Logical_C_Ast *ast,
+    size_t offset,
+    Noc_Logical_C_Ast_Completion_Context *output)
+{
+    Noc_Logical_C_Ast_Completion_Context result;
+    Noc_Slice text;
+    size_t first_expected_parent = NOC_C_AST_NODE_NONE;
+    size_t last_expected_parent = NOC_C_AST_NODE_NONE;
+    size_t index;
+    if (!noc_logical_c_ast_is_valid(ast) || !output) return false;
+    text = noc_logical_source_text(&ast->impl->source);
+    if (offset > text.count) return false;
+
+    memset(&result, 0, sizeof(result));
+    result.owner = ast;
+    result.offset = offset;
+    result.left_node = offset == 0
+                           ? NOC_C_AST_NODE_NONE
+                           : noc_logical_c_ast_node_at_offset(ast, offset - 1);
+    result.right_node = offset == text.count
+                            ? NOC_C_AST_NODE_NONE
+                            : noc_logical_c_ast_node_at_offset(ast, offset);
+    result.node = noc_logical_c_ast_root(ast);
+    result.generation = noc_logical_c_ast_generation(ast);
+    result.source_generation = noc_logical_c_ast_source_generation(ast);
+    if (result.left_node != NOC_C_AST_NODE_NONE &&
+        result.right_node != NOC_C_AST_NODE_NONE) {
+        result.node = noc_logical_c_ast_common_ancestor(ast,
+                                                        result.left_node,
+                                                        result.right_node);
+        if (result.node == NOC_C_AST_NODE_NONE) return false;
+    }
+
+    for (index = 0; index < ast->impl->count; ++index) {
+        const Noc_Logical_C_Ast_Node *node = &ast->impl->nodes[index];
+        size_t parent;
+        if (!noc__logical_c_ast_is_expected_at_offset(node, offset)) continue;
+        result.expected_count += 1;
+        parent = node->parent == NOC_C_AST_NODE_NONE
+                     ? noc_logical_c_ast_root(ast)
+                     : node->parent;
+        if (first_expected_parent == NOC_C_AST_NODE_NONE) {
+            first_expected_parent = parent;
+        }
+        last_expected_parent = parent;
+    }
+    if (first_expected_parent != NOC_C_AST_NODE_NONE) {
+        result.node = noc_logical_c_ast_common_ancestor(ast,
+                                                        first_expected_parent,
+                                                        last_expected_parent);
+        if (result.node == NOC_C_AST_NODE_NONE) return false;
+    }
+    *output = result;
+    return true;
+}
+
+NOCDEF size_t noc_logical_c_ast_completion_next_expected_node(
+    const Noc_Logical_C_Ast *ast,
+    const Noc_Logical_C_Ast_Completion_Context *context,
+    size_t previous)
+{
+    Noc_Slice text;
+    size_t index;
+    if (!noc_logical_c_ast_is_valid(ast) || !context ||
+        context->owner != ast ||
+        context->generation != noc_logical_c_ast_generation(ast) ||
+        context->source_generation != noc_logical_c_ast_source_generation(ast)) {
+        return NOC_C_AST_NODE_NONE;
+    }
+    text = noc_logical_source_text(&ast->impl->source);
+    if (context->offset > text.count) return NOC_C_AST_NODE_NONE;
+    if (previous == NOC_C_AST_NODE_NONE) {
+        index = 0;
+    } else {
+        const Noc_Logical_C_Ast_Node *previous_node =
+            noc_logical_c_ast_node_at(ast, previous);
+        if (!noc__logical_c_ast_is_expected_at_offset(previous_node,
+                                                       context->offset)) {
+            return NOC_C_AST_NODE_NONE;
+        }
+        index = previous + 1;
+    }
+    for (; index < ast->impl->count; ++index) {
+        const Noc_Logical_C_Ast_Node *node = &ast->impl->nodes[index];
+        if (noc__logical_c_ast_is_expected_at_offset(node, context->offset)) {
+            return index;
+        }
+    }
+    return NOC_C_AST_NODE_NONE;
 }
 
 NOCDEF bool noc_logical_c_ast_node_token_range(

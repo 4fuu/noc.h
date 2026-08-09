@@ -30,6 +30,7 @@ int main(void)
     Noc_Logical_C_Parse_Node logical_parse_node;
     Noc_Logical_C_Ast logical_ast;
     Noc_Logical_C_Ast_Node logical_ast_node;
+    Noc_Logical_C_Ast_Completion_Context logical_completion;
     Noc_Logical_Location logical_location;
     Noc_Logical_Token_Range logical_tokens;
     memset(&pragma_once, 0, sizeof(pragma_once));
@@ -44,6 +45,7 @@ int main(void)
     memset(&logical_parse_node, 0, sizeof(logical_parse_node));
     memset(&logical_ast, 0, sizeof(logical_ast));
     memset(&logical_ast_node, 0, sizeof(logical_ast_node));
+    memset(&logical_completion, 0, sizeof(logical_completion));
     memset(&logical_location, 0, sizeof(logical_location));
     memset(&logical_tokens, 0, sizeof(logical_tokens));
     resolver.resolve = public_header_resolver;
@@ -64,13 +66,14 @@ int main(void)
                    logical_ast.generation == 0 &&
                    logical_ast_node.bytes.begin ==
                        logical_ast_node.bytes.end &&
+                   logical_completion.owner == NULL &&
                    logical_location.line == 0 &&
                    logical_tokens.begin == logical_tokens.end &&
                    resolver.resolve != NULL &&
                    NOC_INCLUDE_FORM_QUOTED != NOC_INCLUDE_FORM_ANGLED &&
                    NOC_VERSION_MAJOR == 0 &&
                    NOC_VERSION_MINOR == 42 &&
-                   NOC_VERSION_PATCH == 10
+                   NOC_VERSION_PATCH == 11
                ? 0
                : 1;
 }

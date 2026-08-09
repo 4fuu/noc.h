@@ -468,6 +468,14 @@ and all preprocessing inputs are released. It is still a syntax AST for one
 expanded fragment, not typedef/type resolution or complete translation-unit
 preprocessing.
 
+`noc_logical_c_ast_completion_context` provides the allocation-free logical
+insertion-point counterpart of the physical AST completion context. It reports
+adjacent normalized nodes, their common syntax context, and every zero-width
+recovery expectation at that logical offset. Owner, AST generation, and logical
+source generation reject stale or foreign contexts; expectation nodes retain
+the normal token-to-physical/macro provenance bridge. These parser recovery
+hints remain separate from later semantic and feature-policy completion.
+
 Run source-map/serialization coverage with `./nob test logical-source`,
 ownership/cancellation/generation/limit coverage with `./nob test
 logical-source-lifecycle`, coordinate/range coverage with `./nob test
@@ -475,7 +483,8 @@ logical-source-queries`, logical grammar/provenance coverage with `./nob test
 logical-c-parse`, and retained-revision/transactional coverage with `./nob test
 logical-c-parse-lifecycle`. Run normalized logical AST/provenance coverage with
 `./nob test logical-c-ast` and its ownership/limit/generation coverage with
-`./nob test logical-c-ast-lifecycle`.
+`./nob test logical-c-ast-lifecycle`. Run logical insertion-context and recovery
+expectation coverage with `./nob test logical-c-ast-completion`.
 
 Conditional preprocessing is staged rather than hidden inside a monolithic
 driver. `noc_preprocessor_directive_body_tokens` returns the significant
