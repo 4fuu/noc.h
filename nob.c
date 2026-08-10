@@ -16,6 +16,8 @@
 #define NOC_EMBED_EXAMPLE "build/embed-example" NOC_EXE
 #define NOC_RULES_DIALECT "build/rules-dialect" NOC_EXE
 #define NOC_RULES_EXAMPLE "build/rules-example" NOC_EXE
+#define NOC_SAFETY_DIALECT "build/safety-dialect" NOC_EXE
+#define NOC_SAFETY_EXAMPLE "build/safety-example" NOC_EXE
 #define NOC_IDE_EXAMPLE "build/ide-example" NOC_EXE
 #define NOC_GENERATED_HEADER "build/generated/noc.h"
 #define NOC_RELEASE_HEADER "release/noc.h"
@@ -52,6 +54,9 @@ static const char *amalgamation_sources[] = {
     "src/c_parse.c",
     "src/logical_c_parse.c",
     "src/logical_ast.c",
+    "src/types.c",
+    "src/semantic.c",
+    "src/cfg.c",
     "src/lower.c",
     "src/emit_c.c",
 };
@@ -64,7 +69,7 @@ static const char *implementation_modules[] = {
     "src/conditional_groups.c",
     "src/include_control.c", "src/include_resolver.c", "src/include_expansion.c",
     "src/include_graph.c", "src/translation.c", "src/parser.c", "src/ast.c", "src/c_parse.c",
-    "src/logical_c_parse.c", "src/logical_ast.c",
+    "src/logical_c_parse.c", "src/logical_ast.c", "src/types.c", "src/semantic.c", "src/cfg.c",
     "src/lower.c", "src/emit_c.c",
 };
 
@@ -142,6 +147,9 @@ static const Test_Suite test_suites[] = {
     {"c-ast-recovery", "tests/test_c_ast_recovery.c", "build/noc-test-c-ast-recovery" NOC_EXE, false},
     {"tree-sitter-coexistence", "tests/test_tree_sitter_coexistence.c", "build/noc-test-tree-sitter-coexistence" NOC_EXE, false},
     {"rewriter", "tests/test_rewriter.c", "build/noc-test-rewriter" NOC_EXE, false},
+    {"defer", "tests/test_defer.c", "build/noc-test-defer" NOC_EXE, false},
+    {"templates", "tests/test_templates.c", "build/noc-test-templates" NOC_EXE, false},
+    {"ownership", "tests/test_ownership.c", "build/noc-test-ownership" NOC_EXE, false},
     {"artifacts", "tests/test_artifacts.c", "build/noc-test-artifacts" NOC_EXE, false},
 };
 
@@ -558,6 +566,44 @@ static bool build_rules_example(void)
     return nob_cmd_run(&command);
 }
 
+static bool build_safety_dialect(void)
+{
+    return build_binary(NOC_SAFETY_DIALECT, "examples/safety/dialect.c");
+}
+
+static bool build_safety_example(void)
+{
+    const char *generated = "build/generated/safety_app.c";
+    const char *generation_inputs[] = {
+        "examples/safety/app.c",
+        NOC_SAFETY_DIALECT,
+        "nob.c",
+    };
+    const char *compile_inputs[] = {generated, "nob.c"};
+    Nob_Cmd command = {0};
+    int rebuild;
+    if (!build_safety_dialect()) return false;
+    rebuild = output_rebuild_state(generated,
+                                   generation_inputs,
+                                   NOB_ARRAY_LEN(generation_inputs));
+    if (rebuild < 0) return false;
+    if (rebuild != 0) {
+        nob_cmd_append(&command,
+                       NOC_SAFETY_DIALECT,
+                       "examples/safety/app.c",
+                       "-o",
+                       generated);
+        if (!nob_cmd_run(&command)) return false;
+    }
+    rebuild = output_rebuild_state(NOC_SAFETY_EXAMPLE,
+                                   compile_inputs,
+                                   NOB_ARRAY_LEN(compile_inputs));
+    if (rebuild < 0) return false;
+    if (rebuild == 0) return nob_file_exists(NOC_SAFETY_EXAMPLE) > 0;
+    append_compile_command(&command, NOC_SAFETY_EXAMPLE, generated, false);
+    return nob_cmd_run(&command);
+}
+
 static bool generate_ide_overlays(void)
 {
     const char *app_output = "build/generated/ide/app.c";
@@ -717,6 +763,7 @@ int main(int argc, char **argv)
         if (!run_modules_test()) return 1;
         if (!build_fuzz() || !build_c_parse_fuzz() ||
             !build_embed_example() || !build_rules_example() ||
+            !build_safety_example() ||
             !build_ide_example()) return 1;
         nob_cmd_append(&command, NOC_FUZZ);
         if (!nob_cmd_run(&command)) return 1;
@@ -725,6 +772,8 @@ int main(int argc, char **argv)
         nob_cmd_append(&command, NOC_EMBED_EXAMPLE);
         if (!nob_cmd_run(&command)) return 1;
         nob_cmd_append(&command, NOC_RULES_EXAMPLE);
+        if (!nob_cmd_run(&command)) return 1;
+        nob_cmd_append(&command, NOC_SAFETY_EXAMPLE);
         if (!nob_cmd_run(&command)) return 1;
         nob_cmd_append(&command, NOC_IDE_EXAMPLE);
         return nob_cmd_run(&command) ? 0 : 1;
@@ -739,10 +788,13 @@ int main(int argc, char **argv)
     }
     if (strcmp(target, "example") == 0) {
         Nob_Cmd command = {0};
-        if (!build_embed_example() || !build_rules_example() || !build_ide_example()) return 1;
+        if (!build_embed_example() || !build_rules_example() ||
+            !build_safety_example() || !build_ide_example()) return 1;
         nob_cmd_append(&command, NOC_EMBED_EXAMPLE);
         if (!nob_cmd_run(&command)) return 1;
         nob_cmd_append(&command, NOC_RULES_EXAMPLE);
+        if (!nob_cmd_run(&command)) return 1;
+        nob_cmd_append(&command, NOC_SAFETY_EXAMPLE);
         if (!nob_cmd_run(&command)) return 1;
         nob_cmd_append(&command, NOC_IDE_EXAMPLE);
         return nob_cmd_run(&command) ? 0 : 1;

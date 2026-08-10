@@ -333,8 +333,9 @@ must be generated reproducibly as one self-contained `noc.h`.
       validate/lower hooks, extension AST payloads, and explicit lifetimes.
 - [ ] Keep legacy `@name` and token-pattern rules source-compatible while routing
       new structured features through parser/AST boundaries.
-- [ ] Generate feature/extension metadata for IDE completion and diagnostics;
-      test every public registration/query API and every built-in gate.
+- [x] Expose the opt-in defer/templates/ownership MVP slices in IDE metadata;
+      full M10-M14 language and analysis goals remain open.
+- [ ] Test every future registration/query API and every full-profile built-in gate.
 
 ## Milestone 12 — Core C lowering and deterministic C emitter
 
@@ -367,6 +368,10 @@ must be generated reproducibly as one self-contained `noc.h`.
 
 - [ ] Add licensed C conformance corpora, Csmith/differential testing, sanitizer
       coverage, long fuzz campaigns, malformed-editor corpora, and Windows CI.
+- [x] Add opt-in, token-structured MVPs with independently runnable suites:
+      lexical-scope LIFO defer on fallthrough/return, explicit one-parameter
+      template monomorphization, and pointer ownership with explicit borrow,
+      move, guarded deterministic drop, and definite linear-use diagnostics.
 - [ ] Add higher-level Noc features only after the C frontend is sound: CFG and
       dataflow APIs, ownership/borrowing, defer, checked arithmetic, and safe profiles.
 - [ ] Validate ownership and other flow-sensitive features across macros, goto,

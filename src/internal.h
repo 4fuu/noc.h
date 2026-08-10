@@ -216,6 +216,29 @@ NOC__PRIVATE Noc_C_Ast_Status noc__c_ast_normalize(
 NOC__PRIVATE void noc__c_ast_normalized_free(Noc__C_Ast_Normalized *);
 NOC__PRIVATE bool noc__transform_source(Noc_Context *, const char *, const char *, size_t,
                                        Noc_Transform_Result *, size_t, bool, bool);
+/* Shared token utilities for the opt-in structured dialect passes.  The token
+   stream borrows SOURCE/PATH and owns only its items array. */
+NOC__PRIVATE bool noc__dialect_tokenize(Noc_Context *, const char *, Noc_Slice,
+                                        Noc_Token_Stream *);
+NOC__PRIVATE void noc__dialect_tokens_free(Noc_Token_Stream *);
+NOC__PRIVATE size_t noc__dialect_next_significant(const Noc_Token_Stream *, size_t);
+NOC__PRIVATE size_t noc__dialect_previous_significant(const Noc_Token_Stream *, size_t);
+NOC__PRIVATE size_t noc__dialect_matching_close(const Noc_Token_Stream *, size_t,
+                                                const char *, const char *);
+NOC__PRIVATE size_t noc__dialect_statement_end(const Noc_Token_Stream *, size_t);
+NOC__PRIVATE Noc_Token_Range noc__dialect_trim_range(const Noc_Token_Stream *,
+                                                     Noc_Token_Range);
+/* True for the MVP type grammar that can be emitted immediately before a C
+   declarator name: identifier words plus pointer stars, without abstract
+   declarators that require inserting the name inside parentheses/brackets. */
+NOC__PRIVATE bool noc__dialect_type_is_prefixable(const Noc_Token_Stream *,
+                                                  Noc_Token_Range);
+NOC__PRIVATE bool noc__dialect_preserve_newlines(Noc_Buffer *, Noc_Slice);
+NOC__PRIVATE bool noc__dialect_finish_edits(Noc_Edit_Set *, const Noc_Token_Stream *,
+                                            Noc_Slice, Noc_Buffer *);
+NOC__PRIVATE bool noc__lower_templates(Noc_Context *, const char *, Noc_Slice, Noc_Buffer *);
+NOC__PRIVATE bool noc__lower_ownership(Noc_Context *, const char *, Noc_Slice, Noc_Buffer *);
+NOC__PRIVATE bool noc__lower_defer(Noc_Context *, const char *, Noc_Slice, Noc_Buffer *);
 
 #endif /* NOC_IMPLEMENTATION || NOC__INDIVIDUAL_SOURCE */
 

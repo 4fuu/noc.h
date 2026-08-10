@@ -290,14 +290,49 @@ NOCDEF bool noc_transform_source(Noc_Context *context,
                                  size_t source_count,
                                  Noc_Transform_Result *result)
 {
-    return noc__transform_source(context,
-                                 path,
-                                 source,
-                                 source_count,
-                                 result,
-                                 0,
-                                 context->options.emit_line_directives,
-                                 context->options.skip_inactive_preprocessor_branches);
+    Noc_Buffer stages[3] = {{0}};
+    Noc_Slice current = {source, source_count};
+    size_t errors_before;
+    size_t stage = 0;
+    bool ok;
+    if (!context || !result || (source_count > 0 && !source)) return false;
+    errors_before = context->error_count;
+    memset(result, 0, sizeof(*result));
+    if (context->active_transforms == SIZE_MAX) {
+        Noc_Location none = {0};
+        noc__report(context, NOC_DIAGNOSTIC_ERROR, none,
+                    "structured transform nesting counter is exhausted");
+        result->error_count = context->error_count - errors_before;
+        return false;
+    }
+    /* Cover every public stage with the same mutation transaction.  The raw
+       rule transform takes one nested count of its own. */
+    context->active_transforms += 1;
+    /* Built-ins form one transactional front-end pipeline. Nested rule
+       fragments call noc__transform_source directly and cannot rerun it. */
+    if (noc_feature_is_enabled(context, NOC_FEATURE_TEMPLATES)) {
+        if (!noc__lower_templates(context, path, current, &stages[stage])) goto failed;
+        current.data = stages[stage].items; current.count = stages[stage++].count;
+    }
+    if (noc_feature_is_enabled(context, NOC_FEATURE_OWNERSHIP)) {
+        if (!noc__lower_ownership(context, path, current, &stages[stage])) goto failed;
+        current.data = stages[stage].items; current.count = stages[stage++].count;
+    }
+    if (noc_feature_is_enabled(context, NOC_FEATURE_DEFER)) {
+        if (!noc__lower_defer(context, path, current, &stages[stage])) goto failed;
+        current.data = stages[stage].items; current.count = stages[stage++].count;
+    }
+    ok = noc__transform_source(context, path, current.data, current.count, result, 0,
+                               context->options.emit_line_directives,
+                               context->options.skip_inactive_preprocessor_branches);
+    while (stage) noc_buffer_free(&stages[--stage]);
+    context->active_transforms -= 1;
+    return ok;
+failed:
+    while (stage) noc_buffer_free(&stages[--stage]);
+    context->active_transforms -= 1;
+    result->error_count = context->error_count - errors_before;
+    return false;
 }
 
 NOCDEF void noc_transform_result_free(Noc_Transform_Result *result)

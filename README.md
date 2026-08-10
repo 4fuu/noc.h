@@ -14,8 +14,10 @@ extensions that program accepts.
 
 Dialect sources keep their ordinary `.c` and `.h` suffixes. The enabled syntax
 is self-contained in the project's dialect program, and every extension has an
-explicit `@name` trigger. Generated files go to a separate build directory so
-the original sources are never overwritten:
+explicit opt-in rule or feature gate. Rules can use `@name` or token-pattern
+triggers; the built-in structured MVPs reserve words such as `defer` and `own`
+only while their feature gate is enabled. Generated files go to a separate build
+directory so the original sources are never overwritten:
 
 ```text
 examples/embed/app.c
@@ -59,7 +61,8 @@ The suite names are `header-c`, `header-cpp`, `public-header-c`,
 `c-parse-malformed-corpus`, `c-parse-completion`, `c-parse-cpp-runtime`,
 `c-ast`, `c-ast-details`, `c-ast-c11`, `c-ast-c11-constructs`,
 `c-ast-declarators`, `c-ast-completion`, `c-ast-queries`, `c-ast-recovery`,
-`tree-sitter-coexistence`, `rewriter`, and `artifacts`, for example:
+`tree-sitter-coexistence`, `rewriter`, `defer`, `templates`, `ownership`, and
+`artifacts`, for example:
 
 ```console
 $ ./nob test c-analysis
@@ -75,10 +78,12 @@ $ ./nob verify-header
 $ ./nob clean
 ```
 
-The test target transforms, compiles, and runs both examples. `examples/embed`
+The test target transforms, compiles, and runs the examples. `examples/embed`
 shows a built-in expression rule with a file dependency; `examples/rules` is a
 single project dialect covering expression, statement, declaration, and
-attribute scopes. Both dialect inputs and applications use ordinary `.c` files.
+attribute scopes; and `examples/safety` runs templates, defer, borrowing, moving,
+automatic drop, and return ownership transfer together. All dialect inputs and
+applications use ordinary `.c` files.
 
 ## Developing the single header
 
@@ -132,6 +137,7 @@ be declared by `src/internal.h`; module-local helpers remain static. Current own
 | `src/ast.c` | Stable normalized physical C AST and typed spelling/recovery details |
 | `src/c_parse.c` | Recoverable physical C concrete-syntax adapter and Noc-owned flat node views |
 | `src/features.c` | Context, rules, feature controls, and metadata interfaces |
+| `src/types.c`, `src/semantic.c`, `src/cfg.c` | Opt-in template, ownership, and structured-cleanup passes |
 | `src/lower.c`, `src/emit_c.c` | Rewrite/edit lowering and transformation/artifact/CLI emission |
 | `third_party/tree-sitter/` | Pinned, namespaced native Tree-sitter runtime and C grammar payload |
 
@@ -704,16 +710,97 @@ static const char message[] = @embed("message.txt");
 Run `dialect --describe` to inspect every registered trigger, its enabled state,
 and its declared scope, syntax, and description.
 
+## Opt-in structured feature MVPs
+
+Three parser-oriented feature slices are available behind explicit context
+gates. They are disabled by default, preserving those spellings as ordinary C
+identifiers. Enable one feature or the complete interoperable set before calling
+the existing source/file/batch transform APIs:
+
+```c
+Noc_Context noc;
+noc_context_init(&noc);
+
+if (!noc_enable_mvp_features(&noc)) return 1;
+/* Or: noc_set_feature_enabled(&noc, NOC_FEATURE_DEFER, true); */
+```
+
+The structured passes run in the fixed order templates, ownership, defer, then
+project-local token rules. Output is ordinary C and failed lowering publishes no
+partial result. [`examples/safety`](examples/safety) is a complete CLI dialect
+plus an application that is transformed, compiled, and run by `./nob example`.
+
+### Lexical-scope `defer`
+
+```c
+int load(void) {
+    Handle *handle = open_handle();
+    defer close_handle(handle);
+    defer { record_finished(); }
+    if (!handle) return -1;
+    return read_handle(handle);
+}
+```
+
+Actions execute in reverse registration order on block fallthrough and before a
+`return`, including nested compound blocks. A value-return expression is first
+evaluated into a hygienic temporary, then cleanups run, then that value is
+returned. The MVP requires `defer` to be a direct child of a `{ ... }` block and
+conservatively rejects any `goto`, `break`, or `continue` in a function that uses
+defer; cleanup actions themselves must be straight-line code. Functions with
+complex return declarators are conservatively rejected on value-return paths.
+
+### Explicit monomorphized templates
+
+```c
+template(T, identity)
+T identity(T value) { return value; }
+
+instantiate(identity, int, identity_int);
+instantiate(identity, const char *, identity_text);
+```
+
+The template definition is removed and each explicit instance becomes an
+ordinary named C function. Replacement operates on identifier tokens, so
+comments, strings, and preprocessor tokens remain unchanged. The MVP supports
+one type parameter, function definitions, explicit source-order instantiation,
+explicit generated names, and declaration-prefix types made from identifier
+words and pointer stars. It intentionally has no function/array abstract type
+arguments, recursion/self references, deduction, constraints, specialization,
+or cross-file instantiation.
+
+### Pointer ownership, borrow, move, and deterministic drop
+
+```c
+own(Resource *, release) first = acquire();
+inspect(borrow(first));
+
+own(Resource *, release) second = move(first);
+inspect(borrow(second));
+return move(second);
+```
+
+`own(pointer_type, drop_function)` creates one lexical owner. `borrow(owner)`
+passes the pointer without consuming it. A move initializer or return transfers
+the pointer, nulls the source, and prevents later source use. Scope exits call
+the drop function exactly through a generated, null-guarded defer action.
+Ownership enables defer automatically. This MVP deliberately rejects non-pointer
+owners, pointer types requiring an abstract declarator, implicit owner reads,
+arbitrary assignment, general move expressions, and definite linear use after
+move; alias/lifetime inference and path-sensitive borrows remain future semantic
+work.
+
 ## IDE metadata header
 
 `noc_generate_ide_metadata_header` serializes the same registry into a
 standalone C header for editor extensions, completion generators, and other
 tooling. The output records a schema version, the `noc.h` version, dialect name,
-rule count, and each rule's name, trigger kind/text, enabled state,
-numeric/string scope, syntax, and description:
+built-in feature names/states, rule count, and each rule's name, trigger
+kind/text, enabled state, numeric/string scope, syntax, and description:
 
-Schema 2 names the trigger kinds `at-name` and `pattern`, matching
-`NOC_RULE_TRIGGER_AT_NAME` and `NOC_RULE_TRIGGER_PATTERN`.
+Schema 3 adds `FEATURE_COUNT` plus deterministic `FEATURE_n_NAME` and
+`FEATURE_n_ENABLED` macros. Rule trigger kinds remain `at-name` and `pattern`,
+matching `NOC_RULE_TRIGGER_AT_NAME` and `NOC_RULE_TRIGGER_PATTERN`.
 
 ```c
 Noc_Ide_Metadata_Options options = {

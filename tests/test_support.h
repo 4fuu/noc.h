@@ -52,11 +52,38 @@ static inline void count_diagnostics(void *user_data,
     }
 }
 
-static bool slice_equals(Noc_Slice slice, const char *expected)
+static inline bool slice_equals(Noc_Slice slice, const char *expected)
 {
     size_t expected_count = strlen(expected);
     return slice.count == expected_count &&
            (expected_count == 0 || memcmp(slice.data, expected, expected_count) == 0);
+}
+
+/* Structured feature suites validate the actual lowering boundary by feeding
+   generated text back through the bundled C parser, rather than relying only
+   on substring expectations. */
+static inline void check_complete_generated_c(const char *path,
+                                              const char *source,
+                                              size_t source_count)
+{
+    Noc_Workspace workspace = {0};
+    Noc_Document_Snapshot snapshot = {0};
+    Noc_C_Parse_Tree tree = {0};
+    noc_workspace_init(&workspace);
+    CHECK(noc_workspace_open_document(&workspace,
+                                      path,
+                                      source,
+                                      source_count,
+                                      NOC_SOURCE_CLASS_GENERATED,
+                                      &snapshot) == NOC_WORKSPACE_OK);
+    CHECK(noc_c_parse_tree_build(&snapshot,
+                                 noc_c_parse_default_options(),
+                                 &tree) == NOC_C_PARSE_OK);
+    CHECK(noc_c_parse_tree_is_valid(&tree));
+    CHECK(!noc_c_parse_tree_has_error(&tree));
+    noc_c_parse_tree_free(&tree);
+    noc_document_snapshot_free(&snapshot);
+    noc_workspace_deinit(&workspace);
 }
 
 static int finish_suite(const char *name)

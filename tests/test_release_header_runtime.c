@@ -123,7 +123,11 @@ int main(void)
         "_Thread_local int release_thread_value;\n"
         "_Atomic(int) release_atomic;\n"
         "_Static_assert(1, \"release parser\");\n";
+    static const char feature_source[] =
+        "void release_cleanup(void);\n"
+        "int release_feature(void) { defer release_cleanup(); return 1; }\n";
     Noc_Context context;
+    Noc_Transform_Result feature_result = {0};
     Noc_Workspace workspace = {0};
     Noc_Document_Snapshot snapshot = {0};
     Noc_Document_Snapshot guard_snapshot = {0};
@@ -174,6 +178,18 @@ int main(void)
     REQUIRE(U_CPLUSPLUS_VERSION == 317);
     REQUIRE(U_IS_SURROGATE(318));
     noc_context_init(&context);
+    context.options.emit_line_directives = false;
+    REQUIRE(noc_set_feature_enabled(&context, NOC_FEATURE_DEFER, true));
+    REQUIRE(noc_transform_source(&context,
+                                 "release-feature.c",
+                                 feature_source,
+                                 sizeof(feature_source) - 1,
+                                 &feature_result));
+    REQUIRE(feature_result.output != NULL);
+    REQUIRE(strstr(feature_result.output, "defer release_cleanup") == NULL);
+    REQUIRE(strstr(feature_result.output, "release_cleanup();") != NULL);
+    noc_transform_result_free(&feature_result);
+    REQUIRE(noc_set_feature_enabled(&context, NOC_FEATURE_DEFER, false));
     noc_workspace_init(&workspace);
     REQUIRE(noc_workspace_open_document(&workspace,
                                         "release-runtime.c",

@@ -151,7 +151,7 @@ jobs:
                        c_ast_c11 c_ast_c11_constructs c_ast_declarators \
                        c_ast_completion c_ast_queries c_ast_recovery \
                        tree_sitter_coexistence \
-                       rewriter artifacts; do
+                       rewriter defer templates ownership artifacts; do
             cc $common_flags -Ibuild/generated -Iinclude -I. \
                -o "build/noc-test-${suite}-sanitize" "tests/test_${suite}.c" \
                build/noc-implementation-sanitize.o
@@ -171,7 +171,7 @@ jobs:
              src/conditional_groups.c src/include_control.c src/include_resolver.c \
              src/include_expansion.c src/include_graph.c src/translation.c \
              src/parser.c src/ast.c src/c_parse.c src/logical_c_parse.c \
-             src/logical_ast.c \
+             src/logical_ast.c src/types.c src/semantic.c src/cfg.c \
              src/lower.c src/emit_c.c
           ASAN_OPTIONS=detect_leaks=1 ./build/noc-test-modules-sanitize
           cc $common_flags -Ibuild/generated -Iinclude -I. \

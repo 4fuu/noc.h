@@ -71,12 +71,26 @@ static void test_ide_metadata_header(void)
     CHECK(noc_set_rule_enabled(&context,
                                noc_slice_from_cstr("optional-feature"),
                                false));
+    CHECK(noc_set_feature_enabled(&context, NOC_FEATURE_TEMPLATES, true));
     CHECK(noc_generate_ide_metadata_header(&context, &options, &generated));
     CHECK(generated.items != NULL && generated.items[generated.count] == '\0');
     CHECK(strstr(generated.items, "#ifndef SAMPLE_DIALECT_METADATA_H\n") != NULL);
-    CHECK(strstr(generated.items, "#define SAMPLE_DIALECT_SCHEMA_VERSION 2\n") != NULL);
+    CHECK(strstr(generated.items, "#define SAMPLE_DIALECT_SCHEMA_VERSION 3\n") != NULL);
     CHECK(strstr(generated.items,
                  "#define SAMPLE_DIALECT_DIALECT_NAME \"sample\\?\\\" dialect\"\n") != NULL);
+    CHECK(strstr(generated.items, "#define SAMPLE_DIALECT_FEATURE_COUNT 3\n") != NULL);
+    CHECK(strstr(generated.items,
+                 "#define SAMPLE_DIALECT_FEATURE_0_NAME \"defer\"\n") != NULL);
+    CHECK(strstr(generated.items,
+                 "#define SAMPLE_DIALECT_FEATURE_0_ENABLED 0\n") != NULL);
+    CHECK(strstr(generated.items,
+                 "#define SAMPLE_DIALECT_FEATURE_1_NAME \"templates\"\n") != NULL);
+    CHECK(strstr(generated.items,
+                 "#define SAMPLE_DIALECT_FEATURE_1_ENABLED 1\n") != NULL);
+    CHECK(strstr(generated.items,
+                 "#define SAMPLE_DIALECT_FEATURE_2_NAME \"ownership\"\n") != NULL);
+    CHECK(strstr(generated.items,
+                 "#define SAMPLE_DIALECT_FEATURE_2_ENABLED 0\n") != NULL);
     CHECK(strstr(generated.items, "#define SAMPLE_DIALECT_RULE_COUNT 3\n") != NULL);
     CHECK(strstr(generated.items, "#define SAMPLE_DIALECT_RULE_0_NAME \"twice\"\n") != NULL);
     CHECK(strstr(generated.items, "#define SAMPLE_DIALECT_RULE_0_TRIGGER_KIND 0\n") != NULL);

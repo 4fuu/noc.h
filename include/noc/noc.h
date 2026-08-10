@@ -32,8 +32,8 @@
 
 #define NOC_VERSION_MAJOR 0
 #define NOC_VERSION_MINOR 42
-#define NOC_VERSION_PATCH 16
-#define NOC_VERSION "0.42.16"
+#define NOC_VERSION_PATCH 17
+#define NOC_VERSION "0.42.17"
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -266,6 +266,40 @@ typedef enum {
     NOC_RULE_TRIGGER_PATTERN,
 } Noc_Rule_Trigger_Kind;
 
+/* Opt-in structured dialect slices. They are disabled by default, so defer,
+   template, instantiate, own, borrow, and move remain ordinary C identifiers
+   until their feature is enabled; the corresponding words are reserved by the
+   dialect while enabled. The MVP syntax lowered by noc_transform_* is:
+
+       defer cleanup_expression;
+       defer { cleanup_statements }
+
+       template(T, identity)
+       T identity(T value) { return value; }
+       instantiate(identity, int, identity_int);
+
+       own(Resource *, release) resource = acquire();
+       observe(borrow(resource));
+       own(Resource *, release) next = move(resource);
+       return move(next);
+
+   Templates have one type parameter, require explicit named instances, and do
+   not yet support recursion or self references. Template and owner types use a
+   declaration-prefix subset: identifier words and pointer stars, without
+   function/array abstract declarators. Ownership is pointer-only and requires
+   explicit borrow/move; generated drop actions are guarded after moves. Defer
+   handles lexical block fallthrough and returns. Any goto/break/continue in a
+   function containing defer, implicit owner access, general move expressions,
+   and non-pointer owners are diagnosed rather than emitted with weaker
+   semantics. These restrictions define the MVP and can be relaxed without
+   changing the spellings above. */
+typedef enum {
+    NOC_FEATURE_DEFER = 0,
+    NOC_FEATURE_TEMPLATES,
+    NOC_FEATURE_OWNERSHIP,
+    NOC_FEATURE_COUNT
+} Noc_Feature;
+
 typedef struct Noc_Context Noc_Context;
 typedef struct Noc_Rewriter Noc_Rewriter;
 typedef struct Noc_Rule Noc_Rule;
@@ -310,6 +344,7 @@ struct Noc_Context {
     size_t rules_count;
     size_t rules_capacity;
     size_t active_transforms;
+    uint32_t enabled_features;
     Noc_Diagnostic_Fn diagnostic;
     void *diagnostic_user_data;
     Noc_Options options;
@@ -3191,6 +3226,17 @@ NOCDEF bool noc_rule_is_enabled(const Noc_Context *context, Noc_Slice name);
 NOCDEF const Noc_Rule *noc_find_rule(const Noc_Context *context, Noc_Slice name);
 NOCDEF void noc_describe(const Noc_Context *context, FILE *stream);
 NOCDEF const char *noc_rule_scope_name(Noc_Rule_Scope scope);
+/* Ownership uses defer for deterministic destruction. Enabling ownership
+   therefore enables defer as its one implicit dependency; disabling defer
+   while ownership is enabled is rejected. Mutation during transforms is
+   rejected just like rule-registry mutation. noc_enable_mvp_features enables
+   all three structured slices. Feature state is also serialized by
+   noc_generate_ide_metadata_header for editor/LSP integrations. */
+NOCDEF const char *noc_feature_name(Noc_Feature feature);
+NOCDEF bool noc_set_feature_enabled(Noc_Context *context, Noc_Feature feature,
+                                    bool enabled);
+NOCDEF bool noc_feature_is_enabled(const Noc_Context *context, Noc_Feature feature);
+NOCDEF bool noc_enable_mvp_features(Noc_Context *context);
 /* Generate a standalone C header describing the registered dialect for IDE
    integrations. Options may be NULL or zero-initialized. Initialize output to
    {0}; it is replaced only on success. */
