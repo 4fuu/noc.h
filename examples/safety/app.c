@@ -30,14 +30,16 @@ static void observe_resource(Resource *resource)
     if (resource) cleanup_order += resource->value;
 }
 
-/* Templates are explicitly instantiated, so generated C has ordinary names. */
-template(T, identity)
+/* Generic functions keep C declarations intact. Each requested type receives
+   an explicit ordinary C name, so calls and debugger output remain unsurprising. */
+generic identity(T)
 T identity(T value)
 {
     return value;
 }
 
-instantiate(identity, int, identity_int);
+specialize identity(int) as identity_int;
+specialize identity(const char *) as identity_text;
 
 static int deferred_value(void)
 {
@@ -55,23 +57,25 @@ static void deferred_order(void)
 
 static void local_owner(void)
 {
-    /* borrow is non-consuming; lexical exit drops this owner exactly once. */
-    own(Resource *, release_resource) resource = acquire_resource(3);
+    /* `owned` marks the declaration; borrow is explicit and non-consuming. */
+    owned(Resource *, release_resource) resource = acquire_resource(3);
     observe_resource(borrow(resource));
 }
 
 static Resource *transferred_owner(void)
 {
-    own(Resource *, release_resource) first = acquire_resource(42);
-    own(Resource *, release_resource) second = move(first);
+    owned(Resource *, release_resource) first = acquire_resource(42);
+    owned(Resource *, release_resource) second = move(first);
     /* Explicit return transfer prevents either local owner from dropping it. */
     return move(second);
 }
 
 int main(void)
 {
+    const char *message = "modern C, explicit semantics";
     Resource *transferred;
-    if (identity_int(5) != 5 || deferred_value() != 7) return 1;
+    if (identity_int(5) != 5 || identity_text(message) != message ||
+        deferred_value() != 7) return 1;
     deferred_order();
     if (cleanup_order != 21) return 2;
     local_owner();

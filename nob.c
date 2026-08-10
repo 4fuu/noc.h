@@ -802,10 +802,13 @@ int main(int argc, char **argv)
     }
     if (strcmp(target, "describe") == 0) {
         Nob_Cmd command = {0};
-        if (!build_embed_dialect() || !build_rules_dialect()) return 1;
+        if (!build_embed_dialect() || !build_rules_dialect() ||
+            !build_safety_dialect()) return 1;
         nob_cmd_append(&command, NOC_EMBED_DIALECT, "--describe");
         if (!nob_cmd_run(&command)) return 1;
         nob_cmd_append(&command, NOC_RULES_DIALECT, "--describe");
+        if (!nob_cmd_run(&command)) return 1;
+        nob_cmd_append(&command, NOC_SAFETY_DIALECT, "--describe");
         return nob_cmd_run(&command) ? 0 : 1;
     }
 

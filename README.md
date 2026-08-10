@@ -81,9 +81,9 @@ $ ./nob clean
 The test target transforms, compiles, and runs the examples. `examples/embed`
 shows a built-in expression rule with a file dependency; `examples/rules` is a
 single project dialect covering expression, statement, declaration, and
-attribute scopes; and `examples/safety` runs templates, defer, borrowing, moving,
-automatic drop, and return ownership transfer together. All dialect inputs and
-applications use ordinary `.c` files.
+attribute scopes; and `examples/safety` defines an opinionated modern-C surface
+over templates, defer, borrowing, moving, automatic drop, and return ownership
+transfer. All dialect inputs and applications use ordinary `.c` files.
 
 ## Developing the single header
 
@@ -771,6 +771,26 @@ the whole transaction, and failure publishes no partial output. The independentl
 runnable `./nob test rule-phases` suite demonstrates custom
 generic/specialization and cleanup syntax feeding templates and defer before a
 normal `@answer` output rule.
+
+The compiled [`examples/safety`](examples/safety) dialect is one deliberately
+small, model-friendly vocabulary rather than another general-purpose language:
+
+```c
+generic identity(T)
+T identity(T value) { return value; }
+
+specialize identity(int) as identity_int;
+
+owned(Resource *, release_resource) resource = acquire_resource();
+inspect(borrow(resource));
+return move(resource);
+```
+
+It keeps C declarations and expressions recognizable, uses `owned` only as a
+declaration qualifier, and keeps transfer operations explicit. `defer`,
+`borrow`, and `move` are retained because their behavior is already clear; only
+the generic declaration, specialization request, and canonical `own` spelling
+need project syntax adapters. This is an example policy, not reserved Noc syntax.
 
 ### Canonical lexical-scope `defer`
 
