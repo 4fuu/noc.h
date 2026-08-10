@@ -43,7 +43,8 @@ NOC__PRIVATE bool noc__transform_source(Noc_Context *context,
                                   Noc_Transform_Result *result,
                                   size_t expansion_depth,
                                   bool emit_line_directives,
-                                  bool analyze_preprocessor_activity)
+                                  bool analyze_preprocessor_activity,
+                                  Noc_Rule_Phase rule_phase)
 {
     Noc_Lexer lexer;
     Noc__Tokens tokens = {0};
@@ -125,7 +126,9 @@ NOC__PRIVATE bool noc__transform_source(Noc_Context *context,
                 }
                 if (legacy_name < tokens.count &&
                     tokens.items[legacy_name].kind == NOC_TOKEN_IDENTIFIER) {
-                    r = noc__find_rule_token(context, tokens.items[legacy_name]);
+                    r = noc__find_rule_token(context,
+                                             tokens.items[legacy_name],
+                                             rule_phase);
                     if (r != NOC_TOKEN_INDEX_NONE) {
                         selected = r;
                         trigger_end = legacy_name + 1;
@@ -134,7 +137,8 @@ NOC__PRIVATE bool noc__transform_source(Noc_Context *context,
                 }
             }
             for (r = 0; r < context->rules_count; ++r) {
-                if (context->rule_patterns[r]) {
+                if (context->rule_phases[r] == rule_phase &&
+                    context->rule_patterns[r]) {
                     size_t significant_count = 0;
                     size_t end = noc__pattern_match(context->rule_patterns[r],
                                                     tokens.items,
@@ -193,6 +197,7 @@ NOC__PRIVATE bool noc__transform_source(Noc_Context *context,
                     rewriter.output = &output;
                     rewriter.dependencies = &dependencies;
                     rewriter.expansion_depth = expansion_depth;
+                    rewriter.rule_phase = rule_phase;
                     expanded = rule->expand(&rewriter, rule, rule->user_data);
                     noc_syntax_tree_free(&rewriter.syntax_tree);
                     if (!expanded && context->error_count == expansion_errors) {
@@ -212,7 +217,11 @@ NOC__PRIVATE bool noc__transform_source(Noc_Context *context,
                 }
             } else if (noc_token_is_punct(token, "@") && legacy_name < tokens.count &&
                        tokens.items[legacy_name].kind == NOC_TOKEN_IDENTIFIER) {
-                if (context->options.unknown_rule_is_error) {
+                if (rule_phase == NOC_RULE_PHASE_OUTPUT &&
+                    noc__find_rule_token_any_phase(context,
+                                                   tokens.items[legacy_name]) ==
+                        NOC_TOKEN_INDEX_NONE &&
+                    context->options.unknown_rule_is_error) {
                     noc__report(context,
                                 NOC_DIAGNOSTIC_ERROR,
                                 token.location,
@@ -225,6 +234,10 @@ NOC__PRIVATE bool noc__transform_source(Noc_Context *context,
                     ok = false;
                     goto done;
                 }
+                /* An at-name trigger owned by another phase is opaque here.
+                   Unknown triggers are also opaque when permissive output is
+                   requested. Copy the complete spelling so a bare pattern
+                   cannot consume or rewrite only the identifier after '@'. */
                 while (index <= legacy_name) {
                     if (!noc_buffer_append_slice(&output, tokens.items[index++].text)) {
                         noc__report(context,
@@ -284,6 +297,55 @@ done:
     return ok && result->error_count == 0;
 }
 
+static bool noc__has_rule_phase(const Noc_Context *context, Noc_Rule_Phase phase)
+{
+    size_t index;
+    for (index = 0; index < context->rules_count; ++index) {
+        if (context->rule_phases[index] == phase) return true;
+    }
+    return false;
+}
+
+static bool noc__merge_phase_dependencies(Noc_Context *context,
+                                          Noc_Transform_Result *syntax,
+                                          Noc_Transform_Result *result)
+{
+    Noc__String_List merged = {0};
+    Noc__String_List syntax_dependencies;
+    Noc__String_List result_dependencies;
+    Noc_Location none = {0};
+    size_t index;
+    for (index = 0; index < syntax->dependency_count; ++index) {
+        if (!noc__string_list_append_unique(&merged, syntax->dependencies[index])) {
+            goto failed;
+        }
+    }
+    for (index = 0; index < result->dependency_count; ++index) {
+        if (!noc__string_list_append_unique(&merged, result->dependencies[index])) {
+            goto failed;
+        }
+    }
+    syntax_dependencies.items = syntax->dependencies;
+    syntax_dependencies.count = syntax->dependency_count;
+    syntax_dependencies.capacity = syntax->dependency_count;
+    result_dependencies.items = result->dependencies;
+    result_dependencies.count = result->dependency_count;
+    result_dependencies.capacity = result->dependency_count;
+    noc__string_list_free(&syntax_dependencies);
+    noc__string_list_free(&result_dependencies);
+    syntax->dependencies = NULL;
+    syntax->dependency_count = 0;
+    result->dependencies = merged.items;
+    result->dependency_count = merged.count;
+    return true;
+
+failed:
+    noc__string_list_free(&merged);
+    noc__report(context, NOC_DIAGNOSTIC_ERROR, none,
+                "out of memory while merging syntax and output dependencies");
+    return false;
+}
+
 NOCDEF bool noc_transform_source(Noc_Context *context,
                                  const char *path,
                                  const char *source,
@@ -291,6 +353,7 @@ NOCDEF bool noc_transform_source(Noc_Context *context,
                                  Noc_Transform_Result *result)
 {
     Noc_Buffer stages[3] = {{0}};
+    Noc_Transform_Result syntax = {0};
     Noc_Slice current = {source, source_count};
     size_t errors_before;
     size_t stage = 0;
@@ -308,8 +371,16 @@ NOCDEF bool noc_transform_source(Noc_Context *context,
     /* Cover every public stage with the same mutation transaction.  The raw
        rule transform takes one nested count of its own. */
     context->active_transforms += 1;
-    /* Built-ins form one transactional front-end pipeline. Nested rule
-       fragments call noc__transform_source directly and cannot rerun it. */
+    /* Syntax rules select project-local spellings. Their output feeds one
+       transactional built-in pipeline, followed by historical output rules. */
+    if (noc__has_rule_phase(context, NOC_RULE_PHASE_SYNTAX)) {
+        if (!noc__transform_source(context, path, current.data, current.count,
+                                   &syntax, 0, false,
+                                   context->options.skip_inactive_preprocessor_branches,
+                                   NOC_RULE_PHASE_SYNTAX)) goto failed;
+        current.data = syntax.output;
+        current.count = syntax.output_count;
+    }
     if (noc_feature_is_enabled(context, NOC_FEATURE_TEMPLATES)) {
         if (!noc__lower_templates(context, path, current, &stages[stage])) goto failed;
         current.data = stages[stage].items; current.count = stages[stage++].count;
@@ -324,12 +395,21 @@ NOCDEF bool noc_transform_source(Noc_Context *context,
     }
     ok = noc__transform_source(context, path, current.data, current.count, result, 0,
                                context->options.emit_line_directives,
-                               context->options.skip_inactive_preprocessor_branches);
+                               context->options.skip_inactive_preprocessor_branches,
+                               NOC_RULE_PHASE_OUTPUT);
+    if (ok && syntax.output &&
+        !noc__merge_phase_dependencies(context, &syntax, result)) {
+        noc_transform_result_free(result);
+        result->error_count = context->error_count - errors_before;
+        ok = false;
+    }
     while (stage) noc_buffer_free(&stages[--stage]);
+    noc_transform_result_free(&syntax);
     context->active_transforms -= 1;
     return ok;
 failed:
     while (stage) noc_buffer_free(&stages[--stage]);
+    noc_transform_result_free(&syntax);
     context->active_transforms -= 1;
     result->error_count = context->error_count - errors_before;
     return false;

@@ -147,6 +147,7 @@ static const Test_Suite test_suites[] = {
     {"c-ast-recovery", "tests/test_c_ast_recovery.c", "build/noc-test-c-ast-recovery" NOC_EXE, false},
     {"tree-sitter-coexistence", "tests/test_tree_sitter_coexistence.c", "build/noc-test-tree-sitter-coexistence" NOC_EXE, false},
     {"rewriter", "tests/test_rewriter.c", "build/noc-test-rewriter" NOC_EXE, false},
+    {"rule-phases", "tests/test_rule_phases.c", "build/noc-test-rule-phases" NOC_EXE, false},
     {"defer", "tests/test_defer.c", "build/noc-test-defer" NOC_EXE, false},
     {"templates", "tests/test_templates.c", "build/noc-test-templates" NOC_EXE, false},
     {"ownership", "tests/test_ownership.c", "build/noc-test-ownership" NOC_EXE, false},

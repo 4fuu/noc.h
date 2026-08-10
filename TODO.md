@@ -335,6 +335,9 @@ must be generated reproducibly as one self-contained `noc.h`.
       new structured features through parser/AST boundaries.
 - [x] Expose the opt-in defer/templates/ownership MVP slices in IDE metadata;
       full M10-M14 language and analysis goals remain open.
+- [x] Separate project-defined surface-syntax rules from post-lowering output
+      rules so generic, cleanup, and ownership spellings can evolve without
+      coupling structured semantics to one user-facing grammar.
 - [ ] Test every future registration/query API and every full-profile built-in gate.
 
 ## Milestone 12 — Core C lowering and deterministic C emitter

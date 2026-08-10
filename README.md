@@ -61,8 +61,8 @@ The suite names are `header-c`, `header-cpp`, `public-header-c`,
 `c-parse-malformed-corpus`, `c-parse-completion`, `c-parse-cpp-runtime`,
 `c-ast`, `c-ast-details`, `c-ast-c11`, `c-ast-c11-constructs`,
 `c-ast-declarators`, `c-ast-completion`, `c-ast-queries`, `c-ast-recovery`,
-`tree-sitter-coexistence`, `rewriter`, `defer`, `templates`, `ownership`, and
-`artifacts`, for example:
+`tree-sitter-coexistence`, `rewriter`, `rule-phases`, `defer`, `templates`,
+`ownership`, and `artifacts`, for example:
 
 ```console
 $ ./nob test c-analysis
@@ -725,12 +725,54 @@ if (!noc_enable_mvp_features(&noc)) return 1;
 /* Or: noc_set_feature_enabled(&noc, NOC_FEATURE_DEFER, true); */
 ```
 
-The structured passes run in the fixed order templates, ownership, defer, then
-project-local token rules. Output is ordinary C and failed lowering publishes no
-partial result. [`examples/safety`](examples/safety) is a complete CLI dialect
-plus an application that is transformed, compiled, and run by `./nob example`.
+The complete order is project syntax normalization, templates, ownership,
+defer, then ordinary output rules. Output is ordinary C and failed lowering
+publishes no partial result. [`examples/safety`](examples/safety) is a complete
+CLI dialect plus an application that is transformed, compiled, and run by
+`./nob example`.
 
-### Lexical-scope `defer`
+### Surface syntax is project-defined
+
+The spellings below are canonical MVP forms understood by the structured
+lowerers, not a requirement for a project's source language. Register a rule in
+`NOC_RULE_PHASE_SYNTAX` to parse any token-level surface grammar with the public
+rewriter/token APIs and emit canonical input before structured lowering:
+
+```c
+Noc_Rule generic = {
+    "generic-syntax",
+    NOC_RULE_DECLARATION,
+    "generic(T) C-function-definition",
+    "Project generic syntax adapter.",
+    expand_generic,
+    NULL,
+};
+
+noc_register_rule_pattern_in_phase(
+    &noc, NOC_RULE_PHASE_SYNTAX, "generic", generic);
+```
+
+For example, one adapter can accept:
+
+```c
+generic(T)
+T identity(T value) { return value; }
+
+specialize identity for int as identity_int;
+```
+
+while another project can choose different keywords or punctuation without
+changing `src/types.c`. The same syntax phase can map project-specific cleanup
+or ownership syntax to `defer` and `own`. Existing `noc_register_rule` and
+`noc_register_rule_pattern` calls remain output-phase rules and therefore keep
+their historical behavior. Syntax and output dependencies are merged in stable
+phase order with duplicates removed, feature/rule mutation remains forbidden for
+the whole transaction, and failure publishes no partial output. The independently
+runnable `./nob test rule-phases` suite demonstrates custom
+generic/specialization and cleanup syntax feeding templates and defer before a
+normal `@answer` output rule.
+
+### Canonical lexical-scope `defer`
 
 ```c
 int load(void) {
@@ -750,7 +792,7 @@ conservatively rejects any `goto`, `break`, or `continue` in a function that use
 defer; cleanup actions themselves must be straight-line code. Functions with
 complex return declarators are conservatively rejected on value-return paths.
 
-### Explicit monomorphized templates
+### Canonical explicit monomorphized templates
 
 ```c
 template(T, identity)
@@ -798,9 +840,10 @@ tooling. The output records a schema version, the `noc.h` version, dialect name,
 built-in feature names/states, rule count, and each rule's name, trigger
 kind/text, enabled state, numeric/string scope, syntax, and description:
 
-Schema 3 adds `FEATURE_COUNT` plus deterministic `FEATURE_n_NAME` and
-`FEATURE_n_ENABLED` macros. Rule trigger kinds remain `at-name` and `pattern`,
-matching `NOC_RULE_TRIGGER_AT_NAME` and `NOC_RULE_TRIGGER_PATTERN`.
+Schema 4 includes `FEATURE_COUNT`, deterministic `FEATURE_n_NAME` and
+`FEATURE_n_ENABLED` macros, plus each rule's `PHASE` and `PHASE_NAME`. Rule
+trigger kinds remain `at-name` and `pattern`, matching
+`NOC_RULE_TRIGGER_AT_NAME` and `NOC_RULE_TRIGGER_PATTERN`.
 
 ```c
 Noc_Ide_Metadata_Options options = {
@@ -1091,9 +1134,10 @@ Rules begin enabled. With the default `disabled_rule_is_error = true`, use of a
 disabled selected rule fails transactionally. Setting it false preserves the
 complete matched trigger byte-for-byte and continues after it, without parsing
 its following arguments or body. Registry and enable changes are rejected
-during transforms, including nested transforms. Version 0.19 changes the public
-`Noc_Context` layout: rebuild applications and libraries together; it is not
-ABI-compatible with objects built against earlier headers.
+during transforms, including nested transforms. Versions 0.19 and 0.42.18 change
+the public `Noc_Context` layout. The context is not a stable cross-version ABI:
+applications, dialect executables, and separately compiled implementation
+objects must be rebuilt together against the exact same `noc.h` version.
 
 The rewriter API currently provides raw and trivia-skipping token lookahead,
 matching and expectation helpers, balanced delimiter capture, diagnostics, and

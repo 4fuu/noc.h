@@ -151,7 +151,7 @@ jobs:
                        c_ast_c11 c_ast_c11_constructs c_ast_declarators \
                        c_ast_completion c_ast_queries c_ast_recovery \
                        tree_sitter_coexistence \
-                       rewriter defer templates ownership artifacts; do
+                       rewriter rule_phases defer templates ownership artifacts; do
             cc $common_flags -Ibuild/generated -Iinclude -I. \
                -o "build/noc-test-${suite}-sanitize" "tests/test_${suite}.c" \
                build/noc-implementation-sanitize.o

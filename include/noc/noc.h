@@ -32,8 +32,8 @@
 
 #define NOC_VERSION_MAJOR 0
 #define NOC_VERSION_MINOR 42
-#define NOC_VERSION_PATCH 17
-#define NOC_VERSION "0.42.17"
+#define NOC_VERSION_PATCH 18
+#define NOC_VERSION "0.42.18"
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -266,6 +266,17 @@ typedef enum {
     NOC_RULE_TRIGGER_PATTERN,
 } Noc_Rule_Trigger_Kind;
 
+/* Rule phases separate project-selected surface syntax from ordinary output
+   rewriting. Syntax rules run first and may normalize any token-level spelling
+   into the stable built-in forms consumed by templates, ownership, and defer.
+   Output rules retain the historical behavior and run after those structured
+   passes. Existing noc_register_rule* calls always register output rules. */
+typedef enum {
+    NOC_RULE_PHASE_OUTPUT = 0,
+    NOC_RULE_PHASE_SYNTAX,
+    NOC_RULE_PHASE_COUNT
+} Noc_Rule_Phase;
+
 /* Opt-in structured dialect slices. They are disabled by default, so defer,
    template, instantiate, own, borrow, and move remain ordinary C identifiers
    until their feature is enabled; the corresponding words are reserved by the
@@ -341,6 +352,7 @@ struct Noc_Context {
     Noc_Rule *rules;
     const char **rule_patterns;
     bool *rule_enabled;
+    Noc_Rule_Phase *rule_phases;
     size_t rules_count;
     size_t rules_capacity;
     size_t active_transforms;
@@ -3207,7 +3219,10 @@ NOCDEF bool noc_buffer_terminate(Noc_Buffer *buffer);
 /* Context and rule registry. Rule strings and explicit trigger patterns must
    outlive the context. noc_register_rule() uses the legacy @name trigger.
    Pattern triggers are significant C token sequences: source trivia between
-   their tokens is ignored, and a leading @ is reserved for legacy triggers. */
+   their tokens is ignored, and a leading @ is reserved for legacy triggers.
+   The phase-aware forms let a dialect normalize arbitrary surface syntax before
+   built-in structured lowering. Syntax callbacks should preserve newlines when
+   consuming multi-line source so later #line mappings remain useful. */
 NOCDEF void noc_context_init(Noc_Context *context);
 NOCDEF void noc_context_deinit(Noc_Context *context);
 NOCDEF void noc_context_set_diagnostic(Noc_Context *context,
@@ -3217,6 +3232,13 @@ NOCDEF bool noc_register_rule(Noc_Context *context, Noc_Rule rule);
 NOCDEF bool noc_register_rule_pattern(Noc_Context *context,
                                       const char *pattern,
                                       Noc_Rule rule);
+NOCDEF bool noc_register_rule_in_phase(Noc_Context *context,
+                                       Noc_Rule_Phase phase,
+                                       Noc_Rule rule);
+NOCDEF bool noc_register_rule_pattern_in_phase(Noc_Context *context,
+                                               Noc_Rule_Phase phase,
+                                               const char *pattern,
+                                               Noc_Rule rule);
 /* Rules start enabled. Registry mutation is rejected while any outer or nested
    transform is active. A missing name is diagnosed and returns false. */
 NOCDEF bool noc_set_rule_enabled(Noc_Context *context, Noc_Slice name, bool enabled);
@@ -3226,6 +3248,9 @@ NOCDEF bool noc_rule_is_enabled(const Noc_Context *context, Noc_Slice name);
 NOCDEF const Noc_Rule *noc_find_rule(const Noc_Context *context, Noc_Slice name);
 NOCDEF void noc_describe(const Noc_Context *context, FILE *stream);
 NOCDEF const char *noc_rule_scope_name(Noc_Rule_Scope scope);
+NOCDEF const char *noc_rule_phase_name(Noc_Rule_Phase phase);
+/* Returns NOC_RULE_PHASE_COUNT for an unknown name or invalid input. */
+NOCDEF Noc_Rule_Phase noc_rule_phase(const Noc_Context *context, Noc_Slice name);
 /* Ownership uses defer for deterministic destruction. Enabling ownership
    therefore enables defer as its one implicit dependency; disabling defer
    while ownership is enabled is rejected. Mutation during transforms is

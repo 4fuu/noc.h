@@ -85,6 +85,7 @@ NOCDEF void noc_context_deinit(Noc_Context *context)
     free(context->rules);
     free(context->rule_patterns);
     free(context->rule_enabled);
+    free(context->rule_phases);
     memset(context, 0, sizeof(*context));
 }
 
@@ -146,7 +147,22 @@ NOCDEF const Noc_Rule *noc_find_rule(const Noc_Context *context, Noc_Slice name)
     return NULL;
 }
 
-NOC__PRIVATE size_t noc__find_rule_token(const Noc_Context *context, Noc_Token token)
+NOC__PRIVATE size_t noc__find_rule_token(const Noc_Context *context,
+                                         Noc_Token token,
+                                         Noc_Rule_Phase phase)
+{
+    size_t i;
+    for (i = 0; i < context->rules_count; ++i) {
+        if (context->rule_phases[i] == phase && !context->rule_patterns[i] &&
+            noc_token_is_identifier(token, context->rules[i].name)) {
+            return i;
+        }
+    }
+    return NOC_TOKEN_INDEX_NONE;
+}
+
+NOC__PRIVATE size_t noc__find_rule_token_any_phase(const Noc_Context *context,
+                                                   Noc_Token token)
 {
     size_t i;
     for (i = 0; i < context->rules_count; ++i) {
@@ -192,11 +208,15 @@ static bool noc__patterns_equal(const char *left, const char *right)
     return false;
 }
 
-static bool noc__register_rule(Noc_Context *context, const char *pattern, Noc_Rule rule)
+static bool noc__register_rule(Noc_Context *context,
+                               Noc_Rule_Phase phase,
+                               const char *pattern,
+                               Noc_Rule rule)
 {
     Noc_Rule *rules = NULL;
     const char **patterns = NULL;
     bool *enabled = NULL;
+    Noc_Rule_Phase *phases = NULL;
     size_t capacity;
     size_t i;
     Noc_Location no_location = {0};
@@ -208,6 +228,14 @@ static bool noc__register_rule(Noc_Context *context, const char *pattern, Noc_Ru
                     NOC_DIAGNOSTIC_ERROR,
                     no_location,
                     "cannot register a rule during an active transform");
+        return false;
+    }
+    if ((unsigned)phase >= NOC_RULE_PHASE_COUNT) {
+        noc__report(context,
+                    NOC_DIAGNOSTIC_ERROR,
+                    no_location,
+                    "invalid phase while registering rule '%s'",
+                    rule.name ? rule.name : "");
         return false;
     }
     if (!rule.name || !rule.name[0]) {
@@ -246,7 +274,7 @@ static bool noc__register_rule(Noc_Context *context, const char *pattern, Noc_Ru
         }
         if (!saw_token) goto invalid_pattern;
         for (i = 0; i < context->rules_count; ++i) {
-            if (context->rule_patterns[i] &&
+            if (context->rule_phases[i] == phase && context->rule_patterns[i] &&
                 noc__patterns_equal(pattern, context->rule_patterns[i])) {
                 noc__report(context,
                             NOC_DIAGNOSTIC_ERROR,
@@ -262,17 +290,20 @@ static bool noc__register_rule(Noc_Context *context, const char *pattern, Noc_Ru
         capacity = context->rules_capacity ? context->rules_capacity * 2 : 8;
         if (capacity > SIZE_MAX / sizeof(*rules) ||
             capacity > SIZE_MAX / sizeof(*patterns) ||
-            capacity > SIZE_MAX / sizeof(*enabled)) {
+            capacity > SIZE_MAX / sizeof(*enabled) ||
+            capacity > SIZE_MAX / sizeof(*phases)) {
             goto allocation_failed;
         }
         rules = (Noc_Rule *)malloc(capacity * sizeof(*rules));
         patterns = (const char **)malloc(capacity * sizeof(*patterns));
         enabled = (bool *)malloc(capacity * sizeof(*enabled));
-        if (!rules || !patterns || !enabled) {
+        phases = (Noc_Rule_Phase *)malloc(capacity * sizeof(*phases));
+        if (!rules || !patterns || !enabled || !phases) {
 allocation_failed:
             free(rules);
             free(patterns);
             free(enabled);
+            free(phases);
             noc__report(context,
                         NOC_DIAGNOSTIC_ERROR,
                         no_location,
@@ -288,18 +319,24 @@ allocation_failed:
             memcpy(enabled,
                    context->rule_enabled,
                    context->rules_count * sizeof(*enabled));
+            memcpy(phases,
+                   context->rule_phases,
+                   context->rules_count * sizeof(*phases));
         }
         free(context->rules);
         free(context->rule_patterns);
         free(context->rule_enabled);
+        free(context->rule_phases);
         context->rules = rules;
         context->rule_patterns = patterns;
         context->rule_enabled = enabled;
+        context->rule_phases = phases;
         context->rules_capacity = capacity;
     }
     context->rules[context->rules_count] = rule;
     context->rule_patterns[context->rules_count] = pattern;
     context->rule_enabled[context->rules_count] = true;
+    context->rule_phases[context->rules_count] = phase;
     context->rules_count += 1;
     return true;
 
@@ -314,7 +351,7 @@ invalid_pattern:
 
 NOCDEF bool noc_register_rule(Noc_Context *context, Noc_Rule rule)
 {
-    return noc__register_rule(context, NULL, rule);
+    return noc__register_rule(context, NOC_RULE_PHASE_OUTPUT, NULL, rule);
 }
 
 NOCDEF bool noc_register_rule_pattern(Noc_Context *context,
@@ -326,7 +363,28 @@ NOCDEF bool noc_register_rule_pattern(Noc_Context *context,
         noc__report(context, NOC_DIAGNOSTIC_ERROR, none, "rule pattern cannot be NULL");
         return false;
     }
-    return noc__register_rule(context, pattern, rule);
+    return noc__register_rule(context, NOC_RULE_PHASE_OUTPUT, pattern, rule);
+}
+
+NOCDEF bool noc_register_rule_in_phase(Noc_Context *context,
+                                       Noc_Rule_Phase phase,
+                                       Noc_Rule rule)
+{
+    return noc__register_rule(context, phase, NULL, rule);
+}
+
+NOCDEF bool noc_register_rule_pattern_in_phase(Noc_Context *context,
+                                               Noc_Rule_Phase phase,
+                                               const char *pattern,
+                                               Noc_Rule rule)
+{
+    if (!pattern) {
+        Noc_Location none = {0};
+        noc__report(context, NOC_DIAGNOSTIC_ERROR, none,
+                    "rule pattern cannot be NULL");
+        return false;
+    }
+    return noc__register_rule(context, phase, pattern, rule);
 }
 
 NOCDEF bool noc_rule_is_enabled(const Noc_Context *context, Noc_Slice name)
@@ -388,6 +446,28 @@ NOCDEF const char *noc_rule_scope_name(Noc_Rule_Scope scope)
     return "unknown";
 }
 
+NOCDEF const char *noc_rule_phase_name(Noc_Rule_Phase phase)
+{
+    switch (phase) {
+    case NOC_RULE_PHASE_OUTPUT: return "output";
+    case NOC_RULE_PHASE_SYNTAX: return "syntax";
+    case NOC_RULE_PHASE_COUNT: break;
+    }
+    return "unknown";
+}
+
+NOCDEF Noc_Rule_Phase noc_rule_phase(const Noc_Context *context, Noc_Slice name)
+{
+    size_t i;
+    if (!context || (!name.data && name.count != 0)) return NOC_RULE_PHASE_COUNT;
+    for (i = 0; i < context->rules_count; ++i) {
+        if (noc_slice_equal_cstr(name, context->rules[i].name)) {
+            return context->rule_phases[i];
+        }
+    }
+    return NOC_RULE_PHASE_COUNT;
+}
+
 NOCDEF void noc_describe(const Noc_Context *context, FILE *stream)
 {
     size_t i;
@@ -396,10 +476,11 @@ NOCDEF void noc_describe(const Noc_Context *context, FILE *stream)
             context->rules_count == 1 ? "" : "s");
     for (i = 0; i < context->rules_count; ++i) {
         const Noc_Rule *rule = &context->rules[i];
-        fprintf(stream, "\n  %s%s [%s]%s\n",
+        fprintf(stream, "\n  %s%s [%s, %s]%s\n",
                 context->rule_patterns[i] ? "" : "@",
                 context->rule_patterns[i] ? context->rule_patterns[i] : rule->name,
                 noc_rule_scope_name(rule->scope),
+                noc_rule_phase_name(context->rule_phases[i]),
                 context->rule_enabled[i] ? "" : " (disabled)");
         if (rule->syntax) fprintf(stream, "    Syntax: %s\n", rule->syntax);
         if (rule->description) fprintf(stream, "    %s\n", rule->description);
@@ -456,7 +537,7 @@ NOCDEF bool noc_generate_ide_metadata_header(
                             "/* Generated by noc.h %s. Do not edit. */\n"
                             "#ifndef %s\n"
                             "#define %s\n\n"
-                            "#define %s_SCHEMA_VERSION 3\n"
+                            "#define %s_SCHEMA_VERSION 4\n"
                             "#define %s_NOC_VERSION ",
                             NOC_VERSION,
                             guard,
@@ -512,8 +593,16 @@ NOCDEF bool noc_generate_ide_metadata_header(
             !noc_buffer_appendf(&generated, "\n#define %s_RULE_%zu_ENABLED %d",
                                 prefix, i, context->rule_enabled[i] ? 1 : 0) ||
             !noc_buffer_appendf(&generated,
+                                "\n#define %s_RULE_%zu_PHASE %d"
+                                "\n#define %s_RULE_%zu_PHASE_NAME \"%s\""
                                 "\n#define %s_RULE_%zu_SCOPE %d"
                                 "\n#define %s_RULE_%zu_SCOPE_NAME ",
+                                prefix,
+                                i,
+                                (int)context->rule_phases[i],
+                                prefix,
+                                i,
+                                noc_rule_phase_name(context->rule_phases[i]),
                                 prefix,
                                 i,
                                 (int)rule->scope,

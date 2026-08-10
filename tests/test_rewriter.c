@@ -19,6 +19,7 @@ typedef struct {
     Noc_Rule pattern_rule;
     bool registered_legacy;
     bool registered_pattern;
+    bool registered_syntax;
     bool changed_enabled;
 } Mutation_State;
 
@@ -84,6 +85,8 @@ static bool expand_registry_mutation(Noc_Rewriter *rewriter,
     state->registered_legacy = noc_register_rule(state->context, state->legacy_rule);
     state->registered_pattern =
         noc_register_rule_pattern(state->context, "late", state->pattern_rule);
+    state->registered_syntax = noc_register_rule_pattern_in_phase(
+        state->context, NOC_RULE_PHASE_SYNTAX, "late-syntax", state->pattern_rule);
     state->changed_enabled = noc_set_rule_enabled(state->context,
                                                   noc_slice_from_cstr(rule->name),
                                                   false);
@@ -903,6 +906,8 @@ static void test_rule_pattern_matching(void)
 
     CHECK(NOC_RULE_TRIGGER_AT_NAME == 0);
     CHECK(NOC_RULE_TRIGGER_PATTERN == 1);
+    CHECK(NOC_RULE_PHASE_OUTPUT == 0);
+    CHECK(NOC_RULE_PHASE_SYNTAX == 1);
     CHECK(invalid.begin == NOC_TOKEN_INDEX_NONE && invalid.end == NOC_TOKEN_INDEX_NONE);
     noc_context_init(&context);
     context.options.emit_line_directives = false;
@@ -1193,8 +1198,9 @@ static void test_registry_mutation_during_transform(void)
                                 "mutate",
                                 sizeof("mutate") - 1,
                                 &result));
-    CHECK(!state.registered_legacy && !state.registered_pattern && !state.changed_enabled);
-    CHECK(diagnostics.errors == 3);
+    CHECK(!state.registered_legacy && !state.registered_pattern &&
+          !state.registered_syntax && !state.changed_enabled);
+    CHECK(diagnostics.errors == 4);
     CHECK(result.output == NULL && context.active_transforms == 0);
     CHECK(noc_rule_is_enabled(&context, noc_slice_from_cstr("mutate")));
     noc_transform_result_free(&result);

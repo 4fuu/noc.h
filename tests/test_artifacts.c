@@ -66,7 +66,10 @@ static void test_ide_metadata_header(void)
     noc_context_init(&context);
     noc_context_set_diagnostic(&context, count_diagnostics, &diagnostics);
     CHECK(noc_register_rule(&context, rule));
-    CHECK(noc_register_rule_pattern(&context, "bare /* meta\n */ word", pattern_rule));
+    CHECK(noc_register_rule_pattern_in_phase(&context,
+                                             NOC_RULE_PHASE_SYNTAX,
+                                             "bare /* meta\n */ word",
+                                             pattern_rule));
     CHECK(noc_register_rule_pattern(&context, "optional", disabled_rule));
     CHECK(noc_set_rule_enabled(&context,
                                noc_slice_from_cstr("optional-feature"),
@@ -75,7 +78,7 @@ static void test_ide_metadata_header(void)
     CHECK(noc_generate_ide_metadata_header(&context, &options, &generated));
     CHECK(generated.items != NULL && generated.items[generated.count] == '\0');
     CHECK(strstr(generated.items, "#ifndef SAMPLE_DIALECT_METADATA_H\n") != NULL);
-    CHECK(strstr(generated.items, "#define SAMPLE_DIALECT_SCHEMA_VERSION 3\n") != NULL);
+    CHECK(strstr(generated.items, "#define SAMPLE_DIALECT_SCHEMA_VERSION 4\n") != NULL);
     CHECK(strstr(generated.items,
                  "#define SAMPLE_DIALECT_DIALECT_NAME \"sample\\?\\\" dialect\"\n") != NULL);
     CHECK(strstr(generated.items, "#define SAMPLE_DIALECT_FEATURE_COUNT 3\n") != NULL);
@@ -99,6 +102,9 @@ static void test_ide_metadata_header(void)
     CHECK(strstr(generated.items,
                  "#define SAMPLE_DIALECT_RULE_0_TRIGGER \"@twice\"\n") != NULL);
     CHECK(strstr(generated.items, "#define SAMPLE_DIALECT_RULE_0_ENABLED 1\n") != NULL);
+    CHECK(strstr(generated.items, "#define SAMPLE_DIALECT_RULE_0_PHASE 0\n") != NULL);
+    CHECK(strstr(generated.items,
+                 "#define SAMPLE_DIALECT_RULE_0_PHASE_NAME \"output\"\n") != NULL);
     CHECK(strstr(generated.items, "#define SAMPLE_DIALECT_RULE_0_SCOPE 1\n") != NULL);
     CHECK(strstr(generated.items,
                  "#define SAMPLE_DIALECT_RULE_0_SCOPE_NAME \"expression\"\n") != NULL);
@@ -112,6 +118,9 @@ static void test_ide_metadata_header(void)
                  "#define SAMPLE_DIALECT_RULE_1_TRIGGER "
                  "\"bare /* meta\\n */ word\"\n") != NULL);
     CHECK(strstr(generated.items, "#define SAMPLE_DIALECT_RULE_1_ENABLED 1\n") != NULL);
+    CHECK(strstr(generated.items, "#define SAMPLE_DIALECT_RULE_1_PHASE 1\n") != NULL);
+    CHECK(strstr(generated.items,
+                 "#define SAMPLE_DIALECT_RULE_1_PHASE_NAME \"syntax\"\n") != NULL);
     CHECK(strstr(generated.items,
                  "#define SAMPLE_DIALECT_RULE_2_NAME \"optional-feature\"\n") != NULL);
     CHECK(strstr(generated.items,

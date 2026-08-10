@@ -136,6 +136,7 @@ struct Noc_Rewriter {
     Noc_Buffer *output;
     Noc__String_List *dependencies;
     size_t expansion_depth;
+    Noc_Rule_Phase rule_phase;
     bool failed;
 };
 
@@ -169,7 +170,9 @@ NOC__PRIVATE void noc__reportv(Noc_Context *, Noc_Diagnostic_Severity,
 NOC__PRIVATE bool noc__tokens_append(Noc__Tokens *, Noc_Token);
 NOC__PRIVATE bool noc__reject_trigraphs(Noc_Context *, const char *, const char *, size_t);
 NOC__PRIVATE bool noc__emit_line_directive_at(Noc_Buffer *, const char *, size_t);
-NOC__PRIVATE size_t noc__find_rule_token(const Noc_Context *, Noc_Token);
+NOC__PRIVATE size_t noc__find_rule_token(const Noc_Context *, Noc_Token,
+                                         Noc_Rule_Phase);
+NOC__PRIVATE size_t noc__find_rule_token_any_phase(const Noc_Context *, Noc_Token);
 NOC__PRIVATE bool noc__depfile_path_is_valid(const char *);
 NOC__PRIVATE bool noc__macro_parse_directive(Noc_Preprocessor_Unit *,
                                              Noc_Preprocessor_Directive *, size_t);
@@ -215,7 +218,8 @@ NOC__PRIVATE Noc_C_Ast_Status noc__c_ast_normalize(
     Noc__C_Ast_Normalized *);
 NOC__PRIVATE void noc__c_ast_normalized_free(Noc__C_Ast_Normalized *);
 NOC__PRIVATE bool noc__transform_source(Noc_Context *, const char *, const char *, size_t,
-                                       Noc_Transform_Result *, size_t, bool, bool);
+                                       Noc_Transform_Result *, size_t, bool, bool,
+                                       Noc_Rule_Phase);
 /* Shared token utilities for the opt-in structured dialect passes.  The token
    stream borrows SOURCE/PATH and owns only its items array. */
 NOC__PRIVATE bool noc__dialect_tokenize(Noc_Context *, const char *, Noc_Slice,

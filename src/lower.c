@@ -392,7 +392,8 @@ NOCDEF bool noc_rw_emit_transformed(Noc_Rewriter *rewriter, Noc_Slice source)
                                &nested,
                                rewriter->expansion_depth + 1,
                                false,
-                               false)) {
+                               false,
+                               rewriter->rule_phase)) {
         rewriter->failed = true;
         goto done;
     }
